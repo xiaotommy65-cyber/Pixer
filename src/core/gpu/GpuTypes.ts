@@ -6,6 +6,29 @@ export const OVERSCAN_H = GAME_H + OVERSCAN_PAD * 2;
 export const FLOATS_PER_INSTANCE = 20;
 export const MAX_INSTANCES_PER_PASS = 8192;
 
+export interface LogicalViewport {
+  width: number;
+  height: number;
+}
+
+export type ViewportPreset = 'classic' | 'wide' | 'hd';
+
+export const VIEWPORT_PRESETS: Record<ViewportPreset, LogicalViewport> = {
+  classic: { width: 320, height: 180 },
+  wide: { width: 426, height: 240 },
+  hd: { width: 480, height: 270 },
+};
+
+export function resolveLogicalViewport(
+  raw?: ViewportPreset | Partial<LogicalViewport> | null,
+): LogicalViewport {
+  if (!raw) return VIEWPORT_PRESETS.classic;
+  if (typeof raw === 'string') return VIEWPORT_PRESETS[raw] ?? VIEWPORT_PRESETS.classic;
+  const w = typeof raw.width === 'number' && Number.isFinite(raw.width) ? Math.max(160, Math.min(640, Math.round(raw.width))) : GAME_W;
+  const h = typeof raw.height === 'number' && Number.isFinite(raw.height) ? Math.max(120, Math.min(360, Math.round(raw.height))) : GAME_H;
+  return { width: w, height: h };
+}
+
 export type GpuBackendKind = 'webgpu' | 'webgl2' | 'canvas2d' | 'initializing';
 export type RenderPerformanceProfile = 'eco' | 'balanced' | 'quality';
 export type ResolutionScaleFactor = 1 | 2 | 3;
@@ -56,6 +79,8 @@ export interface SkyGradient {
   filterMode: number; // 0 = clean, 1 = lcd, 2 = crt
   camFracX?: number;
   camFracY?: number;
+  viewW?: number;
+  viewH?: number;
 }
 
 export interface GpuFrameStats {

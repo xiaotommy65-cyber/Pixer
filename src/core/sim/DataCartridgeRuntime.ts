@@ -1,5 +1,5 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
-import { GAME_H, GAME_W } from '../gpu/GpuTypes.ts';
+import { GAME_H, GAME_W, resolveLogicalViewport, type LogicalViewport } from '../gpu/GpuTypes.ts';
 import { InputMap } from '../input/InputMap.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type { ShmupFighterSummary } from '../types/HudTypes.ts';
@@ -152,6 +152,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private cameraX = 0;
   private cameraY = 0;
   private cameraZoom = 1.0;
+  private stageViewport: LogicalViewport = { width: GAME_W, height: GAME_H };
   private scoutMode = false;
   private hasKey = false;
   private stageHasKey = false;
@@ -401,7 +402,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   public enterStage(idx: number): void {
     this.stageIdx = clamp(idx, 0, this.def.stages.length - 1);
     const st = this.def.stages[this.stageIdx];
-    const worldH = st.worldHeight ?? GAME_H;
+    this.stageViewport = resolveLogicalViewport(st.viewport ?? this.def.meta.viewport);
+    const worldH = st.worldHeight ?? this.stageViewport.height;
 
     this.pool.reset();
     this.lastHitGroupByTarget.fill(0);
@@ -958,10 +960,17 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     }
 
     // 5. Camera track
-    const viewW = GAME_W / Math.max(0.5, this.cameraZoom);
+    const zoom = Math.max(0.5, this.cameraZoom);
+    const viewW = this.stageViewport.width / zoom;
+    const viewH = this.stageViewport.height / zoom;
+    const stageWorldH = st.worldHeight ?? this.stageViewport.height;
     const maxCamX = Math.max(0, st.worldWidth - viewW);
+    const maxCamY = Math.max(0, stageWorldH - viewH);
     const desiredCamX = clamp(pool.x[p] - viewW * 0.42, 0, maxCamX);
-    this.cameraX += (desiredCamX - this.cameraX) * Math.min(1, dt * 8);
+    const desiredCamY = clamp(pool.y[p] - viewH * 0.55, 0, maxCamY);
+    const camAlpha = Math.min(1, dt * 8);
+    this.cameraX += (desiredCamX - this.cameraX) * camAlpha;
+    this.cameraY += (desiredCamY - this.cameraY) * camAlpha;
   }
 
   public serializeSave(): unknown {
@@ -1191,6 +1200,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       cameraX: this.cameraX + this.juice.shakeX + this.juice.kickX,
       cameraY: this.cameraY + this.juice.shakeY + this.juice.kickY,
       cameraZoom: isShmup ? 1.0 : this.cameraZoom,
+      viewport: this.stageViewport,
       ambientDarkness: st.ambientDarkness ?? 0,
       ambientColor: st.ambientColor ?? '#120e24',
       screenFlashAlpha: this.juice.flashAlpha,

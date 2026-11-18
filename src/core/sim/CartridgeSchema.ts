@@ -126,6 +126,7 @@ export interface CartridgeStageDef {
   bgmTheme: BgmTheme;
   paletteRow?: number;
   hint: string;
+  viewport?: 'classic' | 'wide' | 'hd' | { width: number; height: number };
   spawn: { x: number; y: number };
   groundTop?: SpriteId;
   groundFill?: SpriteId;
@@ -182,6 +183,7 @@ export interface CartridgeJsonV1 {
     title: string;
     subtitle?: string;
     genre: 'platformer' | 'shmup';
+    viewport?: 'classic' | 'wide' | 'hd' | { width: number; height: number };
     paletteRow?: number;
     glowIntensity?: number;
   };

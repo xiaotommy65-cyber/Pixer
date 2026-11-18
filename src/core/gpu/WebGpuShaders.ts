@@ -1,4 +1,4 @@
-import { GAME_H, GAME_W, OVERSCAN_H, OVERSCAN_PAD, OVERSCAN_W } from './GpuTypes.ts';
+import { OVERSCAN_PAD } from './GpuTypes.ts';
 
 export const WGSL_CODE = /* wgsl */ `
 struct SkyUniforms {
@@ -43,7 +43,7 @@ fn fsSky(in: SkyOut) -> SceneOut {
   let horizonGlow = pow(y, 2.4) * 0.045 * (0.85 + 0.15 * sin(uSky.params.x * 0.7 + in.uv.x * 3.14159));
   var col = mix(uSky.topColor.rgb, uSky.bottomColor.rgb, y) + uSky.bottomColor.rgb * horizonGlow;
   if (uSky.params.y > 0.5) {
-    let gridY = 0.985 + 0.015 * sin(in.uv.y * 180.0 * 6.28318);
+    let gridY = 0.985 + 0.015 * sin(in.uv.y * max(1.0, uSky.params.w) * 6.28318);
     col *= gridY;
   }
   var out: SceneOut;
@@ -97,8 +97,10 @@ fn vsSprite(@builtin(vertex_index) vid: u32, inst: InstanceIn) -> SpriteOut {
   );
   let world = inst.rectPosSize.xy + rotated;
 
-  let ndcX = ((world.x + ${OVERSCAN_PAD}.0) / ${OVERSCAN_W}.0) * 2.0 - 1.0;
-  let ndcY = 1.0 - ((world.y + ${OVERSCAN_PAD}.0) / ${OVERSCAN_H}.0) * 2.0;
+  let viewSize = max(vec2f(1.0), uSky.params.zw);
+  let osSize = viewSize + vec2f(${OVERSCAN_PAD}.0 * 2.0);
+  let ndcX = ((world.x + ${OVERSCAN_PAD}.0) / osSize.x) * 2.0 - 1.0;
+  let ndcY = 1.0 - ((world.y + ${OVERSCAN_PAD}.0) / osSize.y) * 2.0;
 
   var out: SpriteOut;
   out.pos = vec4f(ndcX, ndcY, 0.0, 1.0);
@@ -314,6 +316,7 @@ export const WGSL_POST_CODE = /* wgsl */ `
 struct PostUniforms {
   params0: vec4f, // x: texelX, y: texelY, z: glowIntensity, w: filterMode (0=clean, 1=lcd, 2=crt)
   params1: vec4f, // x: timeSec, y: cozyFilter, z: camFracX, w: camFracY
+  params2: vec4f, // x: viewW, y: viewH, z: osW, w: osH
 };
 
 @group(0) @binding(0) var<uniform> uPost: PostUniforms;
@@ -368,7 +371,9 @@ fn fsBloomBlur(in: PostOut) -> @location(0) vec4f {
 
 @fragment
 fn fsComposite(in: PostOut) -> @location(0) vec4f {
-  let sceneUv = (vec2f(${OVERSCAN_PAD}.0, ${OVERSCAN_PAD}.0) + in.uv * vec2f(${GAME_W}.0, ${GAME_H}.0) + uPost.params1.zw) / vec2f(${OVERSCAN_W}.0, ${OVERSCAN_H}.0);
+  let viewSize = max(vec2f(1.0), uPost.params2.xy);
+  let osSize = max(vec2f(1.0), uPost.params2.zw);
+  let sceneUv = (vec2f(${OVERSCAN_PAD}.0, ${OVERSCAN_PAD}.0) + in.uv * viewSize + uPost.params1.zw) / osSize;
   let sceneCol = textureSampleLevel(uTexA, uNearestSamp, sceneUv, 0.0).rgb;
   let glow = max(0.0, uPost.params0.z);
   var col = sceneCol;
@@ -384,9 +389,9 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
   let r2 = dot(centered, centered);
 
   if (mode > 1.5) {
-    // Console CRT post: 180-line scanline + subtle phosphor aperture + soft vignette
-    let scan = 0.94 + 0.06 * sin(in.uv.y * ${GAME_H}.0 * 6.28318);
-    let maskPhase = in.uv.x * ${GAME_W}.0 * 3.14159;
+    // Console CRT post: scanline + subtle phosphor aperture + soft vignette
+    let scan = 0.94 + 0.06 * sin(in.uv.y * viewSize.y * 6.28318);
+    let maskPhase = in.uv.x * viewSize.x * 3.14159;
     let triad = vec3f(
       0.98 + 0.025 * sin(maskPhase),
       0.98 + 0.025 * sin(maskPhase + 2.094),
@@ -395,9 +400,9 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
     let vig = clamp(1.0 - r2 * 0.24, 0.76, 1.0);
     col = col * scan * triad * vig;
   } else if (mode > 0.5) {
-    // Handheld LCD post: crisp 320x180 pixel subgrid + warm contrast
-    let gx = 0.97 + 0.03 * cos(in.uv.x * ${GAME_W}.0 * 6.28318);
-    let gy = 0.97 + 0.03 * cos(in.uv.y * ${GAME_H}.0 * 6.28318);
+    // Handheld LCD post: crisp pixel subgrid + warm contrast
+    let gx = 0.97 + 0.03 * cos(in.uv.x * viewSize.x * 6.28318);
+    let gy = 0.97 + 0.03 * cos(in.uv.y * viewSize.y * 6.28318);
     let vig = clamp(1.0 - r2 * 0.12, 0.88, 1.0);
     col = col * (gx * gy * vig) * vec3f(1.01, 1.005, 0.985);
   } else if (uPost.params1.y > 0.5) {

@@ -45,6 +45,8 @@ export class GpuEngine {
   private addCount = 0;
   private spriteTotal = 0;
   private lightTotal = 0;
+  private viewW = 320;
+  private viewH = 180;
   private currentSky: SkyGradient = {
     top: hexToRgb01('#8ed4ff'),
     bottom: hexToRgb01('#fff2df'),
@@ -53,6 +55,8 @@ export class GpuEngine {
     filterMode: 0,
     camFracX: 0,
     camFracY: 0,
+    viewW: 320,
+    viewH: 180,
   };
   private screenFilterCode = 0;
   private onBackendChange?: (kind: GpuBackendKind, canvas?: HTMLCanvasElement) => void;
@@ -72,6 +76,15 @@ export class GpuEngine {
     this.canvas = canvas;
     this.onBackendChange = onBackendChange;
     this.atlas = atlas;
+  }
+
+  public setLogicalViewport(width: number, height: number): void {
+    this.viewW = Math.max(160, Math.min(640, Math.round(width)));
+    this.viewH = Math.max(120, Math.min(360, Math.round(height)));
+  }
+
+  public getLogicalViewport(): { width: number; height: number } {
+    return { width: this.viewW, height: this.viewH };
   }
 
   public setFilterModeCode(mode: number): void {
@@ -257,6 +270,8 @@ export class GpuEngine {
     this.currentSky.filterMode = filterMode;
     this.currentSky.camFracX = camFracX;
     this.currentSky.camFracY = camFracY;
+    this.currentSky.viewW = this.viewW;
+    this.currentSky.viewH = this.viewH;
     this.alphaCount = 0;
     this.addCount = 0;
     this.spriteTotal = 0;

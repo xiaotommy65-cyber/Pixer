@@ -51,6 +51,7 @@ export interface WorldConfig {
   cartridgeId: CartridgeId;
   worldWidth?: number;
   worldHeight?: number;
+  viewport?: 'classic' | 'wide' | 'hd' | { width: number; height: number };
   skyTop?: string;
   skyBottom?: string;
   ambientDarkness?: number;

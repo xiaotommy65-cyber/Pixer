@@ -1,4 +1,4 @@
-import { GAME_H, GAME_W, OVERSCAN_H, OVERSCAN_PAD, OVERSCAN_W } from './GpuTypes.ts';
+import { OVERSCAN_PAD } from './GpuTypes.ts';
 
 export const SKY_VS = `#version 300 es
 out vec2 vUv;
@@ -19,6 +19,7 @@ uniform vec3 uTopColor;
 uniform vec3 uBottomColor;
 uniform float uCozyFilter;
 uniform float uTimeSec;
+uniform float uViewH;
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 void main() {
@@ -26,7 +27,7 @@ void main() {
   float horizonGlow = pow(y, 2.4) * 0.045 * (0.85 + 0.15 * sin(uTimeSec * 0.7 + vUv.x * 3.14159));
   vec3 col = mix(uTopColor, uBottomColor, y) + uBottomColor * horizonGlow;
   if (uCozyFilter > 0.5) {
-    col *= 0.985 + 0.015 * sin(vUv.y * 180.0 * 6.28318);
+    col *= 0.985 + 0.015 * sin(vUv.y * max(1.0, uViewH) * 6.28318);
   }
   fragColor = vec4(col, 1.0);
   fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
@@ -38,6 +39,8 @@ layout(location = 1) in vec4 aUvBounds;
 layout(location = 2) in vec4 aTint;
 layout(location = 3) in vec4 aExtra;
 layout(location = 4) in vec4 aDeform; // x: pivotX, y: pivotY, z: skewX, w: paletteRow
+
+uniform vec2 uViewSize;
 
 out vec2 vTexUv;
 out vec2 vLocalUv;
@@ -64,8 +67,9 @@ void main() {
   vec2 rotated = vec2(sheared.x * c - sheared.y * s, sheared.x * s + sheared.y * c);
   vec2 world = aRectPosSize.xy + rotated;
 
-  float ndcX = ((world.x + ${OVERSCAN_PAD}.0) / ${OVERSCAN_W}.0) * 2.0 - 1.0;
-  float ndcY = 1.0 - ((world.y + ${OVERSCAN_PAD}.0) / ${OVERSCAN_H}.0) * 2.0;
+  vec2 osSize = max(vec2(1.0), uViewSize) + vec2(${OVERSCAN_PAD}.0 * 2.0);
+  float ndcX = ((world.x + ${OVERSCAN_PAD}.0) / osSize.x) * 2.0 - 1.0;
+  float ndcY = 1.0 - ((world.y + ${OVERSCAN_PAD}.0) / osSize.y) * 2.0;
 
   gl_Position = vec4(ndcX, ndcY, 0.0, 1.0);
   vTexUv = mix(aUvBounds.xy, aUvBounds.zw, u01);
@@ -339,11 +343,14 @@ uniform float uGlowIntensity;
 uniform float uFilterMode;
 uniform float uCozyFilter;
 uniform vec2 uCamFrac;
+uniform vec2 uViewSize;
 out vec4 fragColor;
 void main() {
+  vec2 viewSize = max(vec2(1.0), uViewSize);
+  vec2 osSize = viewSize + vec2(${OVERSCAN_PAD}.0 * 2.0);
   vec2 sceneUv = vec2(
-    (${OVERSCAN_PAD}.0 + vUv.x * ${GAME_W}.0 + uCamFrac.x) / ${OVERSCAN_W}.0,
-    (${OVERSCAN_PAD}.0 + vUv.y * ${GAME_H}.0 - uCamFrac.y) / ${OVERSCAN_H}.0
+    (${OVERSCAN_PAD}.0 + vUv.x * viewSize.x + uCamFrac.x) / osSize.x,
+    (${OVERSCAN_PAD}.0 + vUv.y * viewSize.y - uCamFrac.y) / osSize.y
   );
   vec3 sceneCol = texture(uSceneTex, sceneUv).rgb;
   vec3 col = sceneCol;
@@ -358,8 +365,8 @@ void main() {
   float r2 = dot(centered, centered);
 
   if (uFilterMode > 1.5) {
-    float scan = 0.94 + 0.06 * sin(vUv.y * ${GAME_H}.0 * 6.28318);
-    float maskPhase = vUv.x * ${GAME_W}.0 * 3.14159;
+    float scan = 0.94 + 0.06 * sin(vUv.y * viewSize.y * 6.28318);
+    float maskPhase = vUv.x * viewSize.x * 3.14159;
     vec3 triad = vec3(
       0.98 + 0.025 * sin(maskPhase),
       0.98 + 0.025 * sin(maskPhase + 2.094),
@@ -368,8 +375,8 @@ void main() {
     float vig = clamp(1.0 - r2 * 0.24, 0.76, 1.0);
     col = col * scan * triad * vig;
   } else if (uFilterMode > 0.5) {
-    float gx = 0.97 + 0.03 * cos(vUv.x * ${GAME_W}.0 * 6.28318);
-    float gy = 0.97 + 0.03 * cos(vUv.y * ${GAME_H}.0 * 6.28318);
+    float gx = 0.97 + 0.03 * cos(vUv.x * viewSize.x * 6.28318);
+    float gy = 0.97 + 0.03 * cos(vUv.y * viewSize.y * 6.28318);
     float vig = clamp(1.0 - r2 * 0.12, 0.88, 1.0);
     col = col * (gx * gy * vig) * vec3(1.01, 1.005, 0.985);
   } else if (uCozyFilter > 0.5) {

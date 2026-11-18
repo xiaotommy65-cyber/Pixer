@@ -237,6 +237,7 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
     cameraX: world.cameraX + world.juice.shakeX,
     cameraY: world.cameraY + world.juice.shakeY,
     cameraZoom: world.scoutMode ? 0.88 : 1.0,
+    viewport: world.viewport,
     ambientDarkness: world.ambientDarkness,
     ambientColor: world.ambientColor,
     screenFlashAlpha: world.juice.flashAlpha,

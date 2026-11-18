@@ -4,8 +4,7 @@ import {
   GAME_H,
   GAME_W,
   MAX_INSTANCES_PER_PASS,
-  OVERSCAN_H,
-  OVERSCAN_W,
+  OVERSCAN_PAD,
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
@@ -17,6 +16,8 @@ const LUT_ALIGNED_ROW_BYTES = 256;
 interface PostRenderTargets {
   w: number;
   h: number;
+  viewW: number;
+  viewH: number;
   osW: number;
   osH: number;
   bloomW: number;
@@ -64,7 +65,7 @@ export class WebGpuBackend implements IGpuBackend {
   private postBlurHBuf: GPUBuffer;
   private postBlurVBuf: GPUBuffer;
   private postCompBuf: GPUBuffer;
-  private postUniformData = new Float32Array(8);
+  private postUniformData = new Float32Array(12);
   private renderTargets: PostRenderTargets | null = null;
   private paletteRows = DEFAULT_PALETTE_ROWS;
   private onLostCallback?: () => void;
@@ -294,7 +295,7 @@ export class WebGpuBackend implements IGpuBackend {
       });
       const makePostBuf = () =>
         device.createBuffer({
-          size: 32,
+          size: 48,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
       const postDownBuf = makePostBuf();
@@ -492,14 +493,22 @@ export class WebGpuBackend implements IGpuBackend {
     this.renderTargets = null;
   }
 
-  private ensureRenderTargets(w: number, h: number): PostRenderTargets {
-    if (this.renderTargets && this.renderTargets.w === w && this.renderTargets.h === h) {
+  private ensureRenderTargets(w: number, h: number, viewW = GAME_W, viewH = GAME_H): PostRenderTargets {
+    if (
+      this.renderTargets &&
+      this.renderTargets.w === w &&
+      this.renderTargets.h === h &&
+      this.renderTargets.viewW === viewW &&
+      this.renderTargets.viewH === viewH
+    ) {
       return this.renderTargets;
     }
     this.destroyRenderTargets();
 
-    const osW = Math.max(1, Math.round((w * OVERSCAN_W) / GAME_W));
-    const osH = Math.max(1, Math.round((h * OVERSCAN_H) / GAME_H));
+    const osViewW = viewW + OVERSCAN_PAD * 2;
+    const osViewH = viewH + OVERSCAN_PAD * 2;
+    const osW = Math.max(1, Math.round((w * osViewW) / viewW));
+    const osH = Math.max(1, Math.round((h * osViewH) / viewH));
     const bloomW = Math.max(1, Math.floor(osW / 4));
     const bloomH = Math.max(1, Math.floor(osH / 4));
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
@@ -529,6 +538,8 @@ export class WebGpuBackend implements IGpuBackend {
     this.renderTargets = {
       w,
       h,
+      viewW,
+      viewH,
       osW,
       osH,
       bloomW,
@@ -639,9 +650,11 @@ export class WebGpuBackend implements IGpuBackend {
       return 0;
     }
 
+    const viewW = Math.max(1, sky.viewW ?? GAME_W);
+    const viewH = Math.max(1, sky.viewH ?? GAME_H);
     const rtW = Math.max(1, swapTex.width);
     const rtH = Math.max(1, swapTex.height);
-    const rt = this.ensureRenderTargets(rtW, rtH);
+    const rt = this.ensureRenderTargets(rtW, rtH, viewW, viewH);
     const view = swapTex.createView();
 
     this.skyUniformData[0] = sky.top[0];
@@ -654,8 +667,8 @@ export class WebGpuBackend implements IGpuBackend {
     this.skyUniformData[7] = 1;
     this.skyUniformData[8] = timeSec;
     this.skyUniformData[9] = sky.cozyFilter ? 1 : 0;
-    this.skyUniformData[10] = GAME_W;
-    this.skyUniformData[11] = GAME_H;
+    this.skyUniformData[10] = viewW;
+    this.skyUniformData[11] = viewH;
     this.skyUniformData[12] = this.paletteRows;
     this.device.queue.writeBuffer(this.skyUniformBuffer, 0, this.skyUniformData);
 
@@ -682,6 +695,10 @@ export class WebGpuBackend implements IGpuBackend {
     }
 
     const doBloom = sky.glowIntensity > 0.01;
+    this.postUniformData[8] = viewW;
+    this.postUniformData[9] = viewH;
+    this.postUniformData[10] = viewW + OVERSCAN_PAD * 2;
+    this.postUniformData[11] = viewH + OVERSCAN_PAD * 2;
     if (doBloom) {
       this.postUniformData[0] = 1 / rt.osW;
       this.postUniformData[1] = 1 / rt.osH;

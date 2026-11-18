@@ -114,6 +114,8 @@ function sortDepthPoolInPlace(pool: PooledDepthSlot[], lo: number, hi: number): 
 
 export class SceneGpuBridge {
   private readonly depthPool: PooledDepthSlot[] = [];
+  private viewW = GAME_W;
+  private viewH = GAME_H;
   private zoom = 1;
   private camCenterX = GAME_W * 0.5;
   private camCenterY = GAME_H * 0.5;
@@ -123,17 +125,17 @@ export class SceneGpuBridge {
 
   private perspScaleAtWorldY(wy: number): number {
     if (this.perspSkew <= 0) return 1;
-    const rawY = GAME_H * 0.5 + (wy - this.camCenterY) * this.zoom;
-    const norm = Math.max(-0.55, Math.min(0.55, (rawY - GAME_H * 0.5) / GAME_H));
+    const rawY = this.viewH * 0.5 + (wy - this.camCenterY) * this.zoom;
+    const norm = Math.max(-0.55, Math.min(0.55, (rawY - this.viewH * 0.5) / this.viewH));
     return 1 + norm * this.perspSkew;
   }
 
   private projectX(wx: number, wy: number): number {
-    return GAME_W * 0.5 + (wx - this.camCenterX) * this.zoom * this.perspScaleAtWorldY(wy);
+    return this.viewW * 0.5 + (wx - this.camCenterX) * this.zoom * this.perspScaleAtWorldY(wy);
   }
 
   private projectY(wy: number): number {
-    return GAME_H * 0.5 + (wy - this.camCenterY) * this.zoom * this.perspScaleAtWorldY(wy);
+    return this.viewH * 0.5 + (wy - this.camCenterY) * this.zoom * this.perspScaleAtWorldY(wy);
   }
 
   private drawTile(gpu: GpuEngine, t: TileDesc): void {
@@ -145,8 +147,8 @@ export class SceneGpuBridge {
     const sy = (yTop + yBot) * 0.5;
     const dw = t.w * this.zoom * ps;
     const dh = Math.max(1, yBot - yTop);
-    if (sx + dw * 0.5 < -this.cullPad || sx - dw * 0.5 > GAME_W + this.cullPad) return;
-    if (sy + dh * 0.5 < -this.cullPad || sy - dh * 0.5 > GAME_H + this.cullPad) return;
+    if (sx + dw * 0.5 < -this.cullPad || sx - dw * 0.5 > this.viewW + this.cullPad) return;
+    if (sy + dh * 0.5 < -this.cullPad || sy - dh * 0.5 > this.viewH + this.cullPad) return;
 
     const extrudeH = t.extrudeH ?? 0;
     const elevZ = t.elevationZ ?? 0;
@@ -189,12 +191,12 @@ export class SceneGpuBridge {
     const worldAnchorY = e.y + e.h * anchorY;
     const worldMidY = e.y + e.h * 0.5;
     const ps = this.perspScaleAtWorldY(worldMidY);
-    const sx = GAME_W * 0.5 + (worldAnchorX - this.camCenterX) * this.zoom * ps;
-    const syBase = GAME_H * 0.5 + (worldAnchorY - this.camCenterY) * this.zoom * ps;
+    const sx = this.viewW * 0.5 + (worldAnchorX - this.camCenterX) * this.zoom * ps;
+    const syBase = this.viewH * 0.5 + (worldAnchorY - this.camCenterY) * this.zoom * ps;
     const sw = e.w * (e.scaleX ?? 1) * this.zoom * ps;
     const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
     const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
-    if (sx < -this.cullPad || sx > GAME_W + this.cullPad || sy < -this.cullPad || sy - sh > GAME_H + this.cullPad) return;
+    if (sx < -this.cullPad || sx > this.viewW + this.cullPad || sy < -this.cullPad || sy - sh > this.viewH + this.cullPad) return;
     gpu.drawSpriteRaw(
       e.sprite,
       sx,
@@ -234,12 +236,12 @@ export class SceneGpuBridge {
       const ps = this.perspScaleAtWorldY(wyMid);
       const sx = this.projectX(t.x + t.w * 0.5, wyMid);
       const halfDw = t.w * 0.5 * this.zoom * ps;
-      if (sx + halfDw < -this.cullPad || sx - halfDw > GAME_W + this.cullPad) continue;
+      if (sx + halfDw < -this.cullPad || sx - halfDw > this.viewW + this.cullPad) continue;
       const yTop = this.projectY(t.y);
       const yBot = this.projectY(t.y + t.h);
       const sy = (yTop + yBot) * 0.5;
       const halfDh = Math.max(1, yBot - yTop) * 0.5;
-      if (sy + halfDh < -this.cullPad || sy - halfDh > GAME_H + this.cullPad) continue;
+      if (sy + halfDh < -this.cullPad || sy - halfDh > this.viewH + this.cullPad) continue;
 
       const slot = this.acquireDepthSlot(count);
       slot.kind = 'tile';
@@ -254,12 +256,12 @@ export class SceneGpuBridge {
       const e = entities[i];
       const anchorY = e.anchorY ?? 0.5;
       const ps = this.perspScaleAtWorldY(e.y + e.h * 0.5);
-      const sx = GAME_W * 0.5 + (e.x + e.w * 0.5 - this.camCenterX) * this.zoom * ps;
-      if (sx < -this.cullPad || sx > GAME_W + this.cullPad) continue;
-      const syBase = GAME_H * 0.5 + (e.y + e.h * anchorY - this.camCenterY) * this.zoom * ps;
+      const sx = this.viewW * 0.5 + (e.x + e.w * 0.5 - this.camCenterX) * this.zoom * ps;
+      if (sx < -this.cullPad || sx > this.viewW + this.cullPad) continue;
+      const syBase = this.viewH * 0.5 + (e.y + e.h * anchorY - this.camCenterY) * this.zoom * ps;
       const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
       const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
-      if (sy < -this.cullPad || sy - sh > GAME_H + this.cullPad) continue;
+      if (sy < -this.cullPad || sy - sh > this.viewH + this.cullPad) continue;
 
       const slot = this.acquireDepthSlot(count);
       slot.kind = 'entity';
@@ -286,6 +288,9 @@ export class SceneGpuBridge {
 
   /** Home screen shown while no game card is inserted. */
   public renderIdle(gpu: GpuEngine, timeSec: number, awake = false): GpuFrameStats {
+    this.viewW = GAME_W;
+    this.viewH = GAME_H;
+    gpu.setLogicalViewport(GAME_W, GAME_H);
     gpu.beginFrame(awake ? '#ffc2d6' : '#ffd3df', '#fff6e4', true);
 
     for (let i = 0; i < 4; i++) {
@@ -330,6 +335,12 @@ export class SceneGpuBridge {
     snap: RenderSceneSnapshot,
     benchmarkSprites: readonly BenchmarkSprite[] | null,
   ): GpuFrameStats {
+    const vw = Math.max(160, Math.round(snap.viewport?.width ?? GAME_W));
+    const vh = Math.max(90, Math.round(snap.viewport?.height ?? GAME_H));
+    this.viewW = vw;
+    this.viewH = vh;
+    gpu.setLogicalViewport(vw, vh);
+
     this.defaultPaletteRow = snap.paletteRow ?? 0;
     this.zoom = snap.cameraZoom ?? 1;
     const snappedCamX = Math.round(snap.cameraX);
@@ -339,8 +350,8 @@ export class SceneGpuBridge {
 
     gpu.beginFrame(snap.skyTop, snap.skyBottom, snap.cozyFilter, snap.glowIntensity ?? 1.0, undefined, camFracX, camFracY);
 
-    this.camCenterX = snappedCamX + GAME_W * 0.5;
-    this.camCenterY = snappedCamY + GAME_H * 0.5;
+    this.camCenterX = snappedCamX + this.viewW * 0.5;
+    this.camCenterY = snappedCamY + this.viewH * 0.5;
     const hd2d = snap.hd2dDepth;
     const hd2dOn = Boolean(hd2d?.enabled);
     this.perspSkew = hd2dOn ? (hd2d?.perspectiveSkew ?? 0.055) : 0;
@@ -360,7 +371,7 @@ export class SceneGpuBridge {
       const segW = Math.round(16 * c.scale);
       const segH = Math.round(16 * c.scale);
       const halfH = segH * 0.5;
-      if (cx > -segW * 3 && cx < GAME_W + segW * 2) {
+      if (cx > -segW * 3 && cx < this.viewW + segW * 2) {
         gpu.drawSpriteRaw('cloud_l', cx + segW * 0.5, cy + halfH, segW, segH, false, 0, c.tint, c.alpha);
         gpu.drawSpriteRaw('cloud_m', cx + segW * 1.5, cy + halfH, segW, segH, false, 0, c.tint, c.alpha);
         gpu.drawSpriteRaw('cloud_r', cx + segW * 2.5, cy + halfH, segW, segH, false, 0, c.tint, c.alpha);
@@ -381,9 +392,9 @@ export class SceneGpuBridge {
       const footWorldX = e.x + e.w * 0.5;
       const footWorldY = e.y + e.h + (e.shadowOffsetY ?? 0) - 1;
       const ps = this.perspScaleAtWorldY(footWorldY);
-      const gx = GAME_W * 0.5 + (footWorldX - this.camCenterX) * this.zoom * ps;
-      const gy = GAME_H * 0.5 + (footWorldY - this.camCenterY) * this.zoom * ps;
-      if (gx < -this.cullPad || gx > GAME_W + this.cullPad || gy < -this.cullPad || gy > GAME_H + this.cullPad) continue;
+      const gx = this.viewW * 0.5 + (footWorldX - this.camCenterX) * this.zoom * ps;
+      const gy = this.viewH * 0.5 + (footWorldY - this.camCenterY) * this.zoom * ps;
+      if (gx < -this.cullPad || gx > this.viewW + this.cullPad || gy < -this.cullPad || gy > this.viewH + this.cullPad) continue;
       const elev = Math.max(e.elevationZ ?? 0, e.shadowOffsetY ?? 0);
       drawGroundShadow(gpu, gx, gy, e.shadowRadius ?? e.w * 0.42, elev, this.zoom * ps);
     }
@@ -404,10 +415,10 @@ export class SceneGpuBridge {
 
     if (snap.ambientDarkness && snap.ambientDarkness > 0.01) {
       gpu.drawRect(
-        GAME_W * 0.5 + camFracX,
-        GAME_H * 0.5 + camFracY,
-        GAME_W + 4,
-        GAME_H + 4,
+        this.viewW * 0.5 + camFracX,
+        this.viewH * 0.5 + camFracY,
+        this.viewW + 4,
+        this.viewH + 4,
         snap.ambientColor ?? '#120e24',
         Math.min(0.88, snap.ambientDarkness),
       );
@@ -416,18 +427,18 @@ export class SceneGpuBridge {
     for (let i = 0; i < snap.lights.length; i++) {
       const l = snap.lights[i];
       const ps = this.perspScaleAtWorldY(l.y);
-      const lx = GAME_W * 0.5 + (l.x - this.camCenterX) * this.zoom * ps;
-      const ly = GAME_H * 0.5 + (l.y - this.camCenterY) * this.zoom * ps;
+      const lx = this.viewW * 0.5 + (l.x - this.camCenterX) * this.zoom * ps;
+      const ly = this.viewH * 0.5 + (l.y - this.camCenterY) * this.zoom * ps;
       const lr = l.radius * this.zoom * ps;
-      if (lx + lr < -36 || lx - lr > GAME_W + 36 || ly + lr < -36 || ly - lr > GAME_H + 36) continue;
+      if (lx + lr < -36 || lx - lr > this.viewW + 36 || ly + lr < -36 || ly - lr > this.viewH + 36) continue;
       gpu.drawLight(lx, ly, lr, l.color, l.intensity, l.falloffPower ?? 2.0);
     }
 
     for (let i = 0; i < snap.particles.length; i++) {
       const p = snap.particles[i];
       const ps = this.perspScaleAtWorldY(p.y);
-      const px = GAME_W * 0.5 + (p.x - this.camCenterX) * this.zoom * ps;
-      const py = GAME_H * 0.5 + (p.y - this.camCenterY) * this.zoom * ps;
+      const px = this.viewW * 0.5 + (p.x - this.camCenterX) * this.zoom * ps;
+      const py = this.viewH * 0.5 + (p.y - this.camCenterY) * this.zoom * ps;
       const pSize = p.size * this.zoom * ps;
       const alpha = Math.max(0, 1 - p.life / p.maxLife);
       if (p.sprite) {
@@ -452,8 +463,8 @@ export class SceneGpuBridge {
         const r = snap.debugRects[i];
         const wyMid = r.y + r.h * 0.5;
         const ps = this.perspScaleAtWorldY(wyMid);
-        const rx = GAME_W * 0.5 + (r.x + r.w * 0.5 - this.camCenterX) * this.zoom * ps;
-        const ry = GAME_H * 0.5 + (wyMid - this.camCenterY) * this.zoom * ps;
+        const rx = this.viewW * 0.5 + (r.x + r.w * 0.5 - this.camCenterX) * this.zoom * ps;
+        const ry = this.viewH * 0.5 + (wyMid - this.camCenterY) * this.zoom * ps;
         gpu.drawRect(rx, ry, r.w * this.zoom * ps, r.h * this.zoom * ps, r.color, 0.28);
       }
     }
@@ -462,21 +473,21 @@ export class SceneGpuBridge {
       const hazeAlpha = hd2d?.horizonHazeAlpha ?? 0.16;
       if (hazeAlpha > 0.005) {
         const hazeColor = hd2d?.horizonHazeColor ?? snap.skyTop;
-        gpu.drawSmoothGradient(GAME_W * 0.5 + camFracX, 16 + camFracY, GAME_W + 4, 34, hazeColor, hazeAlpha, 0, 1.45);
+        gpu.drawSmoothGradient(this.viewW * 0.5 + camFracX, 16 + camFracY, this.viewW + 4, 34, hazeColor, hazeAlpha, 0, 1.45);
       }
       const tiltAlpha = hd2d?.tiltShiftAlpha ?? 0.16;
       if (tiltAlpha > 0.005) {
-        gpu.drawSmoothGradient(GAME_W * 0.5 + camFracX, 9 + camFracY, GAME_W + 4, 20, '#0a0814', tiltAlpha, 0, 1.6);
-        gpu.drawSmoothGradient(GAME_W * 0.5 + camFracX, GAME_H - 9 + camFracY, GAME_W + 4, 20, '#0a0814', tiltAlpha * 0.85, 1, 1.6);
+        gpu.drawSmoothGradient(this.viewW * 0.5 + camFracX, 9 + camFracY, this.viewW + 4, 20, '#0a0814', tiltAlpha, 0, 1.6);
+        gpu.drawSmoothGradient(this.viewW * 0.5 + camFracX, this.viewH - 9 + camFracY, this.viewW + 4, 20, '#0a0814', tiltAlpha * 0.85, 1, 1.6);
       }
     }
 
     if (snap.screenFlashAlpha && snap.screenFlashAlpha > 0.01) {
       gpu.drawRect(
-        GAME_W * 0.5 + camFracX,
-        GAME_H * 0.5 + camFracY,
-        GAME_W + 4,
-        GAME_H + 4,
+        this.viewW * 0.5 + camFracX,
+        this.viewH * 0.5 + camFracY,
+        this.viewW + 4,
+        this.viewH + 4,
         snap.screenFlashColor ?? '#fffaf0',
         Math.min(0.42, snap.screenFlashAlpha),
       );
@@ -484,9 +495,9 @@ export class SceneGpuBridge {
 
     const lb = snap.cameraLetterbox ?? 0;
     if (lb > 0.004) {
-      const barH = Math.round(GAME_H * Math.min(0.2, lb));
-      gpu.drawRect(GAME_W * 0.5 + camFracX, barH * 0.5 + camFracY, GAME_W + 4, barH + 2, '#07060b', 0.96);
-      gpu.drawRect(GAME_W * 0.5 + camFracX, GAME_H - barH * 0.5 + camFracY, GAME_W + 4, barH + 2, '#07060b', 0.96);
+      const barH = Math.round(this.viewH * Math.min(0.2, lb));
+      gpu.drawRect(this.viewW * 0.5 + camFracX, barH * 0.5 + camFracY, this.viewW + 4, barH + 2, '#07060b', 0.96);
+      gpu.drawRect(this.viewW * 0.5 + camFracX, this.viewH - barH * 0.5 + camFracY, this.viewW + 4, barH + 2, '#07060b', 0.96);
     }
 
     if (!snap.rpgHud && !snap.chronicleHud) {
@@ -495,20 +506,20 @@ export class SceneGpuBridge {
       }
 
       if (snap.hasKey) {
-        gpu.drawSpriteRaw('key', GAME_W - 14 + camFracX, 11 + camFracY, 12, 12);
+        gpu.drawSpriteRaw('key', this.viewW - 14 + camFracX, 11 + camFracY, 12, 12);
       }
 
       for (let i = 0; i < snap.starsTotal; i++) {
         const collected = i < snap.starsCollected;
         const baseOffset = snap.hasKey ? 28 : 14;
-        gpu.drawSpriteRaw('star_a', GAME_W - baseOffset - i * 11 + camFracX, 11 + camFracY, 9, 9, false, 0, collected ? '#ffd447' : '#8c9ab5', collected ? 1 : 0.45);
+        gpu.drawSpriteRaw('star_a', this.viewW - baseOffset - i * 11 + camFracX, 11 + camFracY, 9, 9, false, 0, collected ? '#ffd447' : '#8c9ab5', collected ? 1 : 0.45);
       }
 
       if (snap.bossMaxHp > 0 && snap.bossHp > 0) {
         const barW = 90;
         const ratio = snap.bossHp / snap.bossMaxHp;
-        gpu.drawRect(GAME_W * 0.5 + camFracX, 11 + camFracY, barW + 6, 9, '#2b1d1a', 0.92, 0, false, 0, 1);
-        gpu.drawRect(GAME_W * 0.5 - barW * 0.5 * (1 - ratio) + camFracX, 11 + camFracY, Math.max(2, barW * ratio), 4.5, '#ff708d', 1, 0, false, 0, 1);
+        gpu.drawRect(this.viewW * 0.5 + camFracX, 11 + camFracY, barW + 6, 9, '#2b1d1a', 0.92, 0, false, 0, 1);
+        gpu.drawRect(this.viewW * 0.5 - barW * 0.5 * (1 - ratio) + camFracX, 11 + camFracY, Math.max(2, barW * ratio), 4.5, '#ff708d', 1, 0, false, 0, 1);
       }
     }
 

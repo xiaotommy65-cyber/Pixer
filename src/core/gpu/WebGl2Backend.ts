@@ -4,8 +4,7 @@ import {
   GAME_H,
   GAME_W,
   MAX_INSTANCES_PER_PASS,
-  OVERSCAN_H,
-  OVERSCAN_W,
+  OVERSCAN_PAD,
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
@@ -72,6 +71,8 @@ function createRenderTexture(
 interface GlRenderTargets {
   w: number;
   h: number;
+  viewW: number;
+  viewH: number;
   osW: number;
   osH: number;
   bloomW: number;
@@ -107,6 +108,8 @@ export class WebGl2Backend implements IGpuBackend {
   private uBottomLoc: WebGLUniformLocation | null;
   private uCozyLoc: WebGLUniformLocation | null;
   private uTimeLoc: WebGLUniformLocation | null;
+  private uSkyViewHLoc: WebGLUniformLocation | null;
+  private uSpriteViewSizeLoc: WebGLUniformLocation | null;
   private uPaletteRowsLoc: WebGLUniformLocation | null;
   private uDownOffsetLoc: WebGLUniformLocation | null;
   private uBlurStepLoc: WebGLUniformLocation | null;
@@ -114,6 +117,7 @@ export class WebGl2Backend implements IGpuBackend {
   private uCompFilterLoc: WebGLUniformLocation | null;
   private uCompCozyLoc: WebGLUniformLocation | null;
   private uCompCamFracLoc: WebGLUniformLocation | null;
+  private uCompViewSizeLoc: WebGLUniformLocation | null;
 
   private onLostListener?: (e: Event) => void;
   private canvasEl: HTMLCanvasElement;
@@ -142,11 +146,13 @@ export class WebGl2Backend implements IGpuBackend {
     this.uBottomLoc = gl.getUniformLocation(this.skyProg, 'uBottomColor');
     this.uCozyLoc = gl.getUniformLocation(this.skyProg, 'uCozyFilter');
     this.uTimeLoc = gl.getUniformLocation(this.skyProg, 'uTimeSec');
+    this.uSkyViewHLoc = gl.getUniformLocation(this.skyProg, 'uViewH');
 
     gl.useProgram(this.spriteProg);
     const uAtlasLoc = gl.getUniformLocation(this.spriteProg, 'uAtlas');
     const uIdxLoc = gl.getUniformLocation(this.spriteProg, 'uIndexAtlas');
     const uLutLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteLut');
+    this.uSpriteViewSizeLoc = gl.getUniformLocation(this.spriteProg, 'uViewSize');
     this.uPaletteRowsLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteRows');
     if (uAtlasLoc) gl.uniform1i(uAtlasLoc, 0);
     if (uIdxLoc) gl.uniform1i(uIdxLoc, 1);
@@ -169,6 +175,7 @@ export class WebGl2Backend implements IGpuBackend {
     this.uCompFilterLoc = gl.getUniformLocation(this.compositeProg, 'uFilterMode');
     this.uCompCozyLoc = gl.getUniformLocation(this.compositeProg, 'uCozyFilter');
     this.uCompCamFracLoc = gl.getUniformLocation(this.compositeProg, 'uCamFrac');
+    this.uCompViewSizeLoc = gl.getUniformLocation(this.compositeProg, 'uViewSize');
     if (uSceneTexLoc) gl.uniform1i(uSceneTexLoc, 0);
     if (uBloomTexLoc) gl.uniform1i(uBloomTexLoc, 1);
 
@@ -273,14 +280,22 @@ export class WebGl2Backend implements IGpuBackend {
     this.targets = null;
   }
 
-  private ensureRenderTargets(w: number, h: number): GlRenderTargets {
-    if (this.targets && this.targets.w === w && this.targets.h === h) {
+  private ensureRenderTargets(w: number, h: number, viewW = GAME_W, viewH = GAME_H): GlRenderTargets {
+    if (
+      this.targets &&
+      this.targets.w === w &&
+      this.targets.h === h &&
+      this.targets.viewW === viewW &&
+      this.targets.viewH === viewH
+    ) {
       return this.targets;
     }
     this.destroyRenderTargets();
     const gl = this.gl;
-    const osW = Math.max(1, Math.round((w * OVERSCAN_W) / GAME_W));
-    const osH = Math.max(1, Math.round((h * OVERSCAN_H) / GAME_H));
+    const osViewW = viewW + OVERSCAN_PAD * 2;
+    const osViewH = viewH + OVERSCAN_PAD * 2;
+    const osW = Math.max(1, Math.round((w * osViewW) / viewW));
+    const osH = Math.max(1, Math.round((h * osViewH) / viewH));
     const bloomW = Math.max(1, Math.floor(osW / 4));
     const bloomH = Math.max(1, Math.floor(osH / 4));
 
@@ -312,6 +327,8 @@ export class WebGl2Backend implements IGpuBackend {
     this.targets = {
       w,
       h,
+      viewW,
+      viewH,
       osW,
       osH,
       bloomW,
@@ -368,9 +385,11 @@ export class WebGl2Backend implements IGpuBackend {
     const gl = this.gl;
     const w = Math.max(1, gl.canvas.width);
     const h = Math.max(1, gl.canvas.height);
-    const rt = this.ensureRenderTargets(w, h);
+    const vw = Math.max(1, Math.round(sky.viewW ?? GAME_W));
+    const vh = Math.max(1, Math.round(sky.viewH ?? GAME_H));
+    const rt = this.ensureRenderTargets(w, h, vw, vh);
 
-    // Pass 1: MRT Scene Color + Emissive Mask (Overscan 322x182 virtual space)
+    // Pass 1: MRT Scene Color + Emissive Mask (Overscan (viewW+2)x(viewH+2) virtual space)
     gl.bindFramebuffer(gl.FRAMEBUFFER, rt.mrtFbo);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     gl.viewport(0, 0, rt.osW, rt.osH);
@@ -383,10 +402,12 @@ export class WebGl2Backend implements IGpuBackend {
     gl.uniform3f(this.uBottomLoc, sky.bottom[0], sky.bottom[1], sky.bottom[2]);
     gl.uniform1f(this.uCozyLoc, sky.cozyFilter ? 1 : 0);
     gl.uniform1f(this.uTimeLoc, timeSec);
+    gl.uniform1f(this.uSkyViewHLoc, vh);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     gl.useProgram(this.spriteProg);
     gl.bindVertexArray(this.spriteVao);
+    gl.uniform2f(this.uSpriteViewSizeLoc, vw, vh);
     gl.uniform1f(this.uPaletteRowsLoc, this.paletteRows);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
@@ -454,6 +475,7 @@ export class WebGl2Backend implements IGpuBackend {
     gl.uniform1f(this.uCompFilterLoc, sky.filterMode);
     gl.uniform1f(this.uCompCozyLoc, sky.cozyFilter ? 1 : 0);
     gl.uniform2f(this.uCompCamFracLoc, sky.camFracX ?? 0, sky.camFracY ?? 0);
+    gl.uniform2f(this.uCompViewSizeLoc, vw, vh);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     drawCalls++;
 

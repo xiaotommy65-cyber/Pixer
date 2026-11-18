@@ -197,6 +197,7 @@ export interface RenderSceneSnapshot {
   cameraY: number;
   cameraZoom?: number;
   cameraLetterbox?: number;
+  viewport?: { width: number; height: number };
   ambientDarkness?: number;
   ambientColor?: string;
   screenFlashAlpha?: number;

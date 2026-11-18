@@ -26,6 +26,8 @@ export class DisplayThermalGovernor {
   private viewportCssW = 640;
   private dpr = 1;
   private isCompactMobile = false;
+  private viewW = GAME_W;
+  private viewH = GAME_H;
 
   private emaFrameMs = 4.0;
   private overBudgetFrames = 0;
@@ -72,6 +74,19 @@ export class DisplayThermalGovernor {
     }
   }
 
+  public setLogicalViewport(width: number, height: number): boolean {
+    const w = Math.max(160, Math.round(width));
+    const h = Math.max(90, Math.round(height));
+    if (this.viewW === w && this.viewH === h) return false;
+    this.viewW = w;
+    this.viewH = h;
+    return true;
+  }
+
+  public getLogicalViewport(): { width: number; height: number } {
+    return { width: this.viewW, height: this.viewH };
+  }
+
   public setBackground(hidden: boolean): void {
     this.background = hidden;
     if (!hidden) {
@@ -90,8 +105,8 @@ export class DisplayThermalGovernor {
 
   public getTargetPixelSize(): { width: number; height: number } {
     return {
-      width: GAME_W * this.scaleFactor,
-      height: GAME_H * this.scaleFactor,
+      width: this.viewW * this.scaleFactor,
+      height: this.viewH * this.scaleFactor,
     };
   }
 

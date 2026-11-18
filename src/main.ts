@@ -530,15 +530,27 @@ export function createApp(): AppHandle | null {
               host.stepFrame(dt, input);
               const snap = host.getSnapshot();
               const stats = bridge.render(gpuEngine, snap, runner.sparkleBenchmark ? runner.benchmarkSprites : null);
+              const vp = gpuEngine.getLogicalViewport();
+              if (governor.setLogicalViewport(vp.width, vp.height)) {
+                syncGovernorResolution();
+              }
               consoleView.updateHud(snap, stats, fpsSmooth);
             } else {
               host.stepFrame(dt, idleEmptyInput);
               if (shellPhase === 'IN_GAME' && host.activeCartridge) {
                 const snap = host.getSnapshot();
                 const stats = bridge.render(gpuEngine, snap, runner.sparkleBenchmark ? runner.benchmarkSprites : null);
+                const vp = gpuEngine.getLogicalViewport();
+                if (governor.setLogicalViewport(vp.width, vp.height)) {
+                  syncGovernorResolution();
+                }
                 consoleView.updateHud(snap, stats, fpsSmooth);
               } else if (!skipIdleRender) {
                 const stats = bridge.renderIdle(gpuEngine, now / 1000, false);
+                const vp = gpuEngine.getLogicalViewport();
+                if (governor.setLogicalViewport(vp.width, vp.height)) {
+                  syncGovernorResolution();
+                }
                 consoleView.updateStats(stats, fpsSmooth);
               }
             }

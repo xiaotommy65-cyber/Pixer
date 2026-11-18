@@ -5,7 +5,7 @@ import { HybridAiDirector } from '../../src/core/ai/HybridAiDirector.ts';
 import { RemoteHttpAiProvider } from '../../src/core/ai/RemoteAiProvider.ts';
 import { ToySynth } from '../../src/core/audio/ToySynth.ts';
 import { GpuEngine } from '../../src/core/gpu/GpuEngine.ts';
-import { FLOATS_PER_INSTANCE, type IGpuBackend } from '../../src/core/gpu/GpuTypes.ts';
+import { FLOATS_PER_INSTANCE, resolveLogicalViewport, type IGpuBackend } from '../../src/core/gpu/GpuTypes.ts';
 import { InputPipeline } from '../../src/core/input/InputPipeline.ts';
 import { AppLogger, appLogger } from '../../src/core/runtime/AppLogger.ts';
 import {
@@ -15,11 +15,14 @@ import {
   MAX_PNG_FILE_BYTES,
 } from '../../src/core/runtime/CartridgePngCodec.ts';
 import { CartridgeRunner } from '../../src/core/runtime/CartridgeRunner.ts';
+import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGovernor.ts';
 import { EngineHost } from '../../src/core/runtime/EngineHost.ts';
 import { parseJsonlEntries, serializeEntriesToJsonl } from '../../src/core/runtime/LogPersistence.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
 import { buildDepthDrawOrder, SceneGpuBridge } from '../../src/core/runtime/SceneGpuBridge.ts';
+import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
 import type { CartridgeJsonV1 } from '../../src/core/sim/CartridgeSchema.ts';
+import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
 import { AstralChroniclesGame } from '../../src/game/astralChronicles/AstralChroniclesGame.ts';
 import { parseDungeonModuleJson } from '../../src/game/emberkeep/TurnGridSave.ts';
 import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
@@ -486,13 +489,15 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
     wgslSrc.includes('uIndexAtlas') &&
       wgslSrc.includes('uPaletteLut') &&
       wgslSrc.includes('fsComposite') &&
-      wgslSrc.includes('OVERSCAN_W') &&
+      wgslSrc.includes('OVERSCAN_PAD') &&
+      wgslSrc.includes('uPost.params2') &&
       glslSrc.includes('uIndexAtlas') &&
       glslSrc.includes('uPaletteLut') &&
       glslSrc.includes('COMPOSITE_FS') &&
       glslSrc.includes('uCamFrac') &&
-      glslSrc.includes('OVERSCAN_W'),
-    'WebGpuShaders and WebGl2Shaders must maintain LUT + Bloom + Overscan Composite parity',
+      glslSrc.includes('OVERSCAN_PAD') &&
+      glslSrc.includes('uViewSize'),
+    'WebGpuShaders and WebGl2Shaders must maintain LUT + Bloom + Dynamic Overscan Composite parity',
   );
 
   console.log('[SIM OK] Upgraded GPU Art Pipeline (20-float LUT/Skew + 3-Pass Bloom/Post + Overscan) verified');
@@ -688,4 +693,72 @@ export async function testM3LoadCartridgeAndPngCodec(): Promise<void> {
   check(host.deleteCustomCartridge('custom-m3-test') && !host.hasCustomCartridge('custom-m3-test'), 'deleteCustomCartridge must cleanly remove saved cartridge and registry entry');
   host.destroy();
   console.log('[SIM OK] M3 EngineHost.loadCartridge & Polaroid PNG iTXt Codec (with Bomb/CRC guards) verified');
+}
+
+export function testM41DynamicViewportAndCamera(): void {
+  const classic = resolveLogicalViewport('classic');
+  const wide = resolveLogicalViewport('wide');
+  const hd = resolveLogicalViewport('hd');
+  const custom = resolveLogicalViewport({ width: 512, height: 288 });
+  check(
+    classic.width === 320 && classic.height === 180 && wide.width === 426 && wide.height === 240 && hd.width === 480 && hd.height === 270 && custom.width === 512 && custom.height === 288,
+    'resolveLogicalViewport must resolve classic/wide/hd presets and custom dimensions',
+  );
+
+  const gov = new DisplayThermalGovernor('balanced', true); // 2x baseline scale
+  gov.setLogicalViewport(480, 270);
+  const px = gov.getTargetPixelSize();
+  check(px.width === 960 && px.height === 540, 'DisplayThermalGovernor must scale pixel buffer from dynamic logical viewport');
+
+  const cam = new CameraDirector();
+  cam.setViewport(426, 240);
+  cam.reset(0, 0, 1.0, { minX: 0, minY: 0, maxX: 852, maxY: 480 });
+  const initX = cam.x;
+  const initY = cam.y;
+  check(initX === 213 && initY === 120, 'CameraDirector must clamp center to half of dynamic viewport');
+  cam.panTo(900, 900, 1.0, 0);
+  check(cam.x === 639 && cam.y === 360, 'CameraDirector must clamp max bounds using dynamic viewport');
+
+  const tallCart: CartridgeJsonV1 = {
+    version: 1,
+    meta: {
+      id: 'm41-tall-test',
+      code: 'M41',
+      title: 'M4.1 Tall Stage',
+      genre: 'platformer',
+      viewport: 'wide',
+    },
+    player: { controller: 'platformer', sprite: 'hero_a', spriteB: 'hero_b', w: 16, h: 16, maxHearts: 3 },
+    archetypes: {
+      star: { sprite: 'star_a', w: 12, h: 12, tags: ['collectible', 'star'], scoreValue: 100 },
+    },
+    stages: [
+      {
+        id: 'st-tall',
+        name: 'Vertical Tower',
+        worldWidth: 640,
+        worldHeight: 480,
+        skyTop: '#1d1a3b',
+        skyBottom: '#3e356e',
+        bgmTheme: 'meadow',
+        hint: 'Vertical tower test',
+        spawn: { x: 48, y: 400 },
+        groundTop: 'grass',
+        groundFill: 'dirt',
+        spawns: [{ archetype: 'star', x: 120, y: 380 }],
+      },
+    ],
+  };
+
+  const params = new CartridgeRunner().getParams();
+  const rt = new DataCartridgeRuntime(tallCart);
+  check(rt.scriptError === null, 'M4.1 tall stage cartridge must validate cleanly');
+  for (let i = 0; i < 45; i++) {
+    rt.step(1 / 60, emptyInput(), params);
+  }
+  const snap = rt.snapshot(params);
+  check(snap.viewport?.width === 426 && snap.viewport?.height === 240, 'DataCartridgeRuntime.snapshot must emit resolved stage viewport');
+  check(snap.cameraY > 120 && snap.cameraY <= 240, `DataCartridgeRuntime must track vertical cameraY in tall worlds (got ${snap.cameraY.toFixed(1)})`);
+
+  console.log('[SIM OK] M4.1 Dynamic Logical Viewport & True 2D Camera verified');
 }

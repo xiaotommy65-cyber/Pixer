@@ -27,6 +27,8 @@ export class CameraDirector {
   public letterbox = 0;
   public mode: CameraDirectorMode = 'follow';
 
+  private viewW = GAME_W;
+  private viewH = GAME_H;
   private targetZoom = 1.0;
   private targetLetterbox = 0;
   private lookAheadX = 0;
@@ -59,8 +61,18 @@ export class CameraDirector {
     this.y = clamped.y;
   }
 
-  public setBounds(bounds: CameraBounds | null): void {
+  public setViewport(width: number, height: number): void {
+    this.viewW = Math.max(160, Math.round(width));
+    this.viewH = Math.max(90, Math.round(height));
+  }
+
+  public setBounds(bounds: CameraBounds | null, snap = false): void {
     this.bounds = bounds;
+    if (snap) {
+      const clamped = this.clampCenter(this.x, this.y, this.zoom);
+      this.x = clamped.x;
+      this.y = clamped.y;
+    }
   }
 
   public setTargetZoom(zoom: number): void {
@@ -113,8 +125,8 @@ export class CameraDirector {
 
   private clampCenter(cx: number, cy: number, zoom: number): { x: number; y: number } {
     if (!this.bounds) return { x: cx, y: cy };
-    const halfW = (GAME_W * 0.5) / Math.max(0.65, zoom);
-    const halfH = (GAME_H * 0.5) / Math.max(0.65, zoom);
+    const halfW = (this.viewW * 0.5) / Math.max(0.65, zoom);
+    const halfH = (this.viewH * 0.5) / Math.max(0.65, zoom);
     const spanX = this.bounds.maxX - this.bounds.minX;
     const spanY = this.bounds.maxY - this.bounds.minY;
 

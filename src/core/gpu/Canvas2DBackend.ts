@@ -133,7 +133,9 @@ export class Canvas2DBackend implements IGpuBackend {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, cw, ch);
 
-    ctx.scale(cw / GAME_W, ch / GAME_H);
+    const vw = Math.max(1, sky.viewW ?? GAME_W);
+    const vh = Math.max(1, sky.viewH ?? GAME_H);
+    ctx.scale(cw / vw, ch / vh);
     const fx = sky.camFracX ?? 0;
     const fy = sky.camFracY ?? 0;
     if (fx !== 0 || fy !== 0) {

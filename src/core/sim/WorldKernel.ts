@@ -1,5 +1,5 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
-import { GAME_H, GAME_W } from '../gpu/GpuTypes.ts';
+import { GAME_H, GAME_W, resolveLogicalViewport, type LogicalViewport } from '../gpu/GpuTypes.ts';
 import { InputMap } from '../input/InputMap.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type {
@@ -53,6 +53,7 @@ export class WorldKernel {
   public cartridgeId: CartridgeId;
   public worldW: number;
   public worldH: number;
+  public readonly viewport: LogicalViewport;
   public skyTop: string;
   public skyBottom: string;
   public ambientDarkness: number;
@@ -114,6 +115,7 @@ export class WorldKernel {
     this.cartridgeId = cfg.cartridgeId;
     this.worldW = cfg.worldWidth ?? GAME_W;
     this.worldH = cfg.worldHeight ?? GAME_H;
+    this.viewport = resolveLogicalViewport(cfg.viewport);
     this.skyTop = cfg.skyTop ?? '#8fd8ff';
     this.skyBottom = cfg.skyBottom ?? '#fff4df';
     this.ambientDarkness = cfg.ambientDarkness ?? 0;
@@ -385,14 +387,20 @@ export class WorldKernel {
     const lookAhead = this.hero.facingLeft ? -16 : 16;
     const scoutOffset = this.scoutMode ? (this.hero.facingLeft ? -52 : 52) : 0;
     const rightPeekX = this.input.rightAxisX() * 68;
+    const viewW = this.viewport.width;
+    const viewH = this.viewport.height;
+    const maxCamX = Math.max(0, this.worldW - viewW);
     const targetCamX = Math.max(
       0,
-      Math.min(this.worldW - GAME_W, this.hero.x + lookAhead + scoutOffset + rightPeekX - GAME_W * 0.44),
+      Math.min(maxCamX, this.hero.x + lookAhead + scoutOffset + rightPeekX - viewW * 0.44),
     );
     this.cameraX += (targetCamX - this.cameraX) * Math.min(1, simDt * 8.5);
 
-    const maxCamY = Math.max(0, this.worldH - GAME_H);
-    const targetCamY = Math.max(0, Math.min(maxCamY, this.input.rightAxisY() * 28));
+    const maxCamY = Math.max(0, this.worldH - viewH);
+    const desiredCamY = maxCamY > 0
+      ? this.hero.y - viewH * 0.52 + this.input.rightAxisY() * 28
+      : this.input.rightAxisY() * 28;
+    const targetCamY = Math.max(0, Math.min(maxCamY, desiredCamY));
     this.cameraY += (targetCamY - this.cameraY) * Math.min(1, simDt * 8.5);
 
     return events;
