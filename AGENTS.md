@@ -1,7 +1,7 @@
 # Pixer (Pixel Atelier) — Agent Engineering Rules & File Map
 
 ## 1. Project Identity (One Core, Two Future Editions)
-- **Core (`src/core/`, `src/assets/`)**: Lightweight, zero-GC, multi-backend (WebGPU / WebGL2 / Canvas 2D) 2D/2.5D fantasy console engine with deterministic simulation, `512×512` TextureAtlas, and Web Audio synthesizer.
+- **Core (`src/core/`, `src/assets/`)**: Lightweight, zero-GC, multi-backend (WebGPU / WebGL2 / Canvas 2D) 2D/2.5D fantasy console engine with deterministic simulation, `1024×1024` TextureAtlas, and Web Audio synthesizer.
 - **Arcade Edition (Current Focus)**: Tactile Switch-inspired creative handheld (`PA-01`–`PA-05`), shaders/HD-2D effects, Studio editors, PWA, and Capacitor native iOS/Android app.
 - **Edu Edition (Future Phase)**: Scratch-parallel white-box AI cartridge player & embeddable widget (transparent editable blocks/sprites, buggy-cartridge debugging, PNG homework).
 - Read [`docs/ROADMAP.md`](docs/ROADMAP.md) **ONLY** when planning or executing a milestone.
@@ -17,11 +17,11 @@
 
 ### `src/core/` — Pure Engine Core (MUST stay DOM-free except `gpu/`, never import `ui/` or `game/`)
 - `src/core/gpu/` — Multi-backend instanced 2D/2.5D renderer:
-  - `GpuEngine.ts` (16-float instance packing, `alphaItems`/`addItems` Float32Array batches, auto fallback)
+  - `GpuEngine.ts` (20-float instance packing, `alphaItems`/`addItems` Float32Array batches, auto fallback)
   - `WebGpuBackend.ts` & `WebGpuShaders.ts` (WGSL)
   - `WebGl2Backend.ts` & `WebGl2Shaders.ts` (GLSL ES 3.00)
   - `Canvas2DBackend.ts` (software fallback)
-  - `GpuTypes.ts` (`GAME_W=320`, `GAME_H=180`, `FLOATS_PER_INSTANCE=16`, `MAX_INSTANCES_PER_PASS`, `RenderPerformanceProfile`)
+  - `GpuTypes.ts` (`LogicalViewport`, `GAME_W=320`, `GAME_H=180`, `FLOATS_PER_INSTANCE=20`, `MAX_INSTANCES_PER_PASS=16384`, `RenderPerformanceProfile`)
 - `src/core/runtime/` — Engine orchestration, lifecycle & persistence:
   - `EngineHost.ts` — **Sole facade** for UI views (`loadCartridge`, `mount`, `getSnapshot`; never access `.runner` from `src/ui/`).
   - `CartridgeRunner.ts` — Fixed-timestep (`STEP_DT = 1/60`) simulation loop, cartridge switching, SRAM serialize/hydrate, 1,150+ sprite benchmark.
@@ -43,7 +43,7 @@
 - `src/core/types/` — Shared contracts (`WorldTypes.ts`, `CartridgeTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `SceneTypes.ts`).
 
 ### `src/assets/` — Procedural Sprites, Atlas & Audio Data (DOM-free, never import `ui/` or `game/`)
-- `TextureAtlas.ts` — `512×512` RGBA atlas with `>=128px` dynamic sprite region & hot-reload dirty tracking.
+- `TextureAtlas.ts` — `1024×1024` RGBA atlas with `>=128px` dynamic sprite region & hot-reload dirty tracking.
 - `AtlasSpritesData.ts`, `src/assets/sprites/*`, `AudioPatterns.ts`, `WorkshopRecipes.ts`.
 
 ### `src/game/` — Playable Cartridges (DOM-free, never import `ui/`)

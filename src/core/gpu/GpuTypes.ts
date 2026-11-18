@@ -4,7 +4,7 @@ export const OVERSCAN_PAD = 1;
 export const OVERSCAN_W = GAME_W + OVERSCAN_PAD * 2;
 export const OVERSCAN_H = GAME_H + OVERSCAN_PAD * 2;
 export const FLOATS_PER_INSTANCE = 20;
-export const MAX_INSTANCES_PER_PASS = 8192;
+export const MAX_INSTANCES_PER_PASS = 16384;
 
 export interface LogicalViewport {
   width: number;

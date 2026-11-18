@@ -7,6 +7,7 @@ import type { ShmupFighterSummary } from '../types/HudTypes.ts';
 import {
   clamp,
   type BgCloudDesc,
+  type BgParallaxLayerDesc,
   type BgStarDesc,
   type ComboTrackingCartridge,
   type DebuggableCartridge,
@@ -18,6 +19,7 @@ import {
   type RenderSceneSnapshot,
   type RuntimeParams,
   type SimEvent,
+  type StageProgressInfo,
   type TileDesc,
 } from '../types/WorldTypes.ts';
 import {
@@ -25,6 +27,7 @@ import {
   type CartridgeArchetypeDef,
   type CartridgeJsonV1,
   type CartridgeTag,
+  type CartridgeTileChunkDef,
 } from './CartridgeSchema.ts';
 import {
   applyShmupLoadout,
@@ -74,7 +77,16 @@ import {
   MAX_ENTITIES,
   SoaEntityPool,
 } from './SoaEntityPool.ts';
-import { COLLISION_CLOUD, COLLISION_SOLID, TILE_SIZE, TilemapGrid, type TileAabbStepResult } from './TilemapGrid.ts';
+import {
+  CHUNK_SHIFT,
+  CHUNK_SIZE,
+  COLLISION_CLOUD,
+  COLLISION_EMPTY,
+  COLLISION_SOLID,
+  TILE_SIZE,
+  TilemapGrid,
+  type TileAabbStepResult,
+} from './TilemapGrid.ts';
 
 interface RuntimeArchetype {
   id: string;
@@ -83,6 +95,126 @@ interface RuntimeArchetype {
   behaviorMask: number;
   scoreValue: number;
   dropKind?: string;
+}
+
+interface RuntimeSnapshotBank {
+  snapshot: RenderSceneSnapshot;
+  stageInfo: StageProgressInfo;
+  viewport: { width: number; height: number };
+  tileSlots: TileDesc[];
+  fgTileSlots: TileDesc[];
+  entitySlots: EntityDesc[];
+  lightSlots: LightDesc[];
+  debugRectSlots: DebugRectDesc[];
+  tiles: TileDesc[];
+  fgTiles: TileDesc[];
+  entities: EntityDesc[];
+  particles: ParticleDesc[];
+  lights: LightDesc[];
+  debugRects: DebugRectDesc[];
+}
+
+function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): RuntimeSnapshotBank {
+  const viewport = { width: vp.width, height: vp.height };
+  const stageInfo: StageProgressInfo = { index: 1, total: 1, name: '' };
+  const tiles: TileDesc[] = [];
+  const fgTiles: TileDesc[] = [];
+  const entities: EntityDesc[] = [];
+  const particles: ParticleDesc[] = [];
+  const lights: LightDesc[] = [];
+  const debugRects: DebugRectDesc[] = [];
+  return {
+    viewport,
+    stageInfo,
+    tileSlots: [],
+    fgTileSlots: [],
+    entitySlots: [],
+    lightSlots: [],
+    debugRectSlots: [],
+    tiles,
+    fgTiles,
+    entities,
+    particles,
+    lights,
+    debugRects,
+    snapshot: {
+      cartridgeId,
+      skyTop: '#76c7ff',
+      skyBottom: '#fff3df',
+      cozyFilter: true,
+      glowIntensity: 1,
+      paletteRow: 0,
+      timeSec: 0,
+      elapsedSec: 0,
+      status: 'playing',
+      score: 0,
+      comboCount: 0,
+      starsCollected: 0,
+      starsTotal: 0,
+      hasKey: false,
+      hearts: 3,
+      maxHearts: 3,
+      bossHp: 0,
+      bossMaxHp: 0,
+      cameraX: 0,
+      cameraY: 0,
+      cameraZoom: 1,
+      viewport,
+      ambientDarkness: 0,
+      ambientColor: '#120e24',
+      screenFlashAlpha: 0,
+      screenFlashColor: '#fffaf0',
+      bgStars: [],
+      bgParallaxLayers: undefined,
+      bgClouds: [],
+      tiles,
+      fgTiles: undefined,
+      entities,
+      particles,
+      lights,
+      debugRects: undefined,
+      statusBanner: '',
+      stage: stageInfo,
+      bgmTheme: undefined,
+      shmupHud: undefined,
+    },
+  };
+}
+
+function acquireTileSlot(pool: TileDesc[], idx: number): TileDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { sprite: 'stone', x: 0, y: 0, w: TILE_SIZE, h: TILE_SIZE };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireEntitySlot(pool: EntityDesc[], idx: number): EntityDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { id: '', sprite: 'star_a', x: 0, y: 0, w: TILE_SIZE, h: TILE_SIZE };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireLightSlot(pool: LightDesc[], idx: number): LightDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { x: 0, y: 0, radius: 24, color: '#ffd447', intensity: 0.4 };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireDebugRectSlot(pool: DebugRectDesc[], idx: number): DebugRectDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { x: 0, y: 0, w: TILE_SIZE, h: TILE_SIZE, color: '#56d39c' };
+    pool[idx] = slot;
+  }
+  return slot;
 }
 
 const STARFIELD_PALETTE = ['#fffaf0', '#ffd447', '#5ec2f7', '#ff8ec6', '#e0aaff'] as const;
@@ -132,7 +264,15 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   public readonly archetypeMetaByIdx: { id: string; scoreValue: number; dropKind?: string }[] = [];
 
   private tilemap = new TilemapGrid(46, 12);
-  private staticTiles: TileDesc[] = [];
+  private fgTilemap = new TilemapGrid(46, 12);
+  private hasFgTilemapTiles = false;
+  private readonly tileSpriteLut: (SpriteId | undefined)[] = [];
+  private readonly fgSpriteLut: (SpriteId | undefined)[] = [];
+  private readonly fgAlphaLut = new Float32Array(256).fill(1);
+  private readonly fgExtraTiles: TileDesc[] = [];
+  private readonly bgParallaxLayers: BgParallaxLayerDesc[] = [];
+  private stageWorldW = GAME_W;
+  private stageWorldH = GAME_H;
   private bgClouds: BgCloudDesc[] = [];
   private bgStars: BgStarDesc[] = [];
 
@@ -178,17 +318,17 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   // Shmup state
   public readonly shmup: RuntimeShmupState;
 
-  // Pre-allocated snapshot & VM buffers (Zero-GC)
+  // Pre-allocated snapshot, spatial query & VM buffers (Zero-GC)
   private readonly eventsOut: SimEvent[] = [];
+  private readonly platformerQuerySlots = new Int32Array(MAX_ENTITIES);
+  private readonly entityIdCache: string[] = new Array<string>(MAX_ENTITIES);
+  private readonly entityIdArchIdx = new Int16Array(MAX_ENTITIES).fill(-2);
+  private snapshotBankIdx: 0 | 1 = 0;
+  private readonly snapshotBanks: [RuntimeSnapshotBank, RuntimeSnapshotBank];
   private readonly vmCollisions: VmCollisionPair[] = Array.from({ length: MAX_VM_COLLISION_PAIRS }, () => ({
     selfSlot: -1, otherSlot: -1, selfTag: '', otherTag: '',
   }));
   private vmCollisionCount = 0;
-  private readonly outTiles: TileDesc[] = [];
-  private readonly outEntities: EntityDesc[] = [];
-  private readonly outParticles: ParticleDesc[] = [];
-  private readonly outLights: LightDesc[] = [];
-  private readonly outDebugRects: DebugRectDesc[] = [];
 
   private readonly vmHost: VmHostBridge = {
     isButton: (b: VmButtonId, edge: VmButtonEdge) =>
@@ -263,6 +403,11 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       throw new Error(`Invalid Cartridge JSON: ${validated.errors.join('; ')}`);
     }
     this.def = validated.data;
+    this.stageViewport = resolveLogicalViewport(this.def.meta.viewport);
+    this.snapshotBanks = [
+      createRuntimeBank(this.def.meta.id, this.stageViewport),
+      createRuntimeBank(this.def.meta.id, this.stageViewport),
+    ];
     this.maxHearts = this.def.player.maxHearts;
     this.hearts = this.maxHearts;
 
@@ -409,6 +554,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const st = this.def.stages[this.stageIdx];
     this.stageViewport = resolveLogicalViewport(st.viewport ?? this.def.meta.viewport);
     const worldH = st.worldHeight ?? this.stageViewport.height;
+    this.stageWorldW = st.worldWidth;
+    this.stageWorldH = worldH;
 
     this.pool.reset();
     this.lastHitGroupByTarget.fill(0);
@@ -434,55 +581,184 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const cols = Math.ceil(st.worldWidth / TILE_SIZE);
     const rows = Math.ceil(worldH / TILE_SIZE);
     this.tilemap = new TilemapGrid(cols, rows);
-    this.staticTiles = [];
+    this.fgTilemap = new TilemapGrid(cols, rows);
+    this.hasFgTilemapTiles = false;
+    this.fgExtraTiles.length = 0;
+    this.bgParallaxLayers.length = 0;
+
+    this.tileSpriteLut.length = 0;
+    this.fgSpriteLut.length = 0;
+    this.fgAlphaLut.fill(1);
+    this.tileSpriteLut[1] = st.groundTop ?? 'grass';
+    this.tileSpriteLut[2] = st.groundFill ?? 'dirt';
+    this.tileSpriteLut[3] = 'cloud_l';
+    this.tileSpriteLut[4] = 'cloud_m';
+    this.tileSpriteLut[5] = 'cloud_r';
+    this.tileSpriteLut[6] = 'stone';
+    this.fgSpriteLut[1] = 'tree_canopy';
+    this.fgSpriteLut[2] = 'stone';
+    this.fgSpriteLut[3] = 'cloud_m';
+
+    if (st.tileGrid?.spriteMap) {
+      for (const [k, sp] of Object.entries(st.tileGrid.spriteMap)) {
+        const id = Number(k);
+        if (Number.isInteger(id) && id > 0) {
+          this.tileSpriteLut[id] = sp;
+          this.fgSpriteLut[id] = sp;
+        }
+      }
+    }
+
+    if (st.tileChunks) {
+      for (let ci = 0; ci < st.tileChunks.length; ci++) {
+        const ch: CartridgeTileChunkDef = st.tileChunks[ci];
+        const sm = ch.spriteMap;
+        if (sm) {
+          for (const k of Object.keys(sm)) {
+            const sp = sm[k];
+            const id = Number(k);
+            if (Number.isInteger(id) && id > 0) {
+              this.tileSpriteLut[id] = sp;
+              this.fgSpriteLut[id] = sp;
+            }
+          }
+        }
+        const baseCol = ch.cx * CHUNK_SIZE;
+        const baseRow = ch.cy * CHUNK_SIZE;
+        for (let lr = 0; lr < CHUNK_SIZE; lr++) {
+          const r = baseRow + lr;
+          if (r >= rows) break;
+          const rowOff = lr * CHUNK_SIZE;
+          for (let lc = 0; lc < CHUNK_SIZE; lc++) {
+            const c = baseCol + lc;
+            if (c >= cols) break;
+            const i = rowOff + lc;
+            const tid = ch.tiles[i];
+            const colKind = ch.collision[i];
+            if (tid !== 0 || colKind !== 0) {
+              this.tilemap.setTile(c, r, tid, colKind, false);
+            }
+            if (ch.fgTiles) {
+              const ftid = ch.fgTiles[i];
+              if (ftid !== 0) {
+                this.fgTilemap.setTile(c, r, ftid, COLLISION_EMPTY, false);
+                this.hasFgTilemapTiles = true;
+              }
+            }
+          }
+        }
+      }
+    }
 
     if (st.tileGrid) {
       for (let r = 0; r < st.tileGrid.rows && r < rows; r++) {
         for (let c = 0; c < st.tileGrid.cols && c < cols; c++) {
           const i = r * st.tileGrid.cols + c;
-          this.tilemap.setTile(c, r, st.tileGrid.tiles[i], st.tileGrid.collision[i], false);
+          const tid = st.tileGrid.tiles[i];
+          const colKind = st.tileGrid.collision[i];
+          if (tid !== 0 || colKind !== 0) {
+            this.tilemap.setTile(c, r, tid, colKind, false);
+          }
+          if (st.tileGrid.fgTiles) {
+            const ftid = st.tileGrid.fgTiles[i];
+            if (ftid !== 0) {
+              this.fgTilemap.setTile(c, r, ftid, COLLISION_EMPTY, false);
+              this.hasFgTilemapTiles = true;
+            }
+          }
         }
       }
-      this.tilemap.recomputeAutoMask();
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const tid = this.tilemap.getTile(c, r);
-          if (tid === 0) continue;
-          const sprite = st.tileGrid.spriteMap[String(tid)] ?? 'stone';
-          this.staticTiles.push({ sprite, x: c * TILE_SIZE, y: r * TILE_SIZE, w: TILE_SIZE, h: TILE_SIZE });
-        }
-      }
-    } else {
-      const topSprite = st.groundTop ?? 'grass';
-      const fillSprite = st.groundFill ?? 'dirt';
+    } else if (!st.tileChunks) {
       for (const isl of st.islands ?? []) {
         const topRow = clamp(Math.round(isl.topY / TILE_SIZE), 0, rows - 1);
-        const topPx = topRow * TILE_SIZE;
-        for (let c = isl.startTile; c < isl.startTile + isl.countTiles; c++) {
+        const endC = Math.min(cols, isl.startTile + isl.countTiles);
+        for (let c = Math.max(0, isl.startTile); c < endC; c++) {
           this.tilemap.setTile(c, topRow, 1, COLLISION_SOLID, false);
-          this.staticTiles.push({ sprite: topSprite, x: c * TILE_SIZE, y: topPx, w: TILE_SIZE, h: TILE_SIZE });
           for (let row = topRow + 1; row < rows; row++) {
-            const y = row * TILE_SIZE;
-            if (y >= worldH) break;
+            if (row * TILE_SIZE >= worldH) break;
             this.tilemap.setTile(c, row, 2, COLLISION_SOLID, false);
-            this.staticTiles.push({
-              sprite: fillSprite, x: c * TILE_SIZE, y, w: TILE_SIZE, h: Math.min(TILE_SIZE, worldH - y),
-            });
           }
         }
       }
       for (const cl of st.clouds ?? []) {
         const row = clamp(Math.round(cl.y / TILE_SIZE), 0, rows - 1);
         const startC = Math.round(cl.x / TILE_SIZE);
-        const cloudY = row * TILE_SIZE;
-        const cloudX = startC * TILE_SIZE;
         for (let i = 0; i < cl.tilesWide; i++) {
-          this.tilemap.setTile(startC + i, row, 3, COLLISION_CLOUD, false);
-          const sp: SpriteId = i === 0 ? 'cloud_l' : i === cl.tilesWide - 1 ? 'cloud_r' : 'cloud_m';
-          this.staticTiles.push({ sprite: sp, x: cloudX + i * TILE_SIZE, y: cloudY, w: TILE_SIZE, h: TILE_SIZE });
+          const tid = i === 0 ? 3 : i === cl.tilesWide - 1 ? 5 : 4;
+          this.tilemap.setTile(startC + i, row, tid, COLLISION_CLOUD, false);
         }
       }
-      this.tilemap.recomputeAutoMask();
+    }
+
+    for (const fg of st.fgIslands ?? []) {
+      const sprite: SpriteId = fg.sprite ?? 'tree_canopy';
+      const alpha = fg.alpha ?? 1;
+      let fgId = -1;
+      for (let id = 1; id < 256; id++) {
+        if (this.fgSpriteLut[id] === sprite && Math.abs(this.fgAlphaLut[id] - alpha) < 1e-4) {
+          fgId = id;
+          break;
+        }
+      }
+      if (fgId < 0) {
+        for (let id = 4; id < 256; id++) {
+          if (this.fgSpriteLut[id] === undefined) {
+            this.fgSpriteLut[id] = sprite;
+            this.fgAlphaLut[id] = alpha;
+            fgId = id;
+            break;
+          }
+        }
+      }
+      const topRow = clamp(Math.round(fg.topY / TILE_SIZE), 0, rows - 1);
+      const spanRows = clamp(Math.round(fg.rows ?? 1), 1, rows - topRow);
+      const c0 = Math.max(0, fg.startTile);
+      const c1 = Math.min(cols - 1, fg.startTile + fg.countTiles - 1);
+      if (fgId > 0) {
+        for (let r = topRow; r < topRow + spanRows; r++) {
+          for (let c = c0; c <= c1; c++) {
+            this.fgTilemap.setTile(c, r, fgId, COLLISION_EMPTY, false);
+            this.hasFgTilemapTiles = true;
+          }
+        }
+      } else {
+        for (let r = topRow; r < topRow + spanRows; r++) {
+          for (let c = c0; c <= c1; c++) {
+            this.fgExtraTiles.push({
+              sprite,
+              x: c * TILE_SIZE,
+              y: r * TILE_SIZE,
+              w: TILE_SIZE,
+              h: TILE_SIZE,
+              alpha,
+            });
+          }
+        }
+      }
+    }
+
+    for (const ft of st.fgTiles ?? []) {
+      this.fgExtraTiles.push({
+        sprite: ft.sprite,
+        x: ft.x,
+        y: ft.y,
+        w: ft.w ?? TILE_SIZE,
+        h: ft.h ?? TILE_SIZE,
+        tint: ft.tint,
+        alpha: ft.alpha,
+        flipX: ft.flipX,
+        elevationZ: ft.elevationZ,
+        sortY: ft.sortY,
+      });
+    }
+
+    for (const ly of st.bgParallaxLayers ?? []) {
+      this.bgParallaxLayers.push({ ...ly });
+    }
+
+    this.tilemap.recomputeAutoMask();
+    if (this.hasFgTilemapTiles) {
+      this.fgTilemap.recomputeAutoMask();
     }
 
     for (const mp of st.movingPlatforms ?? []) {
@@ -501,6 +777,11 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.spawnPlayerAt(st.spawn.x, st.spawn.y);
     this.checkpointX = st.spawn.x;
     this.checkpointY = st.spawn.y;
+
+    const maxCamX = Math.max(0, st.worldWidth - this.stageViewport.width);
+    const maxCamY = Math.max(0, worldH - this.stageViewport.height);
+    this.cameraX = clamp(st.spawn.x - this.stageViewport.width * 0.42, 0, maxCamX);
+    this.cameraY = clamp(st.spawn.y - this.stageViewport.height * 0.55, 0, maxCamY);
 
     for (const sp of st.spawns ?? []) {
       const s = this.spawnArchetype(sp.archetype, sp.x, sp.y, sp.vx ?? 0, sp.vy ?? 0);
@@ -668,7 +949,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     for (let i = 0; i < this.bgClouds.length; i++) {
       const c = this.bgClouds[i];
       c.x -= c.speed * dt;
-      if (c.x < -48) c.x += Math.max(GAME_W, this.def.stages[this.stageIdx].worldWidth) + 64;
+      if (c.x < -48) c.x += Math.max(GAME_W, this.stageWorldW) + 64;
     }
 
     // Decay visual flash timers across active entities
@@ -711,8 +992,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private stepPlatformer(dt: number, params: RuntimeParams): void {
     const p = this.playerSlot;
     const pool = this.pool;
-    const st = this.def.stages[this.stageIdx];
-    const worldH = st.worldHeight ?? GAME_H;
+    const worldH = this.stageWorldH;
 
     if (this.invulnTimer > 0) this.invulnTimer = Math.max(0, this.invulnTimer - dt);
     if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - dt);
@@ -866,11 +1146,24 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       this.invulnTimer = 1.25;
     }
 
-    // 4. Entity Interactions & VM collision recording
+    // 4. SpatialHash broad-phase O(1) Entity Interactions & VM collision recording
+    pool.rebuildSpatialHash();
     const hcx = pool.x[p] + 8;
     const hcy = pool.y[p] + 8;
-    for (let i = pool.activeCount - 1; i >= 0; i--) {
-      const s = pool.activeIndices[i];
+    const candCount = pool.queryRect(hcx - 76, hcy - 76, hcx + 76, hcy + 76, this.platformerQuerySlots);
+    for (let i = 1; i < candCount; i++) {
+      const key = this.platformerQuerySlots[i];
+      const keyPos = pool.getActivePos(key);
+      let j = i - 1;
+      while (j >= 0 && pool.getActivePos(this.platformerQuerySlots[j]) < keyPos) {
+        this.platformerQuerySlots[j + 1] = this.platformerQuerySlots[j];
+        j--;
+      }
+      this.platformerQuerySlots[j + 1] = key;
+    }
+
+    for (let i = 0; i < candCount; i++) {
+      const s = this.platformerQuerySlots[i];
       if (s === p || (pool.flags[s] & EF_ALIVE) === 0) continue;
       const archIdx = pool.archetypeIdx[s];
       const meta = archIdx >= 0 ? this.archetypeMetaByIdx[archIdx] : undefined;
@@ -968,9 +1261,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const zoom = Math.max(0.5, this.cameraZoom);
     const viewW = this.stageViewport.width / zoom;
     const viewH = this.stageViewport.height / zoom;
-    const stageWorldH = st.worldHeight ?? this.stageViewport.height;
-    const maxCamX = Math.max(0, st.worldWidth - viewW);
-    const maxCamY = Math.max(0, stageWorldH - viewH);
+    const maxCamX = Math.max(0, this.stageWorldW - viewW);
+    const maxCamY = Math.max(0, this.stageWorldH - viewH);
     const desiredCamX = clamp(pool.x[p] - viewW * 0.42, 0, maxCamX);
     const desiredCamY = clamp(pool.y[p] - viewH * 0.55, 0, maxCamY);
     const camAlpha = Math.min(1, dt * 8);
@@ -1040,44 +1332,196 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     return true;
   }
 
+  private getEntityId(slot: number, archIdx: number): string {
+    if (this.entityIdArchIdx[slot] === archIdx) {
+      return this.entityIdCache[slot];
+    }
+    const prefix = archIdx >= 0 ? (this.archetypeMetaByIdx[archIdx]?.id ?? 'e') : 'e';
+    const id = `${prefix}-${slot}`;
+    this.entityIdArchIdx[slot] = archIdx;
+    this.entityIdCache[slot] = id;
+    return id;
+  }
+
   public snapshot(params: RuntimeParams, alpha = 1): RenderSceneSnapshot {
+    const bankIdx = this.snapshotBankIdx;
+    this.snapshotBankIdx = bankIdx === 0 ? 1 : 0;
+    const bank = this.snapshotBanks[bankIdx];
+
+    const outTiles = bank.tiles;
+    const outFgTiles = bank.fgTiles;
+    const outEntities = bank.entities;
+    const outLights = bank.lights;
+    outTiles.length = 0;
+    outFgTiles.length = 0;
+    outEntities.length = 0;
+    outLights.length = 0;
+
     const st = this.def.stages[this.stageIdx];
     const t = this.juice.visualTime;
     const glow = params.glowIntensity;
     const isShmup = this.def.player.controller === 'shmup';
     const loadout = isShmup ? getActiveLoadout(this.def, this.shmup.fighterId) : undefined;
+    const camZoom = isShmup ? 1.0 : this.cameraZoom;
+    const camX = this.cameraX + this.juice.shakeX + this.juice.kickX;
+    const camY = this.cameraY + this.juice.shakeY + this.juice.kickY;
+    const safeZoom = Math.max(0.5, camZoom);
+    const viewW = this.stageViewport.width / safeZoom;
+    const viewH = this.stageViewport.height / safeZoom;
+    const margin = 96 / safeZoom;
+    const visMinX = camX - margin;
+    const visMinY = camY - margin;
+    const visMaxX = camX + viewW + margin;
+    const visMaxY = camY + viewH + margin;
 
-    this.outTiles.length = 0;
-    for (let i = 0; i < this.staticTiles.length; i++) this.outTiles.push(this.staticTiles[i]);
+    let tileSlotCount = 0;
+    const midChunks = this.tilemap.updateActiveChunks(visMinX, visMinY, visMaxX, visMaxY, 0);
+    for (let ci = 0; ci < midChunks; ci++) {
+      const slot = this.tilemap.activeChunkIds[ci];
+      const baseCol = this.tilemap.activeChunkCols[ci] << CHUNK_SHIFT;
+      const baseRow = this.tilemap.activeChunkRows[ci] << CHUNK_SHIFT;
+      const baseSlab = slot << 8;
+      for (let lr = 0; lr < CHUNK_SIZE; lr++) {
+        const y = (baseRow + lr) * TILE_SIZE;
+        if (y + TILE_SIZE < visMinY || y > visMaxY) continue;
+        const h = Math.min(TILE_SIZE, Math.max(1, this.stageWorldH - y));
+        const rowSlab = baseSlab | (lr << CHUNK_SHIFT);
+        for (let lc = 0; lc < CHUNK_SIZE; lc++) {
+          const tid = this.tilemap.tilesSlab[rowSlab | lc];
+          if (tid === 0) continue;
+          const x = (baseCol + lc) * TILE_SIZE;
+          if (x + TILE_SIZE < visMinX || x > visMaxX) continue;
+          const dst = acquireTileSlot(bank.tileSlots, tileSlotCount++);
+          dst.sprite = this.tileSpriteLut[tid] ?? 'stone';
+          dst.x = x;
+          dst.y = y;
+          dst.w = TILE_SIZE;
+          dst.h = h;
+          dst.tint = undefined;
+          dst.unlockable = undefined;
+          dst.extrudeH = undefined;
+          dst.extrudeAtY = undefined;
+          dst.wallColor = undefined;
+          dst.wallMaterial = undefined;
+          dst.elevationZ = undefined;
+          dst.sortY = undefined;
+          dst.castShadow = undefined;
+          dst.alpha = undefined;
+          dst.flipX = undefined;
+          outTiles.push(dst);
+        }
+      }
+    }
 
-    this.outEntities.length = 0;
-    this.outLights.length = 0;
-    this.outDebugRects.length = 0;
+    let fgSlotCount = 0;
+    if (this.hasFgTilemapTiles) {
+      const fgChunks = this.fgTilemap.updateActiveChunks(visMinX, visMinY, visMaxX, visMaxY, 0);
+      for (let ci = 0; ci < fgChunks; ci++) {
+        const slot = this.fgTilemap.activeChunkIds[ci];
+        const baseCol = this.fgTilemap.activeChunkCols[ci] << CHUNK_SHIFT;
+        const baseRow = this.fgTilemap.activeChunkRows[ci] << CHUNK_SHIFT;
+        const baseSlab = slot << 8;
+        for (let lr = 0; lr < CHUNK_SIZE; lr++) {
+          const y = (baseRow + lr) * TILE_SIZE;
+          if (y + TILE_SIZE < visMinY || y > visMaxY) continue;
+          const h = Math.min(TILE_SIZE, Math.max(1, this.stageWorldH - y));
+          const rowSlab = baseSlab | (lr << CHUNK_SHIFT);
+          for (let lc = 0; lc < CHUNK_SIZE; lc++) {
+            const ftid = this.fgTilemap.tilesSlab[rowSlab | lc];
+            if (ftid === 0) continue;
+            const x = (baseCol + lc) * TILE_SIZE;
+            if (x + TILE_SIZE < visMinX || x > visMaxX) continue;
+            const dst = acquireTileSlot(bank.fgTileSlots, fgSlotCount++);
+            dst.sprite = this.fgSpriteLut[ftid] ?? 'tree_canopy';
+            dst.x = x;
+            dst.y = y;
+            dst.w = TILE_SIZE;
+            dst.h = h;
+            dst.tint = undefined;
+            dst.unlockable = undefined;
+            dst.extrudeH = undefined;
+            dst.extrudeAtY = undefined;
+            dst.wallColor = undefined;
+            dst.wallMaterial = undefined;
+            dst.elevationZ = undefined;
+            dst.sortY = undefined;
+            dst.castShadow = false;
+            dst.alpha = this.fgAlphaLut[ftid];
+            dst.flipX = undefined;
+            outFgTiles.push(dst);
+          }
+        }
+      }
+    }
+    for (let i = 0; i < this.fgExtraTiles.length; i++) {
+      const ft = this.fgExtraTiles[i];
+      if (ft.x + ft.w < visMinX || ft.x > visMaxX || ft.y + ft.h < visMinY || ft.y > visMaxY) continue;
+      const dst = acquireTileSlot(bank.fgTileSlots, fgSlotCount++);
+      dst.sprite = ft.sprite;
+      dst.x = ft.x;
+      dst.y = ft.y;
+      dst.w = ft.w;
+      dst.h = ft.h;
+      dst.tint = ft.tint;
+      dst.unlockable = undefined;
+      dst.extrudeH = undefined;
+      dst.extrudeAtY = undefined;
+      dst.wallColor = undefined;
+      dst.wallMaterial = undefined;
+      dst.elevationZ = ft.elevationZ;
+      dst.sortY = ft.sortY;
+      dst.castShadow = false;
+      dst.alpha = ft.alpha;
+      dst.flipX = ft.flipX;
+      outFgTiles.push(dst);
+    }
 
     let bossHp = 0;
     let bossMaxHp = 0;
+    let entSlotCount = 0;
+    let lightSlotCount = 0;
+
     for (let i = 0; i < this.pool.activeCount; i++) {
       const s = this.pool.activeIndices[i];
-      if ((this.pool.flags[s] & EF_ALIVE) === 0) continue;
-      const rx = this.pool.renderX(s, alpha);
-      const ry = this.pool.renderY(s, alpha);
-      const rrot = this.pool.renderRot(s, alpha);
       const f = this.pool.flags[s];
+      if ((f & EF_ALIVE) === 0) continue;
 
       if ((f & EF_BOSS) !== 0) {
         bossHp = Math.max(0, this.pool.hp[s]);
         bossMaxHp = this.pool.maxHp[s];
       }
 
+      const rx = this.pool.renderX(s, alpha);
+      const ry = this.pool.renderY(s, alpha);
+      const ew = this.pool.w[s];
+      const eh = this.pool.h[s];
+
       if ((this.pool.behaviorMask[s] & BM_MOVING_PLATFORM) !== 0) {
-        for (let tx = 0; tx < this.pool.w[s]; tx += TILE_SIZE) {
-          this.outTiles.push({
-            sprite: 'moving_plat', x: rx + tx, y: ry, w: Math.min(TILE_SIZE, this.pool.w[s] - tx), h: 16,
-            extrudeH: 3, extrudeAtY: ry + 6, wallColor: '#344c66', wallMaterial: 'timber',
-          });
+        if (rx + ew < visMinX || rx > visMaxX || ry + 20 < visMinY || ry > visMaxY) continue;
+        for (let tx = 0; tx < ew; tx += TILE_SIZE) {
+          const dst = acquireTileSlot(bank.tileSlots, tileSlotCount++);
+          dst.sprite = 'moving_plat';
+          dst.x = rx + tx;
+          dst.y = ry;
+          dst.w = Math.min(TILE_SIZE, ew - tx);
+          dst.h = 16;
+          dst.tint = undefined;
+          dst.unlockable = undefined;
+          dst.extrudeH = 3;
+          dst.extrudeAtY = ry + 6;
+          dst.wallColor = '#344c66';
+          dst.wallMaterial = 'timber';
+          dst.elevationZ = undefined;
+          dst.sortY = undefined;
+          dst.castShadow = undefined;
+          dst.alpha = undefined;
+          dst.flipX = undefined;
+          outTiles.push(dst);
         }
         continue;
       }
+
+      const rrot = this.pool.renderRot(s, alpha);
 
       if (s === this.playerSlot) {
         const inv = isShmup ? this.shmup.invulnTimer : this.invulnTimer;
@@ -1092,87 +1536,149 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
           sprite = moving && Math.floor(this.walkAnim) % 2 === 1 ? this.def.player.spriteB : this.def.player.sprite;
         }
 
-        this.outEntities.push({
-          id: isShmup ? 'ship' : 'hero',
-          sprite,
-          x: rx,
-          y: ry,
-          w: this.pool.w[s],
-          h: this.pool.h[s],
-          scaleX: this.pool.sx[s],
-          scaleY: this.pool.sy[s],
-          anchorY: isShmup ? 0.5 : 1,
-          skewX: this.pool.skewX[s],
-          rot: rrot,
-          flash: Math.min(1, this.pool.flash[s]),
-          flipX: (f & EF_FLIP_X) !== 0,
-          castShadow: !isShmup,
-          shadowRadius: 6,
-        });
+        const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+        dst.id = isShmup ? 'ship' : 'hero';
+        dst.sprite = sprite;
+        dst.x = rx;
+        dst.y = ry;
+        dst.w = ew;
+        dst.h = eh;
+        dst.scaleX = this.pool.sx[s];
+        dst.scaleY = this.pool.sy[s];
+        dst.anchorY = isShmup ? 0.5 : 1;
+        dst.skewX = this.pool.skewX[s];
+        dst.rot = rrot;
+        dst.flash = Math.min(1, this.pool.flash[s]);
+        dst.flipX = (f & EF_FLIP_X) !== 0;
+        dst.additive = undefined;
+        dst.emissive = undefined;
+        dst.tint = undefined;
+        dst.alpha = undefined;
+        dst.paletteRow = this.pool.paletteRow[s] || undefined;
+        dst.elevationZ = undefined;
+        dst.shadowOffsetY = undefined;
+        dst.castShadow = !isShmup;
+        dst.shadowRadius = 6;
+        dst.sortY = undefined;
+        outEntities.push(dst);
+
         if (glow > 0.05) {
-          this.outLights.push({
-            x: rx + 8, y: ry + 8, radius: isShmup ? 32 : 36, color: loadout?.accentHex ?? '#fff3d0', intensity: 0.35 * glow,
-          });
+          const l = acquireLightSlot(bank.lightSlots, lightSlotCount++);
+          l.x = rx + 8;
+          l.y = ry + 8;
+          l.radius = isShmup ? 32 : 36;
+          l.color = loadout?.accentHex ?? '#fff3d0';
+          l.intensity = 0.35 * glow;
+          l.falloffPower = undefined;
+          outLights.push(l);
         }
         continue;
       }
 
       const archIdx = this.pool.archetypeIdx[s];
       const arch = archIdx >= 0 ? this.archetypes[archIdx] : undefined;
-      let sprite: SpriteId = arch?.def.sprite ?? 'star_a';
-      if (arch?.def.spriteB && Math.floor((t * (arch.def.animFps ?? 4) + this.pool.paramA[s]) % 2) === 1) {
-        sprite = arch.def.spriteB;
-      }
-      if (arch?.id === 'checkpoint_flag' && this.pool.aiState[s] === 1) {
-        sprite = 'flag_on';
-      }
-      if (arch?.id === 'gate' && this.gateUnlocked) {
-        sprite = 'gate_open';
+      const lr = arch?.def.light ? arch.def.light.radius : 0;
+      const inLightFrustum =
+        lr > 0 && glow > 0.05 && rx + ew + lr >= visMinX && rx - lr <= visMaxX && ry + eh + lr >= visMinY && ry - lr <= visMaxY;
+      const inEntFrustum = rx + ew >= visMinX && rx <= visMaxX && ry + eh >= visMinY && ry <= visMaxY;
+      if (!inEntFrustum && !inLightFrustum) continue;
+
+      if (inEntFrustum) {
+        let sprite: SpriteId = arch?.def.sprite ?? 'star_a';
+        if (arch?.def.spriteB && Math.floor((t * (arch.def.animFps ?? 4) + this.pool.paramA[s]) % 2) === 1) {
+          sprite = arch.def.spriteB;
+        }
+        if (arch?.id === 'checkpoint_flag' && this.pool.aiState[s] === 1) {
+          sprite = 'flag_on';
+        }
+        if (arch?.id === 'gate' && this.gateUnlocked) {
+          sprite = 'gate_open';
+        }
+
+        let tint = arch?.def.tint;
+        if (arch?.id === 'cargo') {
+          const cyc = Math.floor(t / 1.1) % 4;
+          tint = cyc === 0 ? '#ff708d' : cyc === 1 ? '#5ec2f7' : cyc === 2 ? '#e0aaff' : '#ffd447';
+        } else if (isShmup && (f & EF_BOSS) !== 0 && this.pool.aiState[s] === 2) {
+          tint = Math.floor(t * 8) % 2 === 0 ? '#ff708d' : '#e0aaff';
+        }
+
+        const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+        dst.id = this.getEntityId(s, archIdx);
+        dst.sprite = sprite;
+        dst.x = rx;
+        dst.y = ry;
+        dst.w = ew;
+        dst.h = eh;
+        dst.rot = rrot;
+        dst.scaleX = this.pool.sx[s];
+        dst.scaleY = this.pool.sy[s];
+        dst.anchorY = isShmup ? 0.5 : 1;
+        dst.skewX = undefined;
+        dst.flash = Math.min(1, this.pool.flash[s] * 4);
+        dst.flipX = (f & EF_FLIP_X) !== 0;
+        dst.additive = (f & EF_ADDITIVE) !== 0;
+        dst.emissive = (f & EF_EMISSIVE) !== 0 ? (arch?.def.emissive ?? ((f & EF_PIERCING) !== 0 ? 1.1 : 0.8)) : undefined;
+        dst.tint = tint;
+        dst.alpha = undefined;
+        dst.paletteRow = this.pool.paletteRow[s] || undefined;
+        dst.elevationZ = undefined;
+        dst.shadowOffsetY = undefined;
+        dst.castShadow = arch?.def.castShadow;
+        dst.shadowRadius = ew * 0.36;
+        dst.sortY = undefined;
+        outEntities.push(dst);
       }
 
-      let tint = arch?.def.tint;
-      if (arch?.id === 'cargo') {
-        const cyc = Math.floor(t / 1.1) % 4;
-        tint = cyc === 0 ? '#ff708d' : cyc === 1 ? '#5ec2f7' : cyc === 2 ? '#e0aaff' : '#ffd447';
-      } else if (isShmup && (f & EF_BOSS) !== 0 && this.pool.aiState[s] === 2) {
-        tint = Math.floor(t * 8) % 2 === 0 ? '#ff708d' : '#e0aaff';
-      }
-
-      this.outEntities.push({
-        id: `${arch?.id ?? 'e'}-${s}`,
-        sprite,
-        x: rx,
-        y: ry,
-        w: this.pool.w[s],
-        h: this.pool.h[s],
-        rot: rrot,
-        scaleX: this.pool.sx[s],
-        scaleY: this.pool.sy[s],
-        anchorY: isShmup ? 0.5 : 1,
-        flash: Math.min(1, this.pool.flash[s] * 4),
-        flipX: (f & EF_FLIP_X) !== 0,
-        additive: (f & EF_ADDITIVE) !== 0,
-        emissive: (f & EF_EMISSIVE) !== 0 ? (arch?.def.emissive ?? ((f & EF_PIERCING) !== 0 ? 1.1 : 0.8)) : undefined,
-        tint,
-        paletteRow: this.pool.paletteRow[s] || undefined,
-        castShadow: arch?.def.castShadow,
-        shadowRadius: this.pool.w[s] * 0.36,
-      });
-
-      if (arch?.def.light && glow > 0.05) {
-        this.outLights.push({
-          x: rx + this.pool.w[s] * 0.5,
-          y: ry + this.pool.h[s] * 0.5,
-          radius: arch.def.light.radius,
-          color: arch.def.light.color,
-          intensity: arch.def.light.intensity * glow,
-        });
+      if (inLightFrustum && arch?.def.light) {
+        const l = acquireLightSlot(bank.lightSlots, lightSlotCount++);
+        l.x = rx + ew * 0.5;
+        l.y = ry + eh * 0.5;
+        l.radius = lr;
+        l.color = arch.def.light.color;
+        l.intensity = arch.def.light.intensity * glow;
+        l.falloffPower = undefined;
+        outLights.push(l);
       }
     }
 
-    this.outParticles.length = 0;
+    let debugRects: DebugRectDesc[] | undefined;
+    if (this.debugHitboxes) {
+      debugRects = bank.debugRects;
+      debugRects.length = 0;
+      let dCount = 0;
+      const c0 = Math.max(0, Math.floor(visMinX / TILE_SIZE));
+      const c1 = Math.min(this.tilemap.cols - 1, Math.floor(visMaxX / TILE_SIZE));
+      const r0 = Math.max(0, Math.floor(visMinY / TILE_SIZE));
+      const r1 = Math.min(this.tilemap.rows - 1, Math.floor(visMaxY / TILE_SIZE));
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) {
+          const colKind = this.tilemap.getCollision(c, r);
+          if (colKind === COLLISION_EMPTY) continue;
+          const dr = acquireDebugRectSlot(bank.debugRectSlots, dCount++);
+          dr.x = c * TILE_SIZE;
+          dr.y = r * TILE_SIZE;
+          dr.w = TILE_SIZE;
+          dr.h = colKind === COLLISION_CLOUD ? 10 : TILE_SIZE;
+          dr.color = colKind === COLLISION_CLOUD ? '#5ec2f7' : '#56d39c';
+          debugRects.push(dr);
+        }
+      }
+      for (let i = 0; i < outEntities.length; i++) {
+        const e = outEntities[i];
+        const dr = acquireDebugRectSlot(bank.debugRectSlots, dCount++);
+        dr.x = e.x;
+        dr.y = e.y;
+        dr.w = e.w;
+        dr.h = e.h;
+        dr.color = e.id === 'hero' || e.id === 'ship' ? '#ffd447' : '#e0aaff';
+        debugRects.push(dr);
+      }
+    }
+
+    bank.particles.length = 0;
     const jp = this.juice.particles;
-    for (let i = 0; i < jp.length; i++) this.outParticles.push(jp[i]);
+    for (let i = 0; i < jp.length; i++) bank.particles.push(jp[i]);
 
     let totalCollected = 0;
     if (!isShmup) {
@@ -1183,44 +1689,52 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       totalCollected = this.starsCollected;
     }
 
-    return {
-      cartridgeId: this.def.meta.id,
-      skyTop: st.skyTop,
-      skyBottom: st.skyBottom,
-      cozyFilter: params.cozyFilter > 0,
-      glowIntensity: glow,
-      paletteRow: st.paletteRow ?? this.def.meta.paletteRow ?? 0,
-      timeSec: t,
-      elapsedSec: this.elapsedSec,
-      status: this.status,
-      score: this.score,
-      comboCount: this.juice.comboCount,
-      starsCollected: totalCollected,
-      starsTotal: isShmup ? Math.max(12, totalCollected + 3) : this.totalCampaignStars,
-      hasKey: this.hasKey,
-      hearts: Math.max(0, this.hearts),
-      maxHearts: this.maxHearts,
-      bossHp,
-      bossMaxHp,
-      cameraX: this.cameraX + this.juice.shakeX + this.juice.kickX,
-      cameraY: this.cameraY + this.juice.shakeY + this.juice.kickY,
-      cameraZoom: isShmup ? 1.0 : this.cameraZoom,
-      viewport: this.stageViewport,
-      ambientDarkness: st.ambientDarkness ?? 0,
-      ambientColor: st.ambientColor ?? '#120e24',
-      screenFlashAlpha: this.juice.flashAlpha,
-      screenFlashColor: this.juice.flashColor,
-      bgStars: this.bgStars,
-      bgClouds: this.bgClouds,
-      tiles: this.outTiles,
-      entities: this.outEntities,
-      particles: this.outParticles,
-      lights: this.outLights,
-      debugRects: this.debugHitboxes ? this.outDebugRects : undefined,
-      statusBanner: this.statusBanner,
-      stage: { index: this.stageIdx + 1, total: this.def.stages.length, name: st.name },
-      bgmTheme: st.bgmTheme,
-      shmupHud: isShmup ? buildShmupHudFromPool(this) : undefined,
-    };
+    bank.viewport.width = this.stageViewport.width;
+    bank.viewport.height = this.stageViewport.height;
+    bank.stageInfo.index = this.stageIdx + 1;
+    bank.stageInfo.total = this.def.stages.length;
+    bank.stageInfo.name = st.name;
+
+    const snap = bank.snapshot;
+    snap.cartridgeId = this.def.meta.id;
+    snap.skyTop = st.skyTop;
+    snap.skyBottom = st.skyBottom;
+    snap.cozyFilter = params.cozyFilter > 0;
+    snap.glowIntensity = glow;
+    snap.paletteRow = st.paletteRow ?? this.def.meta.paletteRow ?? 0;
+    snap.timeSec = t;
+    snap.elapsedSec = this.elapsedSec;
+    snap.status = this.status;
+    snap.score = this.score;
+    snap.comboCount = this.juice.comboCount;
+    snap.starsCollected = totalCollected;
+    snap.starsTotal = isShmup ? Math.max(12, totalCollected + 3) : this.totalCampaignStars;
+    snap.hasKey = this.hasKey;
+    snap.hearts = Math.max(0, this.hearts);
+    snap.maxHearts = this.maxHearts;
+    snap.bossHp = bossHp;
+    snap.bossMaxHp = bossMaxHp;
+    snap.cameraX = camX;
+    snap.cameraY = camY;
+    snap.cameraZoom = camZoom;
+    snap.viewport = bank.viewport;
+    snap.ambientDarkness = st.ambientDarkness ?? 0;
+    snap.ambientColor = st.ambientColor ?? '#120e24';
+    snap.screenFlashAlpha = this.juice.flashAlpha;
+    snap.screenFlashColor = this.juice.flashColor;
+    snap.bgStars = this.bgStars;
+    snap.bgParallaxLayers = this.bgParallaxLayers.length > 0 ? this.bgParallaxLayers : undefined;
+    snap.bgClouds = this.bgClouds;
+    snap.tiles = outTiles;
+    snap.fgTiles = outFgTiles.length > 0 ? outFgTiles : undefined;
+    snap.entities = outEntities;
+    snap.particles = bank.particles;
+    snap.lights = outLights;
+    snap.debugRects = debugRects;
+    snap.statusBanner = this.statusBanner;
+    snap.stage = bank.stageInfo;
+    snap.bgmTheme = st.bgmTheme;
+    snap.shmupHud = isShmup ? buildShmupHudFromPool(this) : undefined;
+    return snap;
   }
 }

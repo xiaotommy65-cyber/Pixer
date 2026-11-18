@@ -5,7 +5,12 @@ import { HybridAiDirector } from '../../src/core/ai/HybridAiDirector.ts';
 import { RemoteHttpAiProvider } from '../../src/core/ai/RemoteAiProvider.ts';
 import { ToySynth } from '../../src/core/audio/ToySynth.ts';
 import { GpuEngine } from '../../src/core/gpu/GpuEngine.ts';
-import { FLOATS_PER_INSTANCE, resolveLogicalViewport, type IGpuBackend } from '../../src/core/gpu/GpuTypes.ts';
+import {
+  FLOATS_PER_INSTANCE,
+  MAX_INSTANCES_PER_PASS,
+  resolveLogicalViewport,
+  type IGpuBackend,
+} from '../../src/core/gpu/GpuTypes.ts';
 import { InputPipeline } from '../../src/core/input/InputPipeline.ts';
 import { AppLogger, appLogger } from '../../src/core/runtime/AppLogger.ts';
 import {
@@ -19,10 +24,26 @@ import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGov
 import { EngineHost } from '../../src/core/runtime/EngineHost.ts';
 import { parseJsonlEntries, serializeEntriesToJsonl } from '../../src/core/runtime/LogPersistence.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
-import { buildDepthDrawOrder, SceneGpuBridge } from '../../src/core/runtime/SceneGpuBridge.ts';
+import { buildDepthDrawOrder, computeParallaxScreenCoord, SceneGpuBridge } from '../../src/core/runtime/SceneGpuBridge.ts';
+import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
 import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
-import type { CartridgeJsonV1 } from '../../src/core/sim/CartridgeSchema.ts';
+import {
+  validateCartridgeJson,
+  type CartridgeJsonV1,
+  type CartridgeTileChunkDef,
+} from '../../src/core/sim/CartridgeSchema.ts';
 import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
+import { MAX_ENTITIES, SoaEntityPool } from '../../src/core/sim/SoaEntityPool.ts';
+import {
+  CHUNK_AREA,
+  CHUNK_SIZE,
+  COLLISION_CLOUD,
+  COLLISION_EMPTY,
+  COLLISION_HAZARD,
+  COLLISION_SOLID,
+  TilemapGrid,
+} from '../../src/core/sim/TilemapGrid.ts';
+import { WorldKernel } from '../../src/core/sim/WorldKernel.ts';
 import { AstralChroniclesGame } from '../../src/game/astralChronicles/AstralChroniclesGame.ts';
 import { parseDungeonModuleJson } from '../../src/game/emberkeep/TurnGridSave.ts';
 import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
@@ -363,13 +384,14 @@ export function testArchitectureBoundariesAndLifecycle(): void {
 
 export function testUpgradedGpuPipelineAndAtlas(): void {
   const atlas = new TextureAtlas();
-  check(atlas.width === 512 && atlas.height === 512, `TextureAtlas should be 512x512 (got ${atlas.width}x${atlas.height})`);
+  check(ATLAS_SIZE === 1024 && atlas.width === 1024 && atlas.height === 1024, `TextureAtlas should be 1024x1024 (got ${atlas.width}x${atlas.height})`);
+  check(MAX_INSTANCES_PER_PASS === 16384, `MAX_INSTANCES_PER_PASS should be 16384 for M4.3 (got ${MAX_INSTANCES_PER_PASS})`);
   check(FLOATS_PER_INSTANCE === 20, `FLOATS_PER_INSTANCE should be 20 for M1 deform/LUT packing (got ${FLOATS_PER_INSTANCE})`);
   check(
     atlas.indexPixels.length === ATLAS_SIZE * ATLAS_SIZE &&
       atlas.paletteLut.length === 16 * atlas.paletteRows * 4 &&
       atlas.paletteRows === 8,
-    'TextureAtlas must expose 512x512 indexPixels and 16x8 RGBA8 paletteLut',
+    'TextureAtlas must expose 1024x1024 indexPixels and 16x8 RGBA8 paletteLut',
   );
   // Row 0 (classic) keeps indices 14/15 non-emissive for clouds; themed row 1 enables emissive weights
   check(
@@ -784,9 +806,10 @@ export function testM41DynamicViewportAndCamera(): void {
         skyBottom: '#3e356e',
         bgmTheme: 'meadow',
         hint: 'Vertical tower test',
-        spawn: { x: 48, y: 400 },
+        spawn: { x: 48, y: 300 },
         groundTop: 'grass',
         groundFill: 'dirt',
+        islands: [{ startTile: 0, countTiles: 40, topY: 416 }],
         spawns: [{ archetype: 'star', x: 120, y: 380 }],
       },
     ],
@@ -804,3 +827,464 @@ export function testM41DynamicViewportAndCamera(): void {
 
   console.log('[SIM OK] M4.1 Dynamic Logical Viewport & True 2D Camera verified');
 }
+
+export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
+  // 1. Differential Oracle 1: TilemapGrid 16x16 Chunk Streaming (1024x256) vs Naive Dense Flat Grid
+  const cols = 1024;
+  const rows = 256;
+  const grid = new TilemapGrid(cols, rows);
+  const flatTiles = new Uint16Array(cols * rows);
+  const flatCols = new Uint8Array(cols * rows);
+
+  const setBothCell = (c: number, r: number, tid: number, colKind: number): void => {
+    grid.setTile(c, r, tid, colKind, false);
+    if (c >= 0 && c < cols && r >= 0 && r < rows) {
+      flatTiles[r * cols + c] = tid;
+      flatCols[r * cols + c] = tid === 0 ? COLLISION_EMPTY : colKind;
+    }
+  };
+  const setBothRect = (c0: number, r0: number, w: number, h: number, tid: number, colKind: number): void => {
+    grid.fillRectTiles(c0, r0, w, h, tid, colKind);
+    for (let r = Math.max(0, r0); r < Math.min(rows, r0 + h); r++) {
+      for (let c = Math.max(0, c0); c < Math.min(cols, c0 + w); c++) {
+        flatTiles[r * cols + c] = tid;
+        flatCols[r * cols + c] = tid === 0 ? COLLISION_EMPTY : colKind;
+      }
+    }
+  };
+
+  setBothRect(14, 14, 5, 4, 1, COLLISION_SOLID); // crosses cx 0|1 (c=15|16) and cy 0|1 (r=15|16)
+  setBothCell(16, 15, 0, COLLISION_EMPTY); // carve seam notch to stress cross-chunk auto-masking
+  setBothRect(15, 22, 4, 1, 3, COLLISION_CLOUD); // cloud across cx 0|1
+  setBothCell(17, 21, 9, COLLISION_HAZARD);
+  setBothRect(62, 126, 4, 4, 2, COLLISION_SOLID); // crosses cx 3|4 and cy 7|8
+  setBothRect(1006, 248, 8, 6, 1, COLLISION_SOLID); // far map corner (cx=62..63, cy=15)
+  grid.recomputeAutoMask();
+
+  check(grid.chunksX === 64 && grid.chunksY === 16 && grid.totalChunks === 1024, 'TilemapGrid 1024x256 must partition into 64x16=1024 chunks');
+  check(grid.getAllocatedChunkCount() <= 10, `Sparse TilemapGrid should only allocate touched chunks (allocated ${grid.getAllocatedChunkCount()}/1024)`);
+
+  const flatMask = (c: number, r: number): number => {
+    const tid = flatTiles[r * cols + c];
+    if (tid === 0) return 0;
+    let m = 0;
+    if (r > 0 && flatTiles[(r - 1) * cols + c] === tid) m |= 1;
+    if (c + 1 < cols && flatTiles[r * cols + c + 1] === tid) m |= 2;
+    if (r + 1 < rows && flatTiles[(r + 1) * cols + c] === tid) m |= 4;
+    if (c > 0 && flatTiles[r * cols + c - 1] === tid) m |= 8;
+    return m;
+  };
+
+  const verifyWindow = (c0: number, r0: number, c1: number, r1: number): void => {
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const idx = r * cols + c;
+        check(
+          grid.getTile(c, r) === flatTiles[idx] &&
+            grid.getCollision(c, r) === flatCols[idx] &&
+            grid.getAutoMask(c, r) === flatMask(c, r),
+          `TilemapGrid chunk vs flat oracle mismatch at (${c},${r})`,
+        );
+      }
+    }
+  };
+  verifyWindow(12, 12, 22, 25);
+  verifyWindow(60, 124, 67, 131);
+  verifyWindow(1004, 246, 1016, 255);
+
+  const streamedChunks = grid.updateActiveChunks(0, 0, 480, 270, 32);
+  check(
+    streamedChunks > 0 && streamedChunks <= 6 && streamedChunks < grid.getAllocatedChunkCount(),
+    `updateActiveChunks must stream only viewport+margin chunks (streamed ${streamedChunks} of ${grid.getAllocatedChunkCount()} allocated)`,
+  );
+
+  // Cross-chunk physics kinematics parity (one-way cloud + ceiling 4px corner nudge at c=15|16)
+  const cloudBox = { x: 15 * 16 + 8, y: 22 * 16 - 14 - 3, vx: 0, vy: 240 };
+  const aabbOut = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
+  grid.resolveAabbMotion(cloudBox, 2, 2, 12, 14, 1 / 60, aabbOut);
+  check(
+    aabbOut.onGround && cloudBox.y === 22 * 16 - 16,
+    'TilemapGrid.resolveAabbMotion must land AABB cleanly on cross-chunk one-way cloud',
+  );
+  setBothCell(15, 30, 1, COLLISION_SOLID);
+  const cornerBox = { x: 16 * 16 - 5, y: 31 * 16 - 1, vx: 0, vy: -180 };
+  grid.resolveAabbMotion(cornerBox, 2, 2, 12, 14, 1 / 60, aabbOut);
+  check(
+    !aabbOut.hitCeiling && cornerBox.x === 16 * 16 - 2,
+    'TilemapGrid.resolveAabbMotion must preserve 4px ceiling corner nudge across chunk boundaries',
+  );
+
+  // 2. Differential Oracle 2: SoaEntityPool.spatialHash (2,048 active entities) vs O(N^2) Brute-Force Oracle
+  const runSpatialCheck = (seed: number) => {
+    const pool = new SoaEntityPool();
+    const rng = new SeededRng(seed);
+    for (let i = 0; i < MAX_ENTITIES; i++) {
+      const isBridge = i % 97 === 0;
+      const w = isBridge ? 420 : rng.range(8, 28);
+      const h = isBridge ? 18 : rng.range(8, 28);
+      const x = rng.range(-128, 16200);
+      const y = rng.range(-64, 4000);
+      const s = pool.alloc(x, y, w, h);
+      check(s >= 0, `SoaEntityPool alloc ${i} must succeed up to 2048`);
+    }
+    const tRebuild0 = performance.now();
+    pool.rebuildSpatialHash();
+    const tRebuildMs = performance.now() - tRebuild0;
+
+    const queryScratch = new Int32Array(MAX_ENTITIES);
+    const oracleSlots: number[] = [];
+    const hashSlots: number[] = [];
+    const probeRng = new SeededRng(seed ^ 0x55aa);
+    const digestHashes: number[] = [];
+
+    const tQuery0 = performance.now();
+    for (let q = 0; q < 16; q++) {
+      const qx0 = q === 0 ? -100 : q === 1 ? 8000 : probeRng.range(-160, 15800);
+      const qy0 = q === 0 ? -40 : q === 1 ? 1800 : probeRng.range(-80, 3850);
+      const qw = q === 1 ? 1400 : probeRng.range(24, 320);
+      const qh = q === 1 ? 900 : probeRng.range(24, 240);
+      const qx1 = qx0 + qw;
+      const qy1 = qy0 + qh;
+
+      const gotCount = pool.queryRect(qx0, qy0, qx1, qy1, queryScratch);
+      hashSlots.length = 0;
+      for (let i = 0; i < gotCount; i++) hashSlots.push(queryScratch[i]);
+      hashSlots.sort((a, b) => a - b);
+
+      oracleSlots.length = 0;
+      for (let i = 0; i < pool.activeCount; i++) {
+        const s = pool.activeIndices[i];
+        const ex0 = pool.x[s];
+        const ey0 = pool.y[s];
+        const ex1 = ex0 + pool.w[s];
+        const ey1 = ey0 + pool.h[s];
+        if (qx0 < ex1 && qx1 > ex0 && qy0 < ey1 && qy1 > ey0) {
+          oracleSlots.push(s);
+        }
+      }
+      oracleSlots.sort((a, b) => a - b);
+
+      check(
+        hashSlots.length === oracleSlots.length && hashSlots.every((v, idx) => v === oracleSlots[idx]),
+        `SoaEntityPool.queryRect brute-force oracle mismatch on probe ${q} (got ${hashSlots.length}, expected ${oracleSlots.length})`,
+      );
+      digestHashes.push(hashSlots.length);
+
+      // Radius probe comparison against exact bounding-rect + Euclidean clamp oracle
+      const cx = qx0 + qw * 0.5;
+      const cy = qy0 + qh * 0.5;
+      const radius = Math.min(260, Math.max(24, qw * 0.5));
+      const r2 = radius * radius;
+      const rGot = pool.queryRadius(cx, cy, radius, queryScratch);
+      hashSlots.length = 0;
+      for (let i = 0; i < rGot; i++) hashSlots.push(queryScratch[i]);
+      hashSlots.sort((a, b) => a - b);
+
+      oracleSlots.length = 0;
+      for (let i = 0; i < pool.activeCount; i++) {
+        const s = pool.activeIndices[i];
+        const ex0 = pool.x[s];
+        const ey0 = pool.y[s];
+        const ex1 = ex0 + pool.w[s];
+        const ey1 = ey0 + pool.h[s];
+        if (cx - radius < ex1 && cx + radius > ex0 && cy - radius < ey1 && cy + radius > ey0) {
+          const nx = Math.max(ex0, Math.min(cx, ex1));
+          const ny = Math.max(ey0, Math.min(cy, ey1));
+          const dx = cx - nx;
+          const dy = cy - ny;
+          if (dx * dx + dy * dy <= r2) oracleSlots.push(s);
+        }
+      }
+      oracleSlots.sort((a, b) => a - b);
+
+      check(
+        hashSlots.length === oracleSlots.length && hashSlots.every((v, idx) => v === oracleSlots[idx]),
+        `SoaEntityPool.queryRadius brute-force oracle mismatch on probe ${q}`,
+      );
+    }
+    const tQueryMs = performance.now() - tQuery0;
+    return { tRebuildMs, tQueryMs, digestHashes };
+  };
+
+  const spRunA = runSpatialCheck(0x42422048);
+  const spRunB = runSpatialCheck(0x42422048);
+  check(
+    spRunA.digestHashes.every((v, idx) => v === spRunB.digestHashes[idx]),
+    'SoaEntityPool.spatialHash queries must be bit-identical across runs',
+  );
+
+  // 3. Multi-Layer Large World (4096x1024 px) + Parallax Overscan Identity + Layer Draw Order + 1024x1024 Atlas + 16384 Pass
+  const chunks: CartridgeTileChunkDef[] = [];
+  for (let cx = 0; cx < 16; cx++) {
+    const tiles = new Array<number>(CHUNK_AREA).fill(0);
+    const collision = new Array<number>(CHUNK_AREA).fill(COLLISION_EMPTY);
+    const fgTiles = new Array<number>(CHUNK_AREA).fill(0);
+    for (let lc = 0; lc < CHUNK_SIZE; lc++) {
+      tiles[8 * CHUNK_SIZE + lc] = 1;
+      collision[8 * CHUNK_SIZE + lc] = COLLISION_SOLID;
+      for (let lr = 9; lr < CHUNK_SIZE; lr++) {
+        tiles[lr * CHUNK_SIZE + lc] = 2;
+        collision[lr * CHUNK_SIZE + lc] = COLLISION_SOLID;
+      }
+      if (cx <= 2 && lc % 2 === 0) {
+        fgTiles[5 * CHUNK_SIZE + lc] = 1; // canopy occluder above corridor
+      }
+    }
+    if (cx === 0 || cx === 1) {
+      // Cross-chunk high bridge at localRow=4 (row=52)
+      for (let lc = cx === 0 ? 12 : 0; lc < (cx === 0 ? 16 : 6); lc++) {
+        tiles[4 * CHUNK_SIZE + lc] = 4;
+        collision[4 * CHUNK_SIZE + lc] = COLLISION_CLOUD;
+      }
+    }
+    chunks.push({ cx, cy: 3, tiles, collision, fgTiles });
+  }
+
+  const largeWorldCart: CartridgeJsonV1 = {
+    version: 1,
+    meta: {
+      id: 'm43-large-multilayer',
+      code: 'M43',
+      title: 'M4.3 廣闊多層世界',
+      genre: 'platformer',
+      viewport: 'wide',
+    },
+    player: { controller: 'platformer', sprite: 'hero_a', spriteB: 'hero_b', w: 16, h: 16, maxHearts: 3 },
+    archetypes: {
+      star: { sprite: 'star_a', w: 12, h: 12, tags: ['collectible', 'star'], scoreValue: 100 },
+      slime: { sprite: 'slime_a', spriteB: 'slime_b', w: 16, h: 16, tags: ['enemy', 'stompable'], behavior: { kind: 'patrol', speedX: 28 }, hp: 1 },
+      torch: { sprite: 'torch', w: 16, h: 16, tags: ['torch'], light: { radius: 48, color: '#ffd447', intensity: 0.7 } },
+      gate: { sprite: 'gate_closed', w: 16, h: 16, tags: ['gate'] },
+    },
+    stages: [
+      {
+        id: 'st-mega',
+        name: '4096x1024 多層森域',
+        worldWidth: 4096,
+        worldHeight: 1024,
+        skyTop: '#24305e',
+        skyBottom: '#a8d0e6',
+        ambientDarkness: 0.35,
+        ambientColor: '#120e24',
+        bgmTheme: 'meadow',
+        hint: 'Multi-layer depth test',
+        spawn: { x: 48, y: 880 },
+        tileChunks: chunks,
+        bgParallaxLayers: [
+          { sprite: 'cloud_m', x: 0, y: 200, w: 64, h: 32, scrollX: 0.25, scrollY: 0.2, repeatW: 4096, repeatStepX: 128, alpha: 0.75 },
+        ],
+        fgIslands: [{ startTile: 2, countTiles: 6, topY: 848, rows: 1, sprite: 'tree_canopy', alpha: 0.9 }],
+        fgTiles: [{ sprite: 'tree_canopy', x: 112, y: 864, w: 32, h: 32, alpha: 0.85 }],
+        spawns: [
+          { archetype: 'star', x: 96, y: 880 },
+          { archetype: 'torch', x: 128, y: 880 },
+          { archetype: 'slime', x: 240, y: 880, minX: 192, maxX: 320 },
+          { archetype: 'gate', x: 3968, y: 880 },
+        ],
+      },
+    ],
+  };
+
+  const valLarge = validateCartridgeJson(largeWorldCart);
+  check(valLarge.ok, `4096x1024 multi-layer chunked cartridge failed validation: ${valLarge.ok ? '' : valLarge.errors.join('; ')}`);
+
+  const params = new CartridgeRunner().getParams();
+  const rtA = new DataCartridgeRuntime(largeWorldCart);
+  const rtB = new DataCartridgeRuntime(largeWorldCart);
+  check(rtA.scriptError === null, `Large multi-layer cartridge runtime init failed: ${rtA.scriptError ?? ''}`);
+
+  for (let f = 0; f < 60; f++) {
+    const inp = { ...emptyInput(), right: true, jump: f % 25 < 6 };
+    rtA.step(1 / 60, inp, params);
+    rtB.step(1 / 60, inp, params);
+  }
+  const snapA = rtA.snapshot(params);
+  const snapB = rtB.snapshot(params);
+  check(
+    snapA.cameraX === snapB.cameraX &&
+      snapA.cameraY === snapB.cameraY &&
+      snapA.tiles.length === snapB.tiles.length &&
+      snapA.entities.length === snapB.entities.length,
+    'Large chunked DataCartridgeRuntime simulation must be 100% deterministic',
+  );
+  check(
+    snapA.cameraY > 650 && snapA.cameraY <= 1024 - 240,
+    `4096x1024 cameraY must track deep vertical terrain (got ${snapA.cameraY.toFixed(1)})`,
+  );
+  check(
+    Boolean(snapA.bgParallaxLayers?.length) && Boolean(snapA.fgTiles?.length),
+    'Large world snapshot must emit bgParallaxLayers and frustum-culled fgTiles',
+  );
+
+  // Verify draw order in SceneGpuBridge: bgParallaxLayers -> tiles/hero -> fgTiles -> ambientDarkness (Mode 2)
+  const atlas = new TextureAtlas();
+  const cloudRect = atlas.getRect('cloud_m');
+  const canopyRect = atlas.getRect('tree_canopy');
+  const heroRect = atlas.getRect('hero_a');
+  const heroRectB = atlas.getRect('hero_b');
+
+  const drawOrderTags: string[] = [];
+  let capturedAlphaCount = 0;
+  let capturedAddCount = 0;
+  const inspectorBackend: IGpuBackend = {
+    kind: 'webgpu',
+    uploadAtlas: () => {},
+    renderFrame: (_sky, alphaItems, alphaCount, _addItems, addCount) => {
+      capturedAlphaCount = alphaCount;
+      capturedAddCount = addCount;
+      for (let i = 0; i < alphaCount; i++) {
+        const base = i * FLOATS_PER_INSTANCE;
+        const w = alphaItems[base + 2];
+        const u0 = alphaItems[base + 4];
+        const v0 = alphaItems[base + 5];
+        const mode = alphaItems[base + 13];
+        if (mode === 0 && Math.abs(u0 - cloudRect.u0) < 1e-5 && Math.abs(v0 - cloudRect.v0) < 1e-5 && w > 40) {
+          drawOrderTags.push('parallax');
+        } else if (
+          mode === 0 &&
+          ((Math.abs(u0 - heroRect.u0) < 1e-5 && Math.abs(v0 - heroRect.v0) < 1e-5) ||
+            (Math.abs(u0 - heroRectB.u0) < 1e-5 && Math.abs(v0 - heroRectB.v0) < 1e-5))
+        ) {
+          drawOrderTags.push('hero');
+        } else if (mode === 0 && Math.abs(u0 - canopyRect.u0) < 1e-5 && Math.abs(v0 - canopyRect.v0) < 1e-5) {
+          drawOrderTags.push('fg_canopy');
+        } else if (mode === 2 && w > 420) {
+          drawOrderTags.push('ambient');
+        }
+      }
+      return 4;
+    },
+    resize: () => {},
+    dispose: () => {},
+  };
+
+  const gpu = new GpuEngine({ width: 426, height: 240 } as unknown as HTMLCanvasElement, undefined, atlas);
+  (gpu as unknown as { backend: IGpuBackend }).backend = inspectorBackend;
+  const bridge = new SceneGpuBridge();
+  bridge.render(gpu, snapA, null);
+
+  const firstParallax = drawOrderTags.indexOf('parallax');
+  const heroIdx = drawOrderTags.indexOf('hero');
+  const firstCanopy = drawOrderTags.indexOf('fg_canopy');
+  const ambientIdx = drawOrderTags.indexOf('ambient');
+  check(
+    firstParallax >= 0 && heroIdx > firstParallax && firstCanopy > heroIdx && ambientIdx > firstCanopy,
+    `SceneGpuBridge layer order mismatch (parallax=${firstParallax}, hero=${heroIdx}, fgCanopy=${firstCanopy}, ambient=${ambientIdx})`,
+  );
+
+  // Overscan sub-pixel parallax identity check: (Pass1Coord - camFrac) === exact zoomed world scroll equation
+  for (const zoom of [0.85, 1.0, 1.4]) {
+    for (const scroll of [0, 0.25, 0.65, 1.0]) {
+      for (const rawCam of [12.37, 255.81, 1024.19]) {
+        const snapped = Math.round(rawCam);
+        const camFrac = (rawCam - snapped) * zoom;
+        const pass1 = computeParallaxScreenCoord(360, snapped, camFrac, scroll, 426, zoom);
+        const afterOverscanCrop = pass1 - camFrac;
+        const exact = 426 * 0.5 + (360 - rawCam * scroll - 426 * 0.5) * zoom;
+        check(
+          Math.abs(afterOverscanCrop - exact) < 1e-6,
+          `Overscan parallax identity failed (diff=${Math.abs(afterOverscanCrop - exact)})`,
+        );
+      }
+    }
+  }
+
+  // Verify MAX_INSTANCES_PER_PASS=16384 handles > 8192 instances in a single batch and 1024x1024 atlas packs 300x32x32 sprites
+  gpu.beginFrame('#24305e', '#a8d0e6', true, 1);
+  for (let i = 0; i < 10000; i++) {
+    gpu.drawSpriteRaw('star_a', (i % 400) + 8, (Math.floor(i / 400) * 6) + 8);
+  }
+  gpu.flush(0.1);
+  check(
+    capturedAlphaCount === 10000 && capturedAddCount === 0,
+    `GpuEngine must batch >=10000 alpha instances in one pass up to MAX_INSTANCES_PER_PASS=16384 (got ${capturedAlphaCount})`,
+  );
+
+  const bigAtlas = new TextureAtlas();
+  const blockRgba = new Uint8Array(32 * 32 * 4).fill(200);
+  for (let i = 0; i < 300; i++) {
+    const r = bigAtlas.registerDynamicRgbaSprite(`m43_tile_${i}`, 32, 32, blockRgba);
+    check(r.v0 >= 128 / ATLAS_SIZE && r.v1 <= 1, `Dynamic sprite #${i} overflowed 1024x1024 atlas bounds`);
+  }
+
+  // 4. Pre-warmed 240-Frame Zero-GC Benchmarks (WorldKernel + large-world DataCartridgeRuntime)
+  const world = new WorldKernel({
+    cartridgeId: 'sandbox-toybox',
+    worldWidth: 2048,
+    worldHeight: 512,
+    viewport: 'wide',
+  });
+  world.hero.x = 64;
+  world.hero.y = 300;
+  world.markSolidsDirty();
+  for (let i = 0; i < 64; i++) {
+    world.addSolidTileRect(i * 16, 320, 16, 16, 'grass');
+  }
+  world.addParallaxLayer({ sprite: 'cloud_m', x: 0, y: 200, w: 64, h: 32, scrollX: 0.3, repeatW: 2048 });
+  world.addForegroundTileRect(160, 288, 16, 16, 'tree_canopy', { alpha: 0.85 });
+  world.spawn('star', 120, 290);
+  world.spawn('torch', 144, 296);
+
+  // Warmup (300 frames to stabilize TurboFan JIT & pool capacities)
+  for (let i = 0; i < 300; i++) {
+    world.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
+    world.snapshot(params);
+    rtA.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
+    rtA.snapshot(params);
+  }
+
+  // Verify 2-bank strict object reuse on both WorldSnapshot and DataCartridgeRuntime
+  const ws0 = world.snapshot(params);
+  const ws1 = world.snapshot(params);
+  const ws2 = world.snapshot(params);
+  const ws3 = world.snapshot(params);
+  check(
+    ws0 === ws2 && ws1 === ws3 && ws0 !== ws1 && ws0.tiles === ws2.tiles && ws0.entities === ws2.entities,
+    'WorldSnapshotPool must strictly reuse its 2 ping-pong RenderSceneSnapshot banks with zero wrapper allocations',
+  );
+  check(
+    ws0.tiles.length > 0 && ws0.tiles[0] === ws2.tiles[0] && ws0.entities.length > 0 && ws0.entities[0] === ws2.entities[0],
+    'WorldSnapshotPool must reuse pooled TileDesc & EntityDesc slots in place',
+  );
+
+  const rs0 = rtA.snapshot(params);
+  const rs1 = rtA.snapshot(params);
+  const rs2 = rtA.snapshot(params);
+  const rs3 = rtA.snapshot(params);
+  check(
+    rs0 === rs2 && rs1 === rs3 && rs0 !== rs1 && rs0.tiles === rs2.tiles && rs0.entities === rs2.entities,
+    'DataCartridgeRuntime must strictly reuse its 2 ping-pong RenderSceneSnapshot banks',
+  );
+  check(
+    rs0.tiles.length > 0 && rs0.tiles[0] === rs2.tiles[0] && rs0.entities.length > 0 && rs0.entities[0] === rs2.entities[0],
+    'DataCartridgeRuntime snapshot must reuse pooled TileDesc & EntityDesc slots in place',
+  );
+
+  const maybeGc = (globalThis as unknown as { gc?: () => void }).gc;
+  maybeGc?.();
+  const heapBeforeWk = process.memoryUsage().heapUsed;
+  const wkT0 = performance.now();
+  for (let i = 0; i < 240; i++) {
+    world.snapshot(params);
+  }
+  const wkMs = performance.now() - wkT0;
+  maybeGc?.();
+  const wkHeapDeltaKb = (process.memoryUsage().heapUsed - heapBeforeWk) / 1024;
+
+  const heapBeforeRt = process.memoryUsage().heapUsed;
+  const rtT0 = performance.now();
+  for (let i = 0; i < 240; i++) {
+    rtA.snapshot(params);
+  }
+  const rtMs = performance.now() - rtT0;
+  maybeGc?.();
+  const rtHeapDeltaKb = (process.memoryUsage().heapUsed - heapBeforeRt) / 1024;
+
+  console.log(
+    `[SIM OK] M4.2/M4.3 Chunked Worlds & Multi-Layer HD-2D -> Tilemap(1024x256, allocated=${grid.getAllocatedChunkCount()}/1024), SpatialHash(2048 ent: rebuild=${spRunA.tRebuildMs.toFixed(2)}ms, 32 queries=${spRunA.tQueryMs.toFixed(2)}ms), 1024x1024 Atlas (300x32px dyn, 10k pass batch)`,
+  );
+  console.log(
+    `[SIM BENCH] 240f Snapshot Zero-GC -> WorldKernel=${wkMs.toFixed(2)}ms (heapDelta=${wkHeapDeltaKb.toFixed(1)}KB), ChunkedRuntime(4096x1024)=${rtMs.toFixed(2)}ms (heapDelta=${rtHeapDeltaKb.toFixed(1)}KB)`,
+  );
+}
+

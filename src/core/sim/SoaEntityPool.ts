@@ -1,3 +1,5 @@
+import { SpatialHash } from '../math/SpatialHash.ts';
+
 export const MAX_ENTITIES = 2048;
 
 // Entity Flag Bitmasks (uint32)
@@ -40,7 +42,8 @@ export const BM_MOVING_PLATFORM = 1 << 10;
 
 /**
  * Zero-GC Struct-of-Arrays (SoA) Entity Pool supporting up to 2,048 active entities
- * with O(1) slot allocation, swap-pop active iteration, and fixed-step prev->curr interpolation.
+ * with O(1) slot allocation, swap-pop active iteration, fixed-step prev->curr interpolation,
+ * and an integrated Uniform Spatial Hash Grid for O(1) broad-phase spatial queries.
  */
 export class SoaEntityPool {
   public readonly capacity = MAX_ENTITIES;
@@ -84,6 +87,9 @@ export class SoaEntityPool {
   private readonly activePosOfSlot = new Int16Array(MAX_ENTITIES);
   private readonly freeList = new Uint16Array(MAX_ENTITIES);
 
+  public readonly spatialHash = new SpatialHash(MAX_ENTITIES, 32, 4096, MAX_ENTITIES * 4, 36);
+  public readonly spatialQueryScratch = new Int32Array(MAX_ENTITIES);
+
   public activeCount = 0;
   private freeCount = MAX_ENTITIES;
 
@@ -98,6 +104,7 @@ export class SoaEntityPool {
     this.parentSlot.fill(-1);
     this.activeCount = 0;
     this.freeCount = MAX_ENTITIES;
+    this.spatialHash.clear();
     for (let i = 0; i < MAX_ENTITIES; i++) {
       this.freeList[i] = MAX_ENTITIES - 1 - i;
     }
@@ -202,6 +209,60 @@ export class SoaEntityPool {
     if ((this.flags[slot] & EF_TELEPORTED) !== 0 || alpha >= 1) return this.y[slot];
     const py = this.prevY[slot];
     return py + (this.y[slot] - py) * alpha;
+  }
+
+  public getActivePos(slot: number): number {
+    return slot >= 0 && slot < MAX_ENTITIES ? this.activePosOfSlot[slot] : -1;
+  }
+
+  /** Rebuilds the integrated Uniform Spatial Hash Grid across all alive entities in O(activeCount), zero-GC. */
+  public rebuildSpatialHash(): void {
+    this.spatialHash.clear();
+    const count = this.activeCount;
+    for (let i = 0; i < count; i++) {
+      const s = this.activeIndices[i];
+      if ((this.flags[s] & EF_ALIVE) === 0) continue;
+      this.spatialHash.insertBox(s, this.x[s], this.y[s], this.w[s], this.h[s]);
+    }
+  }
+
+  /** Queries entity slots whose AABBs overlap [x0, x1) x [y0, y1) via the integrated SpatialHash. */
+  public queryRect(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    outSlots: Int32Array | Uint16Array = this.spatialQueryScratch,
+    maxOut = outSlots.length,
+  ): number {
+    return this.spatialHash.queryRect(x0, y0, x1, y1, outSlots, maxOut);
+  }
+
+  /** Queries entity slots whose AABBs lie within `radius` (closest-point distance <= radius) of (cx, cy). */
+  public queryRadius(
+    cx: number,
+    cy: number,
+    radius: number,
+    outSlots: Int32Array | Uint16Array = this.spatialQueryScratch,
+    maxOut = outSlots.length,
+  ): number {
+    if (!Number.isFinite(radius) || radius < 0) return 0;
+    const count = this.spatialHash.queryRect(cx - radius, cy - radius, cx + radius, cy + radius, outSlots, maxOut);
+    const r2 = radius * radius;
+    let write = 0;
+    for (let i = 0; i < count; i++) {
+      const s = outSlots[i];
+      const ex0 = this.x[s];
+      const ey0 = this.y[s];
+      const nx = Math.max(ex0, Math.min(cx, ex0 + this.w[s]));
+      const ny = Math.max(ey0, Math.min(cy, ey0 + this.h[s]));
+      const dx = cx - nx;
+      const dy = cy - ny;
+      if (dx * dx + dy * dy <= r2) {
+        outSlots[write++] = s;
+      }
+    }
+    return write;
   }
 
   public renderRot(slot: number, alpha: number): number {

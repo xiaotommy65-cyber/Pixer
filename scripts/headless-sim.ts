@@ -7,6 +7,7 @@ import {
   testM41DynamicViewportAndCamera,
   testStructuredLoggingAndErrorRecovery,
   testUpgradedGpuPipelineAndAtlas,
+  testM42M43ChunkedWorldsAndMultiLayerDepth,
 } from './sim/ArchitectureTests.ts';
 import {
   testCloudberryHop,
@@ -56,7 +57,8 @@ async function runAll() {
   await testStructuredLoggingAndErrorRecovery();
   await testM3LoadCartridgeAndPngCodec();
   testM41DynamicViewportAndCamera();
-  console.log('[SIM ALL PASSED] Pixel Atelier Engine 2.0 & All 5 Cartridges (PA-01..PA-05) Passed!');
+  testM42M43ChunkedWorldsAndMultiLayerDepth();
+  console.log('[SIM ALL PASSED] Pixel Atelier Engine 3.0 & All 5 Cartridges (PA-01..PA-05) Passed!');
 }
 
 void runAll().catch((err) => {

@@ -64,6 +64,10 @@ export interface TileDesc {
   sortY?: number;
   /** Soft ground shadow cast south of extruded walls/cliffs. */
   castShadow?: boolean;
+  /** Optional opacity (0..1, defaults to 1; used for foreground canopies/mist). */
+  alpha?: number;
+  /** Optional horizontal sprite flip. */
+  flipX?: boolean;
 }
 
 export interface EntityDesc {
@@ -144,6 +148,28 @@ export interface BgCloudDesc {
   alpha: number;
 }
 
+export interface BgParallaxLayerDesc {
+  sprite: SpriteId;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Horizontal scroll multiplier vs camera (e.g. 0.15..0.65). Defaults to 0.35. */
+  scrollX?: number;
+  /** Vertical scroll multiplier vs camera (e.g. 0.10..0.55). Defaults to 0.2. */
+  scrollY?: number;
+  /** Optional total horizontal span in px to repeat sprites across large worlds. */
+  repeatW?: number;
+  /** Step distance in px between repeated sprites (defaults to w). */
+  repeatStepX?: number;
+  tint?: string;
+  alpha?: number;
+  flipX?: boolean;
+  paletteRow?: number;
+  additive?: boolean;
+  emissive?: number;
+}
+
 export interface BgStarDesc {
   x: number;
   y: number;
@@ -204,8 +230,10 @@ export interface RenderSceneSnapshot {
   screenFlashColor?: string;
   hd2dDepth?: Hd2dDepthConfig;
   bgStars: BgStarDesc[];
+  bgParallaxLayers?: BgParallaxLayerDesc[];
   bgClouds: BgCloudDesc[];
   tiles: TileDesc[];
+  fgTiles?: TileDesc[];
   entities: EntityDesc[];
   particles: ParticleDesc[];
   lights: LightDesc[];

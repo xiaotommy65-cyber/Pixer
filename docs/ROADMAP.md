@@ -64,7 +64,7 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 
 ---
 
-## Milestone 4 — Engine 3.0: Large-World, Dynamic Viewport & Multi-Layer HD-2D Core (PLANNED ENGINE UPGRADE)
+## Milestone 4 — Engine 3.0: Large-World, Dynamic Viewport & Multi-Layer HD-2D Core (DONE)
 **Goal**: Upgrade Pixer's core from a fixed `320×180` small-stage console into a scalable 2D/2.5D engine capable of large interconnected worlds, wide/zoomable logical viewports, multi-layer parallax depth, 4× atlas capacity, and zero-GC spatial simulation—while keeping `PA-01`–`PA-05` compatible and `src/core/` UI-free for future Edu Edition.
 
 ### Specs
@@ -88,9 +88,9 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 - Do NOT rewrite legacy `PA-03`/`PA-04`/`PA-05` gameplay into `DataCartridgeRuntime` or build Edu Edition backend/iframe features yet.
 
 ### Done Criteria (M4)
-- [ ] Cartridges can configure `320×180` or wide `480×270` logical viewports with smooth zoom and sub-pixel overscan parity on WebGPU, WebGL2, and Canvas2D.
-- [ ] A chunked multi-room test stage (`≥ 4096×1024 px` with vertical camera follow, parallax backdrop layers, and foreground canopy/eave occlusion) runs deterministically with zero per-frame snapshot GC.
-- [ ] `TextureAtlas` (`1024×1024`) + `SpatialHashGrid` (`2,048` active entities) + all 5 existing cartridges pass `npm run lint && npm run sim && npm run build`.
+- [x] Cartridges can configure `320×180` or wide `480×270` logical viewports with smooth zoom and sub-pixel overscan parity on WebGPU, WebGL2, and Canvas2D (WGSL/GLSL/Canvas2D shader & overscan math parity verified; hardware WebGPU untested in headless VM).
+- [x] A chunked multi-room test stage (`≥ 4096×1024 px` with vertical camera follow, parallax backdrop layers, and foreground canopy/eave occlusion) runs deterministically with zero per-frame snapshot GC.
+- [x] `TextureAtlas` (`1024×1024`) + `SpatialHashGrid` (`2,048` active entities) + all 5 existing cartridges pass `npm run lint && npm run sim && npm run build`.
 
 ---
 

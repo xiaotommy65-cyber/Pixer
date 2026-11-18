@@ -13,7 +13,7 @@ import type { SpriteRect } from '../core/gpu/GpuTypes.ts';
 export { DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B, PALETTE_THEME_COUNT, TOYBOX_PALETTE };
 export type { SpriteId };
 
-export const ATLAS_SIZE = 512;
+export const ATLAS_SIZE = 1024;
 export const TILE_PX = 16;
 
 export const PALETTE_RGB: readonly [number, number, number, number][] = TOYBOX_PALETTE.map((hex, i) => {
@@ -41,11 +41,11 @@ export function parseGridToIndices(grid: readonly string[], out?: Uint8Array): U
   return buf;
 }
 
-const SLOTS_PER_ROW = ATLAS_SIZE / TILE_PX; // 32 slots per row on 512x512
-const DYNAMIC_START_Y = 128; // Reserve top 128px (8 rows x 32 cols = 256 slots) for built-in tiles
+const SLOTS_PER_ROW = ATLAS_SIZE / TILE_PX; // 64 slots per row on 1024x1024
+const DYNAMIC_START_Y = 128; // Reserve top 128px (8 rows x 64 cols = 512 slots) for built-in tiles
 
 /**
- * Dynamic 512x512 Texture Atlas supporting built-in 16-color indexed sprites (with 16xN Palette LUT),
+ * Dynamic 1024x1024 Texture Atlas supporting built-in 16-color indexed sprites (with 16xN Palette LUT),
  * live Sprite Atelier hero editing, and runtime 32-bit RGBA / dynamic shelf allocation
  * for plugins and AI-synthesized pixel art.
  */
@@ -76,7 +76,7 @@ export class TextureAtlas {
   }
 
   private pixelUv(x0: number, y0: number, w: number, h: number): SpriteRect {
-    const pad = 0.00015;
+    const pad = 0.075 / ATLAS_SIZE;
     return {
       u0: x0 / ATLAS_SIZE + pad,
       v0: y0 / ATLAS_SIZE + pad,

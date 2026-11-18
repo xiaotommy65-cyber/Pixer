@@ -1,7 +1,7 @@
 import { BUILTIN_SPRITE_GRIDS, type SpriteId } from '../../assets/AtlasSpritesData.ts';
 import type { BgCloudDesc, BgmTheme, SimEvent } from '../types/WorldTypes.ts';
 import type { VmAction, VmRule, VmTrigger } from './EventActionVm.ts';
-import { MAX_TILEMAP_COLS, MAX_TILEMAP_ROWS, TILE_SIZE } from './TilemapGrid.ts';
+import { CHUNK_AREA, CHUNK_SIZE, MAX_TILEMAP_COLS, MAX_TILEMAP_ROWS, TILE_SIZE } from './TilemapGrid.ts';
 
 export const CARTRIDGE_SCHEMA_VERSION = 1;
 export const MAX_ARCHETYPES_PER_CARTRIDGE = 128;
@@ -114,6 +114,46 @@ export interface CartridgeStageSpawn {
   hp?: number;
 }
 
+export interface CartridgeTileChunkDef {
+  cx: number;
+  cy: number;
+  tiles: readonly number[];
+  collision: readonly number[];
+  fgTiles?: readonly number[];
+  spriteMap?: Record<string, SpriteId>;
+}
+
+export interface CartridgeParallaxLayerDef {
+  sprite: SpriteId;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  scrollX?: number;
+  scrollY?: number;
+  repeatW?: number;
+  repeatStepX?: number;
+  tint?: string;
+  alpha?: number;
+  flipX?: boolean;
+  paletteRow?: number;
+  additive?: boolean;
+  emissive?: number;
+}
+
+export interface CartridgeForegroundTileDef {
+  sprite: SpriteId;
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+  tint?: string;
+  alpha?: number;
+  flipX?: boolean;
+  elevationZ?: number;
+  sortY?: number;
+}
+
 export interface CartridgeStageDef {
   id: string;
   name: string;
@@ -132,6 +172,8 @@ export interface CartridgeStageDef {
   groundFill?: SpriteId;
   islands?: readonly { startTile: number; countTiles: number; topY: number }[];
   clouds?: readonly { x: number; y: number; tilesWide: number }[];
+  fgIslands?: readonly { startTile: number; countTiles: number; topY: number; rows?: number; sprite?: SpriteId; alpha?: number }[];
+  fgTiles?: readonly CartridgeForegroundTileDef[];
   movingPlatforms?: readonly {
     x: number;
     y: number;
@@ -148,8 +190,10 @@ export interface CartridgeStageDef {
     rows: number;
     tiles: readonly number[];
     collision: readonly number[];
+    fgTiles?: readonly number[];
     spriteMap: Record<string, SpriteId>;
   };
+  tileChunks?: readonly CartridgeTileChunkDef[];
   spawns?: readonly CartridgeStageSpawn[];
   waves?: {
     count: number;
@@ -172,6 +216,7 @@ export interface CartridgeStageDef {
   };
   bgStarsCount?: number;
   bgClouds?: readonly BgCloudDesc[];
+  bgParallaxLayers?: readonly CartridgeParallaxLayerDef[];
   rules?: readonly VmRule[];
 }
 
@@ -329,7 +374,7 @@ function validateRulesList(
 
 /**
  * Pure structural, semantic, and safety validator for CartridgeJsonV1.
- * Ensures bounds (<=256x64 tilemap, <=128 rules, <=512 spawns/stage), reference integrity, and zero eval/script code.
+ * Ensures bounds (<=1024x256 tilemap, <=128 rules, <=512 spawns/stage), reference integrity, and zero eval/script code.
  */
 export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
   const errors: string[] = [];
@@ -416,6 +461,9 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
     }
   }
 
+  const maxChunksX = Math.ceil(MAX_TILEMAP_COLS / CHUNK_SIZE);
+  const maxChunksY = Math.ceil(MAX_TILEMAP_ROWS / CHUNK_SIZE);
+
   const ruleBudget = { count: 0 };
   if (!Array.isArray(raw.stages) || raw.stages.length === 0) {
     errors.push('stages must be a non-empty array');
@@ -451,13 +499,87 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
           const rows = st.tileGrid.rows;
           if (!isFiniteNum(cols) || cols < 1 || cols > MAX_TILEMAP_COLS || !isFiniteNum(rows) || rows < 1 || rows > MAX_TILEMAP_ROWS) {
             errors.push(`stages[${i}].tileGrid dims must be <= ${MAX_TILEMAP_COLS}x${MAX_TILEMAP_ROWS}`);
+          } else if (cols * rows > 65536) {
+            errors.push(`stages[${i}].tileGrid dense cell count exceeds 65536; use tileChunks for massive worlds`);
           } else if (
             !Array.isArray(st.tileGrid.tiles) ||
             !Array.isArray(st.tileGrid.collision) ||
             st.tileGrid.tiles.length !== cols * rows ||
-            st.tileGrid.collision.length !== cols * rows
+            st.tileGrid.collision.length !== cols * rows ||
+            (st.tileGrid.fgTiles !== undefined && (!Array.isArray(st.tileGrid.fgTiles) || st.tileGrid.fgTiles.length !== cols * rows))
           ) {
             errors.push(`stages[${i}].tileGrid tiles/collision lengths must equal cols * rows`);
+          }
+        }
+      }
+      if (st.tileChunks !== undefined) {
+        if (!Array.isArray(st.tileChunks) || st.tileChunks.length > maxChunksX * maxChunksY) {
+          errors.push(`stages[${i}].tileChunks must be an array of at most ${maxChunksX * maxChunksY} chunks`);
+        } else {
+          for (let j = 0; j < st.tileChunks.length; j++) {
+            const ch = st.tileChunks[j];
+            if (
+              !isRecord(ch) ||
+              !isFiniteNum(ch.cx) || ch.cx < 0 || ch.cx >= maxChunksX || (ch.cx | 0) !== ch.cx ||
+              !isFiniteNum(ch.cy) || ch.cy < 0 || ch.cy >= maxChunksY || (ch.cy | 0) !== ch.cy
+            ) {
+              errors.push(`stages[${i}].tileChunks[${j}] has out-of-range chunk coordinates`);
+            } else if (
+              !Array.isArray(ch.tiles) ||
+              !Array.isArray(ch.collision) ||
+              ch.tiles.length !== CHUNK_AREA ||
+              ch.collision.length !== CHUNK_AREA ||
+              (ch.fgTiles !== undefined && (!Array.isArray(ch.fgTiles) || ch.fgTiles.length !== CHUNK_AREA))
+            ) {
+              errors.push(`stages[${i}].tileChunks[${j}] tiles/collision lengths must equal ${CHUNK_AREA}`);
+            }
+          }
+        }
+      }
+      if (st.bgParallaxLayers !== undefined) {
+        if (!Array.isArray(st.bgParallaxLayers) || st.bgParallaxLayers.length > 32) {
+          errors.push(`stages[${i}].bgParallaxLayers must be an array of <= 32 layers`);
+        } else {
+          for (let j = 0; j < st.bgParallaxLayers.length; j++) {
+            const ly = st.bgParallaxLayers[j];
+            if (
+              !isRecord(ly) ||
+              typeof ly.sprite !== 'string' ||
+              !validSprites.has(ly.sprite) ||
+              !isFiniteNum(ly.x) || !isFiniteNum(ly.y) ||
+              !isFiniteNum(ly.w) || ly.w <= 0 ||
+              !isFiniteNum(ly.h) || ly.h <= 0
+            ) {
+              errors.push(`stages[${i}].bgParallaxLayers[${j}] requires valid sprite and finite rect`);
+            }
+          }
+        }
+      }
+      if (st.fgIslands !== undefined) {
+        if (!Array.isArray(st.fgIslands) || st.fgIslands.length > 256) {
+          errors.push(`stages[${i}].fgIslands must be an array of <= 256 spans`);
+        } else {
+          for (let j = 0; j < st.fgIslands.length; j++) {
+            const fg = st.fgIslands[j];
+            if (
+              !isRecord(fg) ||
+              !isFiniteNum(fg.startTile) || !isFiniteNum(fg.countTiles) || !isFiniteNum(fg.topY) ||
+              (fg.sprite !== undefined && (typeof fg.sprite !== 'string' || !validSprites.has(fg.sprite)))
+            ) {
+              errors.push(`stages[${i}].fgIslands[${j}] invalid`);
+            }
+          }
+        }
+      }
+      if (st.fgTiles !== undefined) {
+        if (!Array.isArray(st.fgTiles) || st.fgTiles.length > 2048) {
+          errors.push(`stages[${i}].fgTiles must be an array of <= 2048 items`);
+        } else {
+          for (let j = 0; j < st.fgTiles.length; j++) {
+            const ft = st.fgTiles[j];
+            if (!isRecord(ft) || typeof ft.sprite !== 'string' || !validSprites.has(ft.sprite) || !isFiniteNum(ft.x) || !isFiniteNum(ft.y)) {
+              errors.push(`stages[${i}].fgTiles[${j}] requires valid sprite and finite x, y`);
+            }
           }
         }
       }

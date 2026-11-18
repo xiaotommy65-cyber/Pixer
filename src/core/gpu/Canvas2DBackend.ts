@@ -27,8 +27,8 @@ export class Canvas2DBackend implements IGpuBackend {
   private readonly atlasCtx: CanvasRenderingContext2D;
   private readonly scratchCanvas: HTMLCanvasElement;
   private readonly scratchCtx: CanvasRenderingContext2D;
-  private atlasWidth = 512;
-  private atlasHeight = 512;
+  private atlasWidth = 1024;
+  private atlasHeight = 1024;
 
   private constructor(
     ctx: CanvasRenderingContext2D,
@@ -66,8 +66,8 @@ export class Canvas2DBackend implements IGpuBackend {
       if (!atlasCtx) return null;
 
       const scratchCanvas = doc.createElement('canvas');
-      scratchCanvas.width = 64;
-      scratchCanvas.height = 64;
+      scratchCanvas.width = 128;
+      scratchCanvas.height = 128;
       const scratchCtx = scratchCanvas.getContext('2d');
       if (!scratchCtx) return null;
 
@@ -324,7 +324,7 @@ export class Canvas2DBackend implements IGpuBackend {
     if (flipX) ctx.scale(-1, 1);
 
     const needsTint = r < 0.98 || g < 0.98 || bl < 0.98 || flash > 0.05;
-    if (needsTint && sw <= 64 && sh <= 64) {
+    if (needsTint && sw <= 128 && sh <= 128) {
       const sctx = this.scratchCtx;
       sctx.clearRect(0, 0, sw, sh);
       sctx.globalCompositeOperation = 'source-over';

@@ -12,11 +12,39 @@ export function testCloudberryHop(): void {
   check(validateCartridgeJson(sugarStarlightJson).ok, 'sugarStarlight.cartridge.json must pass schema validation');
   check(!validateCartridgeJson({ version: 2 }).ok, 'Validator must reject unsupported schema version');
   check(
+    validateCartridgeJson({
+      ...cloudberryJson,
+      stages: [{ ...cloudberryJson.stages[0], worldWidth: 1024 * 16, worldHeight: 256 * 16 }],
+    }).ok,
+    'Validator must accept M4.2 chunked world bounds up to 1024x256 tiles (16384x4096 px)',
+  );
+  check(
     !validateCartridgeJson({
       ...cloudberryJson,
-      stages: [{ ...cloudberryJson.stages[0], worldWidth: 257 * 16 }],
+      stages: [{ ...cloudberryJson.stages[0], worldWidth: 1025 * 16 }],
     }).ok,
-    'Validator must reject oversized tilemap width > 256 cols',
+    'Validator must reject oversized tilemap width > 1024 cols',
+  );
+  check(
+    !validateCartridgeJson({
+      ...cloudberryJson,
+      stages: [{ ...cloudberryJson.stages[0], worldHeight: 257 * 16 }],
+    }).ok,
+    'Validator must reject oversized tilemap height > 256 rows',
+  );
+  check(
+    !validateCartridgeJson({
+      ...cloudberryJson,
+      stages: [
+        {
+          ...cloudberryJson.stages[0],
+          worldWidth: 512 * 16,
+          worldHeight: 129 * 16,
+          tileGrid: { cols: 512, rows: 129, tiles: [], collision: [], spriteMap: {} },
+        },
+      ],
+    }).ok,
+    'Validator must reject dense tileGrid exceeding 65536 cells in favor of tileChunks',
   );
   check(
     !validateCartridgeJson({

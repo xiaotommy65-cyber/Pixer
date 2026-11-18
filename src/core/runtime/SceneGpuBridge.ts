@@ -39,6 +39,22 @@ export function buildDepthDrawOrder(tiles: readonly TileDesc[], entities: readon
   return entries;
 }
 
+/**
+ * Computes Pass 1 screen center coordinate for a parallax layer element so that
+ * Pass 3 overscan crop subtraction (-camFrac) produces jitter-free sub-pixel scrolling
+ * aligned identically across WebGPU, WebGL2, and Canvas2D.
+ */
+export function computeParallaxScreenCoord(
+  worldCenter: number,
+  snappedCam: number,
+  camFrac: number,
+  scroll: number,
+  viewExtent: number,
+  zoom: number,
+): number {
+  return viewExtent * 0.5 + (worldCenter - snappedCam * scroll - viewExtent * 0.5) * zoom + camFrac * (1 - scroll);
+}
+
 function resolveWallMaterialCode(t: TileDesc): 0 | 1 | 2 | 3 {
   if (t.wallMaterial === 'earth') return 1;
   if (t.wallMaterial === 'timber') return 2;
@@ -182,7 +198,24 @@ export class SceneGpuBridge {
     }
 
     const capY = sy - elevZ * this.zoom * ps;
-    gpu.drawSpriteRaw(t.sprite, sx, capY, dw, dh, false, 0, t.tint, 1, 0, false, 0.5, 0.5, 0, this.defaultPaletteRow, 0);
+    gpu.drawSpriteRaw(
+      t.sprite,
+      sx,
+      capY,
+      dw,
+      dh,
+      t.flipX ?? false,
+      0,
+      t.tint,
+      t.alpha ?? 1,
+      0,
+      false,
+      0.5,
+      0.5,
+      0,
+      this.defaultPaletteRow,
+      0,
+    );
   }
 
   private drawEntity(gpu: GpuEngine, e: EntityDesc): void {
@@ -363,6 +396,91 @@ export class SceneGpuBridge {
       gpu.drawStarGlint(Math.round(s.x) + camFracX, Math.round(s.y) + camFracY, Math.max(1.2, s.size * 0.85), s.color, pulse, 2.2);
     }
 
+    if (snap.bgParallaxLayers && snap.bgParallaxLayers.length > 0) {
+      for (let i = 0; i < snap.bgParallaxLayers.length; i++) {
+        const ly = snap.bgParallaxLayers[i];
+        const scrollX = ly.scrollX ?? 0.35;
+        const scrollY = ly.scrollY ?? 0.2;
+        const dw = ly.w * this.zoom;
+        const dh = ly.h * this.zoom;
+        const baseCy = computeParallaxScreenCoord(
+          ly.y + ly.h * 0.5,
+          snappedCamY,
+          camFracY,
+          scrollY,
+          this.viewH,
+          this.zoom,
+        );
+        if (baseCy + dh * 0.5 < -this.cullPad || baseCy - dh * 0.5 > this.viewH + this.cullPad) continue;
+
+        const baseCx = computeParallaxScreenCoord(
+          ly.x + ly.w * 0.5,
+          snappedCamX,
+          camFracX,
+          scrollX,
+          this.viewW,
+          this.zoom,
+        );
+        const alpha = ly.alpha ?? 1;
+        const flipX = ly.flipX ?? false;
+        const additive = ly.additive ?? false;
+        const paletteRow = ly.paletteRow ?? this.defaultPaletteRow;
+        const emissive = ly.emissive ?? (additive ? 0.85 : 0);
+
+        const repeatW = ly.repeatW ?? 0;
+        if (repeatW > ly.w) {
+          const stepWorld = Math.max(4, ly.repeatStepX ?? ly.w);
+          const stepScreen = stepWorld * this.zoom;
+          const totalReps = Math.ceil(repeatW / stepWorld);
+          const padScreen = this.cullPad + dw * 0.5;
+          const kMin = Math.max(0, Math.floor((-padScreen - baseCx) / stepScreen));
+          const kMax = Math.min(totalReps - 1, Math.ceil((this.viewW + padScreen - baseCx) / stepScreen));
+          for (let k = kMin; k <= kMax; k++) {
+            const cx = baseCx + k * stepScreen;
+            if (cx + dw * 0.5 < -this.cullPad || cx - dw * 0.5 > this.viewW + this.cullPad) continue;
+            gpu.drawSpriteRaw(
+              ly.sprite,
+              cx,
+              baseCy,
+              dw,
+              dh,
+              flipX,
+              0,
+              ly.tint,
+              alpha,
+              0,
+              additive,
+              0.5,
+              0.5,
+              0,
+              paletteRow,
+              emissive,
+            );
+          }
+        } else {
+          if (baseCx + dw * 0.5 < -this.cullPad || baseCx - dw * 0.5 > this.viewW + this.cullPad) continue;
+          gpu.drawSpriteRaw(
+            ly.sprite,
+            baseCx,
+            baseCy,
+            dw,
+            dh,
+            flipX,
+            0,
+            ly.tint,
+            alpha,
+            0,
+            additive,
+            0.5,
+            0.5,
+            0,
+            paletteRow,
+            emissive,
+          );
+        }
+      }
+    }
+
     const cloudOffsetX = camFracX * 0.55;
     for (let i = 0; i < snap.bgClouds.length; i++) {
       const c = snap.bgClouds[i];
@@ -410,6 +528,12 @@ export class SceneGpuBridge {
       }
       for (let i = 0; i < snap.entities.length; i++) {
         this.drawEntity(gpu, snap.entities[i]);
+      }
+    }
+
+    if (snap.fgTiles && snap.fgTiles.length > 0) {
+      for (let i = 0; i < snap.fgTiles.length; i++) {
+        this.drawTile(gpu, snap.fgTiles[i]);
       }
     }
 

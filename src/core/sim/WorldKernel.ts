@@ -4,10 +4,11 @@ import { InputMap } from '../input/InputMap.ts';
 import { SpatialHash } from '../math/SpatialHash.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type {
-  BgmTheme,
-  CartridgeId,
   BgCloudDesc,
+  BgParallaxLayerDesc,
+  BgmTheme,
   BgStarDesc,
+  CartridgeId,
   InputState,
   RectBox,
   RenderSceneSnapshot,
@@ -37,7 +38,7 @@ import {
   type WorldConfig,
   type WorldEntity,
 } from './WorldInternalTypes.ts';
-import { buildWorldSnapshot } from './WorldSnapshot.ts';
+import { buildWorldSnapshot, createWorldSnapshotPool, type WorldSnapshotPool } from './WorldSnapshot.ts';
 
 export type { HeroRelics, HeroState, MovingPlatform, WorldConfig, WorldEntity };
 
@@ -53,11 +54,14 @@ export class WorldKernel {
   public readonly rules = new RuleRegistry(ENTITY_RULE_MATRIX);
   public readonly entityHash = new SpatialHash(MAX_ENTITIES, 32, 1024, MAX_ENTITIES * 4, 36);
   public readonly pairQuerySlots = new Int32Array(MAX_ENTITIES);
+  public readonly solidHash = new SpatialHash(4096, 32, 1024, 4096 * 4, 36);
+  public readonly solidQuerySlots = new Int32Array(256);
 
   public cartridgeId: CartridgeId;
   public worldW: number;
   public worldH: number;
   public readonly viewport: LogicalViewport;
+  public readonly snapshotPool: WorldSnapshotPool;
   public skyTop: string;
   public skyBottom: string;
   public ambientDarkness: number;
@@ -104,11 +108,15 @@ export class WorldKernel {
   public solids: RectBox[] = [];
   public movingPlatforms: MovingPlatform[] = [];
   public tiles: TileDesc[] = [];
+  public fgTiles: TileDesc[] = [];
   public entities: WorldEntity[] = [];
   public sparks: SparkProjectile[] = [];
+  public bgParallaxLayers: BgParallaxLayerDesc[] = [];
   public bgClouds: BgCloudDesc[] = [];
   public bgStars: BgStarDesc[] = [];
 
+  private solidsDirty = true;
+  private hashedSolidsCount = -1;
   private nextId = 1;
   private starsTotal = 0;
   private starsCollected = 0;
@@ -120,6 +128,7 @@ export class WorldKernel {
     this.worldW = cfg.worldWidth ?? GAME_W;
     this.worldH = cfg.worldHeight ?? GAME_H;
     this.viewport = resolveLogicalViewport(cfg.viewport);
+    this.snapshotPool = createWorldSnapshotPool(this.cartridgeId, this.viewport);
     this.skyTop = cfg.skyTop ?? '#8fd8ff';
     this.skyBottom = cfg.skyBottom ?? '#fff4df';
     this.ambientDarkness = cfg.ambientDarkness ?? 0;
@@ -127,6 +136,23 @@ export class WorldKernel {
     this.statusBanner = cfg.statusBanner ?? '';
     this.stage = cfg.stage;
     this.bgmTheme = cfg.bgmTheme;
+  }
+
+  public markSolidsDirty(): void {
+    this.solidsDirty = true;
+    this.hashedSolidsCount = -1;
+  }
+
+  public ensureSolidHash(): void {
+    if (!this.solidsDirty && this.hashedSolidsCount === this.solids.length) return;
+    this.solidsDirty = false;
+    this.hashedSolidsCount = this.solids.length;
+    this.solidHash.clear();
+    const len = Math.min(this.solids.length, this.solidHash.capacity);
+    for (let i = 0; i < len; i++) {
+      const s = this.solids[i];
+      this.solidHash.insertBox(i, s.x, s.y, s.w, s.h);
+    }
   }
 
   public resetStage(cfg: Partial<WorldConfig> & { spawnX?: number; spawnY?: number }): void {
@@ -141,8 +167,12 @@ export class WorldKernel {
     if (cfg.bgmTheme !== undefined) this.bgmTheme = cfg.bgmTheme;
 
     this.solids = [];
+    this.solidsDirty = true;
+    this.hashedSolidsCount = -1;
     this.movingPlatforms = [];
     this.tiles = [];
+    this.fgTiles = [];
+    this.bgParallaxLayers = [];
     this.entities = [];
     this.sparks = [];
     this.juice.reset();
@@ -170,6 +200,36 @@ export class WorldKernel {
     this.hero.checkpoint = { x: this.hero.x, y: this.hero.y };
   }
 
+  public addParallaxLayer(layer: BgParallaxLayerDesc): void {
+    this.bgParallaxLayers.push(layer);
+  }
+
+  public addForegroundTileRect(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    sprite: SpriteId = 'tree_canopy',
+    opts?: { tint?: string; alpha?: number; flipX?: boolean; elevationZ?: number; sortY?: number },
+  ): void {
+    for (let tx = x; tx < x + w; tx += 16) {
+      for (let ty = y; ty < y + h; ty += 16) {
+        this.fgTiles.push({
+          sprite,
+          x: tx,
+          y: ty,
+          w: Math.min(16, x + w - tx),
+          h: Math.min(16, y + h - ty),
+          tint: opts?.tint,
+          alpha: opts?.alpha,
+          flipX: opts?.flipX,
+          elevationZ: opts?.elevationZ,
+          sortY: opts?.sortY,
+        });
+      }
+    }
+  }
+
   public addSolidTileRect(
     x: number,
     y: number,
@@ -180,6 +240,8 @@ export class WorldKernel {
     unlockable = false,
   ): void {
     this.solids.push({ x, y, w, h, kind: 'solid', unlockable });
+    this.solidsDirty = true;
+    this.hashedSolidsCount = -1;
     const suspended = y + h < this.worldH - 4;
     const lipColor = sprite === 'grass' || sprite === 'dirt' ? '#4a3529' : '#2e2b42';
     for (let tx = x; tx < x + w; tx += 16) {
@@ -206,6 +268,8 @@ export class WorldKernel {
   public addCloudPlatform(x: number, y: number, tilesWide = 3): void {
     const count = Math.max(2, Math.min(10, Math.round(tilesWide)));
     this.solids.push({ x, y, w: count * 16, h: 10, kind: 'cloud' });
+    this.solidsDirty = true;
+    this.hashedSolidsCount = -1;
     this.tiles.push({ sprite: 'cloud_l', x, y, w: 16, h: 16 });
     for (let i = 1; i < count - 1; i++) {
       this.tiles.push({ sprite: 'cloud_m', x: x + i * 16, y, w: 16, h: 16 });
@@ -287,6 +351,14 @@ export class WorldKernel {
     return { collected: this.starsCollected, total: this.starsTotal };
   }
 
+  public getStarsCollected(): number {
+    return this.starsCollected;
+  }
+
+  public getStarsTotal(): number {
+    return this.starsTotal;
+  }
+
   public consumeSkillYCooldown(actions: RuleWorldActions): boolean {
     if (this.pulseCooldown > 0) return false;
     if (this.onSkillYOverride && this.onSkillYOverride(actions)) return false;
@@ -345,6 +417,8 @@ export class WorldKernel {
       unlockGates: () => {
         this.gateUnlocked = true;
         this.solids = this.solids.filter((s) => !s.unlockable);
+        this.solidsDirty = true;
+        this.hashedSolidsCount = -1;
         this.tiles = this.tiles.filter((t) => !t.unlockable);
         for (const e of this.entities) {
           if (e.tags.has('gate')) {
