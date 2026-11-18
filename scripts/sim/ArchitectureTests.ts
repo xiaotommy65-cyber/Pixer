@@ -738,8 +738,18 @@ export function testM41DynamicViewportAndCamera(): void {
   const initX = cam.x;
   const initY = cam.y;
   check(initX === 213 && initY === 120, 'CameraDirector must clamp center to half of dynamic viewport');
+  const alignedFields = cam.toSnapshotFields(1.5, -2.5);
+  check(
+    alignedFields.cameraX === 1.5 && alignedFields.cameraY === -2.5,
+    `CameraDirector.toSnapshotFields must align against dynamic viewW/viewH (got ${alignedFields.cameraX}, ${alignedFields.cameraY})`,
+  );
   cam.panTo(900, 900, 1.0, 0);
   check(cam.x === 639 && cam.y === 360, 'CameraDirector must clamp max bounds using dynamic viewport');
+  const maxAligned = cam.toSnapshotFields();
+  check(
+    maxAligned.cameraX === 639 - 213 && maxAligned.cameraY === 360 - 120,
+    'CameraDirector.toSnapshotFields max bounds must offset cleanly by dynamic viewport half-extents',
+  );
 
   const tallCart: CartridgeJsonV1 = {
     version: 1,

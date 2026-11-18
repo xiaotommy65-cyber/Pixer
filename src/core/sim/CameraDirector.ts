@@ -1,4 +1,5 @@
 import { GAME_H, GAME_W } from '../gpu/GpuTypes.ts';
+import { stepSpringInto } from '../math/SpringDynamics.ts';
 import { clamp } from '../types/WorldTypes.ts';
 
 export interface CameraBounds {
@@ -15,10 +16,12 @@ function smoothstep01(t: number): number {
   return c * c * (3 - 2 * c);
 }
 
+const CAM_SPRING_OUT = new Float64Array(2);
+
 /**
  * Engine 2.0 CameraDirector:
- * manages smooth target tracking, directional velocity look-ahead, dynamic zoom,
- * room/chapter boundary clamping, scripted cutscene panning, and widescreen letterbox bars.
+ * manages smooth 2nd-order spring target tracking, directional velocity look-ahead,
+ * dynamic zoom, room/chapter boundary clamping, scripted cutscene panning, and letterbox bars.
  */
 export class CameraDirector {
   public x = GAME_W * 0.5;
@@ -29,12 +32,18 @@ export class CameraDirector {
 
   private viewW = GAME_W;
   private viewH = GAME_H;
+  private vx = 0;
+  private vy = 0;
+  private zoomVel = 0;
+  private prevDesiredX = GAME_W * 0.5;
+  private prevDesiredY = GAME_H * 0.5;
+  private hasPrevDesired = false;
   private targetZoom = 1.0;
   private targetLetterbox = 0;
   private lookAheadX = 0;
   private lookAheadY = 0;
   private bounds: CameraBounds | null = null;
-  private followDamp = 8.5;
+  private followFreqHz = 2.6;
 
   private panStartX = 0;
   private panStartY = 0;
@@ -49,16 +58,22 @@ export class CameraDirector {
     this.bounds = bounds;
     this.zoom = clamp(zoom, 0.65, 1.85);
     this.targetZoom = this.zoom;
+    this.zoomVel = 0;
     this.letterbox = 0;
     this.targetLetterbox = 0;
     this.lookAheadX = 0;
     this.lookAheadY = 0;
+    this.vx = 0;
+    this.vy = 0;
+    this.hasPrevDesired = false;
     this.mode = 'follow';
     this.panDuration = 0;
     this.panElapsed = 0;
     const clamped = this.clampCenter(focusX, focusY, this.zoom);
     this.x = clamped.x;
     this.y = clamped.y;
+    this.prevDesiredX = clamped.x;
+    this.prevDesiredY = clamped.y;
   }
 
   public setViewport(width: number, height: number): void {
@@ -72,6 +87,8 @@ export class CameraDirector {
       const clamped = this.clampCenter(this.x, this.y, this.zoom);
       this.x = clamped.x;
       this.y = clamped.y;
+      this.vx = 0;
+      this.vy = 0;
     }
   }
 
@@ -84,6 +101,10 @@ export class CameraDirector {
   }
 
   public panTo(destX: number, destY: number, destZoom: number, durationSec: number): void {
+    this.vx = 0;
+    this.vy = 0;
+    this.zoomVel = 0;
+    this.hasPrevDesired = false;
     if (durationSec <= 0.01) {
       this.mode = 'pan';
       this.zoom = clamp(destZoom, 0.65, 1.85);
@@ -111,6 +132,9 @@ export class CameraDirector {
     this.mode = 'follow';
     this.setTargetZoom(zoom);
     this.panDuration = 0;
+    this.vx = 0;
+    this.vy = 0;
+    this.hasPrevDesired = false;
   }
 
   public lockAt(centerX: number, centerY: number, zoom = 1.0): void {
@@ -143,7 +167,6 @@ export class CameraDirector {
 
   public step(dt: number, targetX: number, targetY: number, velX = 0, velY = 0): void {
     const clampedDt = Math.min(0.08, Math.max(0, dt));
-    const zoomBlend = 1 - Math.exp(-6.5 * clampedDt);
     const lbBlend = 1 - Math.exp(-9.0 * clampedDt);
     this.letterbox += (this.targetLetterbox - this.letterbox) * lbBlend;
 
@@ -159,17 +182,22 @@ export class CameraDirector {
       return;
     }
 
-    this.zoom += (this.targetZoom - this.zoom) * zoomBlend;
+    stepSpringInto(this.zoom, this.zoomVel, this.targetZoom, this.targetZoom, 2.0, 1.0, 0, clampedDt, CAM_SPRING_OUT, 0);
+    this.zoom = clamp(CAM_SPRING_OUT[0], 0.65, 1.85);
+    this.zoomVel = CAM_SPRING_OUT[1];
 
     if (this.mode === 'lock') {
       const c = this.clampCenter(this.panDestX, this.panDestY, this.zoom);
-      const posBlend = 1 - Math.exp(-5.0 * clampedDt);
-      this.x += (c.x - this.x) * posBlend;
-      this.y += (c.y - this.y) * posBlend;
+      stepSpringInto(this.x, this.vx, c.x, c.x, 1.8, 1.0, 0, clampedDt, CAM_SPRING_OUT, 0);
+      this.x = CAM_SPRING_OUT[0];
+      this.vx = CAM_SPRING_OUT[1];
+      stepSpringInto(this.y, this.vy, c.y, c.y, 1.8, 1.0, 0, clampedDt, CAM_SPRING_OUT, 0);
+      this.y = CAM_SPRING_OUT[0];
+      this.vy = CAM_SPRING_OUT[1];
       return;
     }
 
-    // Look-ahead anticipates movement direction subtly without jarring snaps
+    // Look-ahead anticipates movement direction smoothly without jarring snaps
     const desiredLookX = clamp(velX * 0.22, -26, 26);
     const desiredLookY = clamp(velY * 0.16, -18, 18);
     const lookBlend = 1 - Math.exp(-4.5 * clampedDt);
@@ -178,22 +206,39 @@ export class CameraDirector {
 
     const desiredX = targetX + this.lookAheadX;
     const desiredY = targetY + this.lookAheadY;
-    const posBlend = 1 - Math.exp(-this.followDamp * clampedDt);
+    const prevDx = this.hasPrevDesired ? this.prevDesiredX : desiredX;
+    const prevDy = this.hasPrevDesired ? this.prevDesiredY : desiredY;
+    this.prevDesiredX = desiredX;
+    this.prevDesiredY = desiredY;
+    this.hasPrevDesired = true;
 
-    // Deadzone (3px) eliminates subpixel micro-jitter when standing still
-    if (Math.hypot(desiredX - this.x, desiredY - this.y) > 2.5) {
-      this.x += (desiredX - this.x) * posBlend;
-      this.y += (desiredY - this.y) * posBlend;
+    // Deadzone (2.5px) at low settle speed eliminates subpixel micro-jitter when standing still
+    if (Math.hypot(desiredX - this.x, desiredY - this.y) > 2.5 || Math.hypot(this.vx, this.vy) > 4.0) {
+      stepSpringInto(this.x, this.vx, desiredX, prevDx, this.followFreqHz, 1.0, 0.25, clampedDt, CAM_SPRING_OUT, 0);
+      this.x = CAM_SPRING_OUT[0];
+      this.vx = CAM_SPRING_OUT[1];
+      stepSpringInto(this.y, this.vy, desiredY, prevDy, this.followFreqHz, 1.0, 0.25, clampedDt, CAM_SPRING_OUT, 0);
+      this.y = CAM_SPRING_OUT[0];
+      this.vy = CAM_SPRING_OUT[1];
+    } else {
+      this.vx = 0;
+      this.vy = 0;
     }
 
     const clamped = this.clampCenter(this.x, this.y, this.zoom);
-    this.x = clamped.x;
-    this.y = clamped.y;
+    if (clamped.x !== this.x) {
+      this.x = clamped.x;
+      this.vx = 0;
+    }
+    if (clamped.y !== this.y) {
+      this.y = clamped.y;
+      this.vy = 0;
+    }
   }
 
   /**
-   * Produces RenderSceneSnapshot-compatible camera fields centered cleanly around (this.x, this.y).
-   * SceneGpuBridge derives camCenterX = cameraX + GAME_W * 0.5, preserving full compatibility.
+   * Produces RenderSceneSnapshot-compatible camera fields aligned to current logical viewW/viewH.
+   * SceneGpuBridge derives camCenter = camera + viewSize * 0.5, keeping multi-aspect centering exact.
    */
   public toSnapshotFields(shakeX = 0, shakeY = 0): {
     cameraX: number;
@@ -202,8 +247,8 @@ export class CameraDirector {
     cameraLetterbox: number;
   } {
     return {
-      cameraX: this.x - GAME_W * 0.5 + shakeX,
-      cameraY: this.y - GAME_H * 0.5 + shakeY,
+      cameraX: this.x - this.viewW * 0.5 + shakeX,
+      cameraY: this.y - this.viewH * 0.5 + shakeY,
       cameraZoom: this.zoom,
       cameraLetterbox: this.letterbox,
     };

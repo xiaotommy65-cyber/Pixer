@@ -1,10 +1,14 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
+import { fbm2D } from '../math/NoiseMath.ts';
+import { stepSpringInto } from '../math/SpringDynamics.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type { FeedbackPreset, ParticleDesc, SimEvent } from '../types/WorldTypes.ts';
 
 export interface SquashSpring {
   scaleX: number;
   scaleY: number;
+  vx?: number;
+  vy?: number;
 }
 
 export interface FeedbackRecipe {
@@ -188,15 +192,16 @@ export class JuiceSystem {
     if (Math.abs(this.kickX) < 0.01) this.kickX = 0;
     if (Math.abs(this.kickY) < 0.01) this.kickY = 0;
 
-    // Trauma^2 multi-frequency harmonic shake offset with 0.65x vertical comfort damping
+    // Trauma^2 continuous 2-octave FBM noise shake with 0.65x vertical comfort damping
     const scale = Math.max(0, shakeScale);
     let oscX = 0;
     let oscY = 0;
     if (this.trauma > 0) {
       this.trauma = Math.max(0, this.trauma - dt * 1.9);
       const mag = this.trauma * this.trauma * 7.5 * scale;
-      oscX = (Math.sin(this.visualTime * 57.3) * 0.7 + Math.cos(this.visualTime * 119.7) * 0.3) * mag;
-      oscY = (Math.cos(this.visualTime * 71.1) * 0.7 + Math.sin(this.visualTime * 137.3) * 0.3) * mag * 0.65;
+      const nt = this.visualTime * 22.0;
+      oscX = fbm2D(nt, 3.7, 2, 2.05, 0.45, 11) * mag;
+      oscY = fbm2D(41.3, nt, 2, 2.05, 0.45, 37) * mag * 0.65;
     }
     this.shakeX = oscX + this.kickX * scale;
     this.shakeY = oscY + this.kickY * scale * 0.8;
@@ -356,8 +361,30 @@ export class JuiceSystem {
   }
 }
 
+const SQUASH_SPRING_OUT = new Float64Array(2);
+
+/** Zero-GC helper that imparts a squash-and-stretch deformation onto an existing spring object. */
+export function triggerSquash(spring: SquashSpring, sx: number, sy: number, vx = 0, vy = 0): void {
+  spring.scaleX = sx;
+  spring.scaleY = sy;
+  spring.vx = vx;
+  spring.vy = vy;
+}
+
+/**
+ * Steps a 2nd-order underdamped harmonic spring back to (1, 1) with natural tactile bounce.
+ * Maps legacy `speed` values (~13..15) smoothly to frequency Hz while staying unconditionally stable.
+ */
 export function stepSquashSpring(spring: SquashSpring, dt: number, speed = 13): void {
-  const blend = Math.min(1, dt * speed);
-  spring.scaleX += (1 - spring.scaleX) * blend;
-  spring.scaleY += (1 - spring.scaleY) * blend;
+  if (dt <= 1e-8) return;
+  const freqHz = Math.max(1.5, speed * 0.28);
+  const zeta = 0.52;
+
+  stepSpringInto(spring.scaleX, spring.vx ?? 0, 1, 1, freqHz, zeta, 0, dt, SQUASH_SPRING_OUT, 0);
+  spring.scaleX = Math.max(0.45, Math.min(1.85, SQUASH_SPRING_OUT[0]));
+  spring.vx = SQUASH_SPRING_OUT[1];
+
+  stepSpringInto(spring.scaleY, spring.vy ?? 0, 1, 1, freqHz, zeta, 0, dt, SQUASH_SPRING_OUT, 0);
+  spring.scaleY = Math.max(0.45, Math.min(1.85, SQUASH_SPRING_OUT[0]));
+  spring.vy = SQUASH_SPRING_OUT[1];
 }

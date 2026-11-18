@@ -17,6 +17,23 @@ import {
   oklchToOklab,
   srgbToLinear,
 } from '../../src/core/math/ColorMath.ts';
+import {
+  curlNoise2DInto,
+  fbm2D,
+  hash2i,
+  simplex2D,
+  simplex2DGradInto,
+} from '../../src/core/math/NoiseMath.ts';
+import {
+  evalCatmullRom2DInto,
+  solveTwoBoneIkInto,
+  stepSpringBuffer1D,
+  stepSpringExact1D,
+  stepSpringInto,
+  stepSpringTrack1D,
+  VerletChain,
+  type Spring1DState,
+} from '../../src/core/math/SpringDynamics.ts';
 import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
 import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGovernor.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
@@ -24,7 +41,7 @@ import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
 import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
 import { CutsceneSequencer } from '../../src/core/sim/CutsceneSequencer.ts';
 import { EventActionVm, MAX_VM_OPS_PER_TICK, type VmCollisionPair } from '../../src/core/sim/EventActionVm.ts';
-import { JuiceSystem } from '../../src/core/sim/JuiceSystem.ts';
+import { JuiceSystem, stepSquashSpring, triggerSquash } from '../../src/core/sim/JuiceSystem.ts';
 import { EF_PLAYER, MAX_ENTITIES, SoaEntityPool } from '../../src/core/sim/SoaEntityPool.ts';
 import {
   AUTO_MASK_E,
@@ -588,4 +605,320 @@ export function testModule1ColorMathAndShaderParity(): void {
     `[BENCH] ColorMath 50k Oklab mix: ${benchMs.toFixed(2)}ms (heapDelta=${heapDeltaKb}KB, maxOracleDiff=${maxOracleDiff.toExponential(2)})`,
   );
   console.log('[SIM OK] Module 1 ColorMath (Oklab/Hue-Shift Oracle + Bayer 4x4 + Integer Hash Parity) verified');
+}
+
+function oracleAnalyticalSpring(
+  e0: number,
+  v0: number,
+  target: number,
+  f: number,
+  zeta: number,
+  totalTime: number,
+): [number, number] {
+  const omega = Math.PI * 2 * f;
+  if (Math.abs(zeta - 1) < 1e-6) {
+    const decay = Math.exp(-omega * totalTime);
+    const wt = omega * totalTime;
+    return [
+      target + decay * (e0 * (1 + wt) + v0 * totalTime),
+      decay * (v0 * (1 - wt) - e0 * omega * wt),
+    ];
+  }
+  if (zeta < 1) {
+    const wd = omega * Math.sqrt(1 - zeta * zeta);
+    const zw = zeta * omega;
+    const decay = Math.exp(-zw * totalTime);
+    const c1 = e0;
+    const c2 = (v0 + zw * e0) / wd;
+    const ca = Math.cos(wd * totalTime);
+    const sa = Math.sin(wd * totalTime);
+    return [
+      target + decay * (c1 * ca + c2 * sa),
+      decay * ((c2 * wd - zw * c1) * ca - (c1 * wd + zw * c2) * sa),
+    ];
+  }
+  const gamma = omega * Math.sqrt(zeta * zeta - 1);
+  const r1 = -omega * zeta + gamma;
+  const r2 = -omega * zeta - gamma;
+  const A = (v0 - r2 * e0) / (r1 - r2);
+  const B = e0 - A;
+  const e1 = Math.exp(r1 * totalTime);
+  const e2 = Math.exp(r2 * totalTime);
+  return [target + A * e1 + B * e2, A * r1 * e1 + B * r2 * e2];
+}
+
+export function testModule2SpringsAndNoiseOracle(): void {
+  const rng = new SeededRng(0x517c0002);
+
+  // 1. Differential Oracle: Continuous Analytical ODE across Underdamped, Critical, Overdamped & 30/60/120fps
+  let maxOdeDiff = 0;
+
+  // 1a. Underdamped: genuinely overshoots target and matches analytical solution at 1.0s
+  const underState: Spring1DState = { value: 0, vel: 0 };
+  let sawUnderOvershoot = false;
+  for (let i = 0; i < 60; i++) {
+    stepSpringExact1D(underState, 100, 3.2, 0.35, 1 / 60);
+    if (underState.value > 105) sawUnderOvershoot = true;
+  }
+  const [refUnderY, refUnderV] = oracleAnalyticalSpring(-100, 0, 100, 3.2, 0.35, 1.0);
+  maxOdeDiff = Math.max(maxOdeDiff, Math.abs(underState.value - refUnderY), Math.abs(underState.vel - refUnderV));
+  check(sawUnderOvershoot, 'Underdamped spring (zeta=0.35) must genuinely overshoot target');
+  check(maxOdeDiff < 1e-10, `Underdamped 60-step spring diverged from analytical ODE (err=${maxOdeDiff})`);
+
+  // 1b. Critically damped (zeta=1): strictly ZERO overshoot + 30/60/120Hz frame-rate invariance
+  const s30: Spring1DState = { value: 0, vel: 0 };
+  const s60: Spring1DState = { value: 0, vel: 0 };
+  const s120: Spring1DState = { value: 0, vel: 0 };
+  for (let i = 0; i < 30; i++) {
+    stepSpringExact1D(s30, 100, 2.8, 1.0, 1 / 30);
+    check(s30.value >= 0 && s30.value <= 100 + 1e-12, `Critically damped 30Hz overshot target (${s30.value})`);
+  }
+  for (let i = 0; i < 60; i++) {
+    stepSpringExact1D(s60, 100, 2.8, 1.0, 1 / 60);
+    check(s60.value >= 0 && s60.value <= 100 + 1e-12, `Critically damped 60Hz overshot target (${s60.value})`);
+  }
+  for (let i = 0; i < 120; i++) {
+    stepSpringExact1D(s120, 100, 2.8, 1.0, 1 / 120);
+    check(s120.value >= 0 && s120.value <= 100 + 1e-12, `Critically damped 120Hz overshot target (${s120.value})`);
+  }
+  const [refCritY, refCritV] = oracleAnalyticalSpring(-100, 0, 100, 2.8, 1.0, 1.0);
+  const fpsDrift = Math.max(
+    Math.abs(s30.value - refCritY),
+    Math.abs(s60.value - refCritY),
+    Math.abs(s120.value - refCritY),
+    Math.abs(s60.vel - refCritV),
+  );
+  maxOdeDiff = Math.max(maxOdeDiff, fpsDrift);
+  check(fpsDrift < 1e-10, `Spring 30/60/120Hz invariance exceeded tolerance (${fpsDrift})`);
+
+  // 1c. Overdamped: zero overshoot & analytical agreement
+  const overState: Spring1DState = { value: 0, vel: 0 };
+  for (let i = 0; i < 60; i++) {
+    stepSpringExact1D(overState, 100, 3.0, 1.65, 1 / 60);
+    check(overState.value >= 0 && overState.value <= 100 + 1e-12, `Overdamped spring overshot target (${overState.value})`);
+  }
+  const [refOverY, refOverV] = oracleAnalyticalSpring(-100, 0, 100, 3.0, 1.65, 1.0);
+  maxOdeDiff = Math.max(maxOdeDiff, Math.abs(overState.value - refOverY), Math.abs(overState.vel - refOverV));
+  check(maxOdeDiff < 1e-10, `Overdamped 60-step spring diverged from analytical ODE (err=${maxOdeDiff})`);
+
+  // 1d. Lyapunov monotonic energy decay across 1,000 randomized springs & extreme dt stability
+  const lyapPair = new Float64Array(2);
+  for (let i = 0; i < 1000; i++) {
+    const f = 0.5 + rng.next() * 24;
+    const zeta = 0.05 + rng.next() * 2.95;
+    const dt = 1 / 240 + rng.next() * (1 / 20 - 1 / 240);
+    const omega = Math.PI * 2 * f;
+    const e0 = (rng.next() - 0.5) * 200;
+    const v0 = (rng.next() - 0.5) * 400;
+    const energyBefore = 0.5 * omega * omega * e0 * e0 + 0.5 * v0 * v0;
+    stepSpringInto(100 + e0, v0, 100, 100, f, zeta, 0, dt, lyapPair, 0);
+    const e1 = lyapPair[0] - 100;
+    const v1 = lyapPair[1];
+    const energyAfter = 0.5 * omega * omega * e1 * e1 + 0.5 * v1 * v1;
+    check(Number.isFinite(e1) && Number.isFinite(v1), 'Randomized spring emitted NaN/Infinity');
+    check(
+      energyAfter <= energyBefore * (1 + 1e-11) + 1e-12,
+      `Lyapunov energy must decay monotonically (before=${energyBefore}, after=${energyAfter})`,
+    );
+  }
+  stepSpringInto(Number.NaN, 5, 10, 10, 4, 1, 0, 3.0, lyapPair, 0);
+  check(Number.isFinite(lyapPair[0]) && Number.isFinite(lyapPair[1]), 'Spring must guard NaN and huge dt=3s cleanly');
+
+  // 1e. Velocity tracking response (r=1 zero steady-state ramp lag, r<0 anticipation) & Squash bounce
+  const rampZeroLag: Spring1DState = { value: 0, vel: 0 };
+  for (let i = 1; i <= 120; i++) {
+    const prevX = 120 * ((i - 1) / 60);
+    const nextX = 120 * (i / 60);
+    stepSpringTrack1D(rampZeroLag, nextX, prevX, 3.5, 1.0, 1.0, 1 / 60);
+  }
+  check(
+    Math.abs(rampZeroLag.value - 240) < 0.5,
+    `Spring r=1 must track constant velocity ramp with <0.5px steady-state lag (got ${Math.abs(rampZeroLag.value - 240).toFixed(3)})`,
+  );
+  const antState: Spring1DState = { value: 0, vel: 0 };
+  stepSpringTrack1D(antState, 1, 0, 3.0, 1.0, -0.6, 1 / 60);
+  check(antState.value < 0, 'Negative response r=-0.6 must trigger brief reverse anticipation');
+
+  // SoA buffer stepper & SquashSpring underdamped bounce
+  const soaVals = new Float32Array([0.75]);
+  const soaVels = new Float32Array([0]);
+  for (let i = 0; i < 60; i++) stepSpringBuffer1D(soaVals, soaVels, 0, 1.0, 3.5, 0.5, 1 / 60);
+  check(Math.abs(soaVals[0] - 1.0) < 0.05, 'stepSpringBuffer1D must settle smoothly into pre-allocated SoA arrays');
+
+  const sq = { scaleX: 1, scaleY: 1, vx: 0, vy: 0 };
+  triggerSquash(sq, 1.35, 0.72);
+  let sawSquashOvershoot = false;
+  for (let i = 0; i < 45; i++) {
+    stepSquashSpring(sq, 1 / 60, 14);
+    if (sq.scaleX < 0.97) sawSquashOvershoot = true;
+  }
+  check(sawSquashOvershoot && Math.abs(sq.scaleX - 1) < 0.06, 'stepSquashSpring should execute tactile underdamped bounce');
+
+  // 2. Zero-GC VerletChain constraint & wind/floor Oracle (240 animated ticks)
+  const scarfCalm = new VerletChain(8, 3.5);
+  const scarfWindy = new VerletChain(8, 3.5);
+  scarfCalm.reset(100, 80, -1, 0);
+  scarfWindy.reset(100, 80, -1, 0);
+  const windOut = new Float64Array(2);
+  let maxSegErr = 0;
+  const floorLimit = 104;
+  for (let f = 0; f < 240; f++) {
+    const ax = 100 + Math.sin(f * 0.14) * 32;
+    const ay = 80 + Math.cos(f * 0.21) * 14;
+    curlNoise2DInto(ax * 0.03 + f * 0.02, ay * 0.03, windOut, 0, 0.85, 7);
+    scarfCalm.step(1 / 60, ax, ay, 0, 260, 0.96, 8, floorLimit);
+    scarfWindy.step(1 / 60, ax, ay, windOut[0] * 420, 260 + windOut[1] * 180, 0.96, 8, floorLimit);
+
+    for (let n = 0; n < scarfWindy.count - 1; n++) {
+      const dist = Math.hypot(scarfWindy.posX[n + 1] - scarfWindy.posX[n], scarfWindy.posY[n + 1] - scarfWindy.posY[n]);
+      maxSegErr = Math.max(maxSegErr, Math.abs(dist - scarfWindy.segmentLength));
+      check(scarfWindy.posY[n + 1] <= floorLimit + 1e-4, 'VerletChain must obey floor boundary');
+    }
+  }
+  const tailDiff = Math.hypot(
+    scarfWindy.posX[7] - scarfCalm.posX[7],
+    scarfWindy.posY[7] - scarfCalm.posY[7],
+  );
+  check(maxSegErr < 0.25, `VerletChain distance constraint error exceeded 0.25px (got ${maxSegErr.toFixed(4)})`);
+  check(tailDiff > 0.5, 'VerletChain under Curl wind must diverge physically from still conditions');
+
+  // 3. 2-Bone IK FK Oracle + Catmull-Rom Boundary Oracle (1,000 cases)
+  const ikOut = new Float64Array(4);
+  for (let i = 0; i < 1000; i++) {
+    const rx = (rng.next() - 0.5) * 40;
+    const ry = (rng.next() - 0.5) * 40;
+    const l1 = 8 + rng.next() * 24;
+    const l2 = 6 + rng.next() * 22;
+    const distScale = i === 0 ? 0 : i === 1 ? 3.0 : rng.next() * 1.4;
+    const ang = rng.next() * Math.PI * 2;
+    const tx = rx + Math.cos(ang) * (l1 + l2) * distScale;
+    const ty = ry + Math.sin(ang) * (l1 + l2) * distScale;
+    const bend = i % 2 === 0 ? 1 : -1;
+
+    solveTwoBoneIkInto(rx, ry, tx, ty, l1, l2, bend, ikOut, 0);
+    const jx = ikOut[0];
+    const jy = ikOut[1];
+    const ex = ikOut[2];
+    const ey = ikOut[3];
+    check(
+      Number.isFinite(jx) && Number.isFinite(jy) && Number.isFinite(ex) && Number.isFinite(ey),
+      '2-Bone IK emitted NaN/Infinity',
+    );
+    const actualL1 = Math.hypot(jx - rx, jy - ry);
+    const actualL2 = Math.hypot(ex - jx, ey - jy);
+    check(Math.abs(actualL1 - l1) < 1e-4 && Math.abs(actualL2 - l2) < 1e-4, '2-Bone IK FK lengths violated');
+
+    const rawD = Math.hypot(tx - rx, ty - ry);
+    if (rawD > Math.abs(l1 - l2) + 1e-2 && rawD < l1 + l2 - 1e-2) {
+      const endErr = Math.hypot(ex - tx, ey - ty);
+      check(endErr < 1e-4, `2-Bone IK reachable target error exceeded tolerance (${endErr})`);
+    }
+  }
+
+  const spOut = new Float64Array(2);
+  evalCatmullRom2DInto(0, 0, 10, 20, 40, 50, 70, 10, 0, spOut, 0);
+  check(Math.abs(spOut[0] - 10) < 1e-12 && Math.abs(spOut[1] - 20) < 1e-12, 'Catmull-Rom t=0 must hit P1');
+  evalCatmullRom2DInto(0, 0, 10, 20, 40, 50, 70, 10, 1, spOut, 0);
+  check(Math.abs(spOut[0] - 40) < 1e-12 && Math.abs(spOut[1] - 50) < 1e-12, 'Catmull-Rom t=1 must hit P2');
+
+  // 4. NoiseMath Statistical Distribution, Gradient Finite-Difference & Curl Divergence-Free Oracles
+  let nMin = Infinity;
+  let nMax = -Infinity;
+  let nSum = 0;
+  let nSq = 0;
+  const N_SAMPLES = 50000;
+  for (let i = 0; i < N_SAMPLES; i++) {
+    const x = (rng.next() - 0.5) * 400;
+    const y = (rng.next() - 0.5) * 400;
+    const v = simplex2D(x, y, 13);
+    const f = fbm2D(x, y, 3, 2.02, 0.5, 13);
+    check(v >= -1 && v <= 1 && f >= -1 && f <= 1, 'NoiseMath output must stay bounded strictly in [-1, 1]');
+    if (v < nMin) nMin = v;
+    if (v > nMax) nMax = v;
+    nSum += v;
+    nSq += v * v;
+  }
+  const nMean = nSum / N_SAMPLES;
+  const nVar = nSq / N_SAMPLES - nMean * nMean;
+  check(nMin < -0.75 && nMax > 0.75 && Math.abs(nMean) < 0.06 && nVar > 0.08, `Simplex noise range degenerate: [${nMin.toFixed(3)}, ${nMax.toFixed(3)}], mean=${nMean.toFixed(3)}, var=${nVar.toFixed(3)}`);
+  check(simplex2D(42.19, -17.3, 9) === simplex2D(42.19, -17.3, 9), 'NoiseMath must be 100% deterministic');
+  check(simplex2D(42.19, -17.3, 9) !== simplex2D(42.19, -17.3, 99), 'Distinct NoiseMath seeds must diverge');
+
+  const hQuartiles = [0, 0, 0, 0];
+  for (let i = 0; i < 8000; i++) {
+    const hv = hash2i((i % 200) - 100, Math.floor(i / 200) - 20, 77);
+    check(hv >= 0 && hv < 1, 'hash2i out of bounds');
+    hQuartiles[Math.min(3, Math.floor(hv * 4))]++;
+  }
+  check(hQuartiles.every((q) => q > 1750 && q < 2250), `hash2i quartile bias: ${hQuartiles.join(',')}`);
+
+  // Analytical gradient vs central finite-difference Oracle + Curl divergence-free check
+  const gradOut = new Float64Array(2);
+  const cXp = new Float64Array(2);
+  const cXm = new Float64Array(2);
+  const cYp = new Float64Array(2);
+  const cYm = new Float64Array(2);
+  const eps = 1e-4;
+  let maxGradDiff = 0;
+  let maxDiv = 0;
+  let curlMagSqSum = 0;
+  const TEST_CURL_N = 1000;
+  for (let i = 0; i < TEST_CURL_N; i++) {
+    const px = -50 + rng.next() * 100;
+    const py = -50 + rng.next() * 100;
+    const scale = 0.75;
+    simplex2DGradInto(px, py, gradOut, 0, scale, 5);
+    const fdX = (simplex2D((px + eps) * scale, py * scale, 5) - simplex2D((px - eps) * scale, py * scale, 5)) / (2 * eps);
+    const fdY = (simplex2D(px * scale, (py + eps) * scale, 5) - simplex2D(px * scale, (py - eps) * scale, 5)) / (2 * eps);
+    maxGradDiff = Math.max(maxGradDiff, Math.abs(gradOut[0] - fdX), Math.abs(gradOut[1] - fdY));
+
+    curlNoise2DInto(px, py, gradOut, 0, scale, 5);
+    curlMagSqSum += gradOut[0] * gradOut[0] + gradOut[1] * gradOut[1];
+    curlNoise2DInto(px + eps, py, cXp, 0, scale, 5);
+    curlNoise2DInto(px - eps, py, cXm, 0, scale, 5);
+    curlNoise2DInto(px, py + eps, cYp, 0, scale, 5);
+    curlNoise2DInto(px, py - eps, cYm, 0, scale, 5);
+    const div = (cXp[0] - cXm[0]) / (2 * eps) + (cYp[1] - cYm[1]) / (2 * eps);
+    maxDiv = Math.max(maxDiv, Math.abs(div));
+  }
+  const rmsCurl = Math.sqrt(curlMagSqSum / TEST_CURL_N);
+  check(maxGradDiff < 2e-4, `Simplex analytical gradient diff exceeded finite-diff Oracle (${maxGradDiff})`);
+  check(rmsCurl > 0.5 && maxDiv < 5e-3, `Curl noise divergence check failed (rms=${rmsCurl.toFixed(3)}, maxDiv=${maxDiv.toExponential(2)})`);
+
+  const bench = runModule2HotBenchmark();
+  check(Number.isFinite(bench.sink) && bench.benchMs < 250, `Module 2 Spring+Noise benchmark exceeded 250ms (${bench.benchMs.toFixed(2)}ms)`);
+  check(bench.heapDeltaKb < 2048, `Module 2 hot path heap delta too large (${bench.heapDeltaKb}KB)`);
+
+  console.log(
+    `[BENCH] Module 2 (100k Simplex + 50k Spring + 10k Verlet8): ${bench.benchMs.toFixed(2)}ms (heapDelta=${bench.heapDeltaKb}KB, maxOdeDiff=${maxOdeDiff.toExponential(2)}, maxDiv=${maxDiv.toExponential(2)})`,
+  );
+  console.log('[SIM OK] Module 2 SpringDynamics & NoiseMath (Analytical ODE + Verlet + 2-Bone IK + Curl Divergence Oracles) verified');
+}
+
+function runModule2HotBenchmark(): { benchMs: number; heapDeltaKb: number; sink: number } {
+  const pair = new Float64Array(2);
+  const chain = new VerletChain(8, 3.5);
+  let sink = 0;
+
+  const execPass = (simplexIters: number, springIters: number, verletIters: number): void => {
+    for (let i = 0; i < simplexIters; i++) {
+      sink += simplex2D(i * 0.031, i * 0.017, 7);
+    }
+    for (let i = 0; i < springIters; i++) {
+      stepSpringInto(pair[0], pair[1], i & 63, (i - 1) & 63, 3.0, 0.9, 0.5, 1 / 60, pair, 0);
+      sink += pair[0];
+    }
+    for (let i = 0; i < verletIters; i++) {
+      chain.step(1 / 60, 40 + (i & 31), 60, 45, 240);
+    }
+  };
+
+  execPass(20000, 20000, 4000);
+  const heapBefore = process.memoryUsage().heapUsed;
+  const tStart = performance.now();
+  execPass(100000, 50000, 10000);
+  const benchMs = performance.now() - tStart;
+  const heapDeltaKb = Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024);
+  sink += chain.posX[7];
+  return { benchMs, heapDeltaKb, sink };
 }
