@@ -181,6 +181,61 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'Standalone Feedback_93b75d50.js must remain removed after distilling into JuiceSystem/ToySynth/EngineHost',
   );
 
+  // 3b. Security, CI/lockfile, PWA subpath, and public/ hygiene guards
+  const allSrcFiles = collectTsFiles(path.join(rootDir, 'src'));
+  for (const file of allSrcFiles) {
+    const src = fs.readFileSync(file, 'utf8');
+    const rel = path.relative(rootDir, file);
+    check(
+      !/\bnew\s+Function\s*\(/.test(src) && !/\beval\s*\(/.test(src),
+      `Security invariant violation: ${rel} must not use eval() or new Function()`,
+    );
+  }
+
+  const viteCfg = fs.readFileSync(path.join(rootDir, 'vite.config.ts'), 'utf8');
+  if (viteCfg.includes("base: './'")) {
+    check(
+      !/\b(?:id|start_url|scope)\s*:\s*['"]\/['"]/.test(viteCfg) &&
+        !/\bsrc\s*:\s*['"]\/pwa-/.test(viteCfg),
+      "PWA manifest id/start_url/scope/icons in vite.config.ts must use './' relative paths to match base: './'",
+    );
+    const indexHtml = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf8');
+    check(
+      !/href=['"]\/(?:apple-touch-icon|favicon|pwa-)/.test(indexHtml),
+      "index.html icon links must use './' relative paths to match Vite base: './'",
+    );
+  }
+
+  const deployPath = path.join(rootDir, '.github/workflows/deploy.yml');
+  if (fs.existsSync(deployPath)) {
+    const deployYml = fs.readFileSync(deployPath, 'utf8');
+    const hasPkgLock = fs.existsSync(path.join(rootDir, 'package-lock.json'));
+    const hasBunLock = fs.existsSync(path.join(rootDir, 'bun.lock'));
+    if (hasBunLock && !hasPkgLock) {
+      check(
+        !deployYml.includes('npm ci') && !deployYml.includes("cache: 'npm'"),
+        'deploy.yml must not use npm ci / npm cache when only bun.lock exists',
+      );
+    }
+    check(
+      /\brun\s+sim\b/.test(deployYml) && /\brun\s+build\b/.test(deployYml),
+      'deploy.yml must gate deployment on both sim and build scripts',
+    );
+  }
+
+  const collectPublicFiles = (dir: string): string[] => {
+    const out: string[] = [];
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) out.push(...collectPublicFiles(full));
+      else out.push(full);
+    }
+    return out;
+  };
+  for (const pubFile of collectPublicFiles(path.join(rootDir, 'public'))) {
+    check(!pubFile.endsWith('.md'), `Public hygiene: ${path.relative(rootDir, pubFile)} markdown must not be published in public/`);
+  }
+
   // 4. EngineHost facade, Lobby OS APIs, pause simulation freeze, screen filters & destroy lifecycle
   const runner = new CartridgeRunner('astral-chronicles');
   const saveSvc = new SaveService();
@@ -350,6 +405,12 @@ export async function testStructuredLoggingAndErrorRecovery(): Promise<void> {
 
   const badSandbox = new SandboxToyboxGame('api.setSky(;');
   check(Boolean(badSandbox.scriptError) && badSandbox.snapshot(new CartridgeRunner().getParams()).entities.length > 0, 'Malformed Sandbox script must log error and recover with fallback star');
+  const injectedSandbox = new SandboxToyboxGame('window.alert(1);');
+  check(Boolean(injectedSandbox.scriptError), 'Sandbox DSL must reject arbitrary JS statements');
+  const protoSandbox = new SandboxToyboxGame('api.addMovingPlatform(10, 20, 3, { __proto__: 1 });');
+  check(Boolean(protoSandbox.scriptError), 'Sandbox DSL must reject forbidden prototype keys');
+  const validOptSandbox = new SandboxToyboxGame("api.addMovingPlatform(120, 100, 3, { minX: 80, maxX: 180, vx: 30 }); api.addStar(130, 80);");
+  check(validOptSandbox.scriptError === null, 'Sandbox DSL must support flat option objects for moving platforms');
 
   // 3. Network failure -> HybridAiDirector fallback logging
   const remoteFail = new RemoteHttpAiProvider({ baseUrl: 'http://127.0.0.1:1/unreachable', timeoutMs: 25 });

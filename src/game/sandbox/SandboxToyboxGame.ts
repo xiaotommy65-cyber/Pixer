@@ -20,6 +20,151 @@ import {
 
 export { DEFAULT_SANDBOX_SCRIPT, SANDBOX_PUZZLES, type PuzzleSpec, type SandboxScriptApi };
 
+type DslArg = string | number | boolean | null | undefined | Record<string, string | number | boolean>;
+
+/**
+ * Strict, DOM-free DSL interpreter for Workshop scripts (`api.method(literalArgs)`),
+ * avoiding `new Function` / `eval` while supporting comments, primitives, and flat option objects.
+ */
+function executeSandboxDsl(api: SandboxScriptApi, source: string): void {
+  let i = 0;
+  const n = source.length;
+  const apiRec = api as unknown as Record<string, (...args: unknown[]) => void>;
+
+  const skipWsAndComments = () => {
+    while (i < n) {
+      const ch = source[i];
+      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') {
+        i++;
+      } else if (ch === '/' && source[i + 1] === '/') {
+        i += 2;
+        while (i < n && source[i] !== '\n') i++;
+      } else if (ch === '/' && source[i + 1] === '*') {
+        i += 2;
+        const end = source.indexOf('*/', i);
+        if (end < 0) throw new SyntaxError('Unterminated block comment');
+        i = end + 2;
+      } else {
+        break;
+      }
+    }
+  };
+
+  const readIdent = (): string => {
+    const start = i;
+    while (i < n && /[A-Za-z0-9_$]/.test(source[i])) i++;
+    if (i === start) throw new SyntaxError(`Unexpected token at position ${i}`);
+    return source.slice(start, i);
+  };
+
+  const readString = (): string => {
+    const quote = source[i++];
+    let out = '';
+    while (i < n && source[i] !== quote) {
+      if (source[i] === '\\') {
+        i++;
+        if (i >= n) throw new SyntaxError('Unterminated string escape');
+        const esc = source[i++];
+        out += esc === 'n' ? '\n' : esc === 't' ? '\t' : esc === 'r' ? '\r' : esc;
+      } else {
+        out += source[i++];
+      }
+    }
+    if (source[i] !== quote) throw new SyntaxError('Unterminated string literal');
+    i++;
+    return out;
+  };
+
+  const readPrimitive = (): string | number | boolean | null | undefined => {
+    skipWsAndComments();
+    if (i >= n) throw new SyntaxError('Unexpected end of input');
+    const ch = source[i];
+    if (ch === "'" || ch === '"') return readString();
+    if (ch === '-' || (ch >= '0' && ch <= '9') || ch === '.') {
+      const m = /^-?(?:\d+(?:\.\d*)?|\.\d+)/.exec(source.slice(i));
+      if (!m) throw new SyntaxError(`Invalid number at position ${i}`);
+      i += m[0].length;
+      return Number(m[0]);
+    }
+    const id = readIdent();
+    if (id === 'true') return true;
+    if (id === 'false') return false;
+    if (id === 'null') return null;
+    if (id === 'undefined') return undefined;
+    throw new SyntaxError(`Unsupported identifier '${id}' in sandbox script`);
+  };
+
+  const readArg = (): DslArg => {
+    skipWsAndComments();
+    if (source[i] !== '{') return readPrimitive();
+    i++;
+    const obj: Record<string, string | number | boolean> = {};
+    skipWsAndComments();
+    while (i < n && source[i] !== '}') {
+      const key = source[i] === "'" || source[i] === '"' ? readString() : readIdent();
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        throw new SyntaxError(`Forbidden option key '${key}'`);
+      }
+      skipWsAndComments();
+      if (source[i] !== ':') throw new SyntaxError(`Expected ':' after key '${key}'`);
+      i++;
+      const val = readPrimitive();
+      if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+        obj[key] = val;
+      }
+      skipWsAndComments();
+      if (source[i] === ',') {
+        i++;
+        skipWsAndComments();
+      } else if (source[i] !== '}') {
+        throw new SyntaxError(`Expected ',' or '}' at position ${i}`);
+      }
+    }
+    if (source[i] !== '}') throw new SyntaxError('Unterminated object literal');
+    i++;
+    return obj;
+  };
+
+  while (true) {
+    skipWsAndComments();
+    while (i < n && source[i] === ';') {
+      i++;
+      skipWsAndComments();
+    }
+    if (i >= n) break;
+
+    const target = readIdent();
+    if (target !== 'api') throw new SyntaxError(`Only 'api.<method>(...)' calls are allowed (got '${target}')`);
+    skipWsAndComments();
+    if (source[i] !== '.') throw new SyntaxError(`Expected '.' after 'api' at position ${i}`);
+    i++;
+    skipWsAndComments();
+    const methodName = readIdent();
+    if (!Object.hasOwn(apiRec, methodName) || typeof apiRec[methodName] !== 'function') {
+      throw new SyntaxError(`Unknown sandbox API method 'api.${methodName}'`);
+    }
+    skipWsAndComments();
+    if (source[i] !== '(') throw new SyntaxError(`Expected '(' after 'api.${methodName}'`);
+    i++;
+
+    const args: DslArg[] = [];
+    skipWsAndComments();
+    while (i < n && source[i] !== ')') {
+      args.push(readArg());
+      skipWsAndComments();
+      if (source[i] === ',') {
+        i++;
+        skipWsAndComments();
+      } else if (source[i] !== ')') {
+        throw new SyntaxError(`Expected ',' or ')' at position ${i}`);
+      }
+    }
+    if (source[i] !== ')') throw new SyntaxError(`Unterminated call to 'api.${methodName}'`);
+    i++;
+    apiRec[methodName](...args);
+  }
+}
+
 /**
  * PA-03 Sandbox Toybox: Supports BOTH 10-Stage Zelda-Style Puzzle Campaign
  * AND Free Live-Scriptable Workshop Mode powered by WorldKernel + RuleMatrix!
@@ -236,8 +381,7 @@ export class SandboxToyboxGame implements DebuggableCartridge, ComboTrackingCart
     // Compile and execute user-authored Workshop script inside try-catch so syntax or
     // runtime typos remain recoverable and always leave at least one collectible star on stage.
     try {
-      const fn = new Function('api', scriptSource);
-      fn(api);
+      executeSandboxDsl(api, scriptSource);
       const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
       appLogger.success(
         'parsing',
