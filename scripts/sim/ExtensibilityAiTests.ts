@@ -1,6 +1,7 @@
 import { TextureAtlas } from '../../src/assets/TextureAtlas.ts';
 import { createAgentBridge } from '../../src/core/ai/AgentBridge.ts';
 import { HybridAiDirector, type AiProvider } from '../../src/core/ai/AiProvider.ts';
+import { RemoteHttpAiProvider } from '../../src/core/ai/RemoteAiProvider.ts';
 import { ToySynth } from '../../src/core/audio/ToySynth.ts';
 import { getCartridgeControlProfile, listCartridgeIds } from '../../src/core/runtime/CartridgeRegistry.ts';
 import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
@@ -249,6 +250,29 @@ export async function testExtensibilityAndAiSpis(): Promise<void> {
   check(aiCompletedEvents >= 2, 'HybridAiDirector should emit ai:task_completed events including fallback runs');
   offAi();
   host.destroy();
+
+  // 7. Verify RemoteHttpAiProvider transient 503 single retry
+  const origFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls++;
+    if (fetchCalls === 1) {
+      return new Response('busy', { status: 503, statusText: 'Service Unavailable' });
+    }
+    return new Response(JSON.stringify({ recommendedActionId: 'fire', rationale: 'retry ok', confidence: 0.9 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+  try {
+    const remote = new RemoteHttpAiProvider({ baseUrl: 'https://example.invalid/api/ai', timeoutMs: 2000 });
+    const retried = await remote.adviseTacticalAction({
+      observation: agent.getUnifiedObservation(),
+    });
+    check(fetchCalls === 2 && retried.recommendedActionId === 'fire', 'RemoteHttpAiProvider must retry once on transient 503');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 
   console.log('[SIM OK] Extensibility SPIs (EventBus / BehaviorTree / RuleRegistry / PluginRegistry / HybridAiDirector) verified');
 }

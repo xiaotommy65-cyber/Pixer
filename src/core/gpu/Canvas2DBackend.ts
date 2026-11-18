@@ -29,6 +29,7 @@ export class Canvas2DBackend implements IGpuBackend {
   private readonly scratchCtx: CanvasRenderingContext2D;
   private atlasWidth = 1024;
   private atlasHeight = 1024;
+  private atlasImageData: ImageData | null = null;
 
   private constructor(
     ctx: CanvasRenderingContext2D,
@@ -100,10 +101,13 @@ export class Canvas2DBackend implements IGpuBackend {
     if (this.atlasCanvas.width !== width || this.atlasCanvas.height !== height) {
       this.atlasCanvas.width = width;
       this.atlasCanvas.height = height;
+      this.atlasImageData = null;
     }
-    const img = this.atlasCtx.createImageData(width, height);
-    img.data.set(pixels);
-    this.atlasCtx.putImageData(img, 0, 0);
+    if (!this.atlasImageData || this.atlasImageData.width !== width || this.atlasImageData.height !== height) {
+      this.atlasImageData = this.atlasCtx.createImageData(width, height);
+    }
+    this.atlasImageData.data.set(pixels);
+    this.atlasCtx.putImageData(this.atlasImageData, 0, 0);
   }
 
   public resize(_pixelWidth: number, _pixelHeight: number): void {

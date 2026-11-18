@@ -197,7 +197,7 @@ function findFloorDropY(world: WorldKernel, cx: number, bottomY: number): number
   return found;
 }
 
-export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): RenderSceneSnapshot {
+export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams, alpha = 1): RenderSceneSnapshot {
   const pool = world.snapshotPool;
   const bankIdx = pool.bankIndex;
   pool.bankIndex = bankIdx === 0 ? 1 : 0;
@@ -213,8 +213,10 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
   lights.length = 0;
 
   const zoom = world.scoutMode ? 0.88 : 1.0;
-  const camX = world.cameraX + world.juice.shakeX;
-  const camY = world.cameraY + world.juice.shakeY;
+  const interpCamX = alpha < 1 ? world.prevCameraX + (world.cameraX - world.prevCameraX) * alpha : world.cameraX;
+  const interpCamY = alpha < 1 ? world.prevCameraY + (world.cameraY - world.prevCameraY) * alpha : world.cameraY;
+  const camX = interpCamX + world.juice.shakeX;
+  const camY = interpCamY + world.juice.shakeY;
   const viewW = world.viewport.width / zoom;
   const viewH = world.viewport.height / zoom;
   const margin = 96 / zoom;

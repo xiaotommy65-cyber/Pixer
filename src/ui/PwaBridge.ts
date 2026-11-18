@@ -19,12 +19,24 @@ export function initPwaBridge(headerTools: HTMLElement, onInstallClick?: () => v
     return () => {};
   }
 
+  let swReg: ServiceWorkerRegistration | undefined;
+  let lastSwUpdateCheckMs = 0;
+  const checkSwUpdate = () => {
+    if (!swReg || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    const now = Date.now();
+    if (now - lastSwUpdateCheckMs < 5 * 60 * 1000) return;
+    lastSwUpdateCheckMs = now;
+    void swReg.update().catch(() => {});
+  };
+
   // Register PWA service worker safely; unsupported preview sandboxes or headless tests
   // must not abort UI initialization if SW registration throws.
   try {
     registerSW({
       immediate: true,
-      onRegisteredSW: (swUrl) => {
+      onRegisteredSW: (swUrl, registration) => {
+        swReg = registration;
+        lastSwUpdateCheckMs = Date.now();
         appLogger.success('lifecycle', 'pwa.registerSw', '已註冊 PWA 離線快取 Service Worker', { swUrl });
       },
       onRegisterError: (err) => {
@@ -42,7 +54,9 @@ export function initPwaBridge(headerTools: HTMLElement, onInstallClick?: () => v
     window.matchMedia('(display-mode: standalone)').matches ||
     (window.navigator as unknown as { standalone?: boolean }).standalone === true;
 
-  const isIOS = /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+  const ua = window.navigator.userAgent.toLowerCase();
+  const isIOS =
+    /iphone|ipad|ipod/.test(ua) || (ua.includes('macintosh') && (window.navigator.maxTouchPoints ?? 0) > 1);
   let deferredPrompt: BeforeInstallPromptEvent | null = null;
   let installed = isStandalone();
 
@@ -147,10 +161,18 @@ export function initPwaBridge(headerTools: HTMLElement, onInstallClick?: () => v
   const syncOnline = () => {
     const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
     offlineBadge.classList.toggle('panel-hidden', online);
+    if (online) checkSwUpdate();
   };
 
   window.addEventListener('online', syncOnline, { signal });
   window.addEventListener('offline', syncOnline, { signal });
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (document.visibilityState === 'visible') checkSwUpdate();
+    },
+    { signal },
+  );
   syncOnline();
 
   return () => {

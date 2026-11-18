@@ -519,8 +519,8 @@ export class SandboxToyboxGame implements DebuggableCartridge, ComboTrackingCart
     return this.world.juice.comboCount;
   }
 
-  public snapshot(params: RuntimeParams): RenderSceneSnapshot {
-    const snap = this.world.snapshot(params);
+  public snapshot(params: RuntimeParams, alpha = 1): RenderSceneSnapshot {
+    const snap = this.world.snapshot(params, alpha);
     if (this.campaignMode) {
       const curCollected = this.world.getStageStars().collected;
       let totalCollected = 0;

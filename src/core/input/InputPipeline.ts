@@ -41,6 +41,8 @@ export type {
 
 export type LatchedButtonKey = 'jump' | 'action' | 'skillX' | 'skillY' | 'shoulderL' | 'shoulderR';
 
+const PAD_DIRECTIONS: readonly PadDirection[] = ['left', 'right', 'up', 'down'];
+
 const LATCHED_KEYS: readonly LatchedButtonKey[] = [
   'jump',
   'action',
@@ -105,8 +107,7 @@ export class InputPipeline {
 
   /** Records edge timestamps whenever raw directional/action inputs change. */
   public observeRaw(raw: InputState): void {
-    const dirs: PadDirection[] = ['left', 'right', 'up', 'down'];
-    for (const dir of dirs) {
+    for (const dir of PAD_DIRECTIONS) {
       if (raw[dir] && !this.prevRawDirs[dir]) {
         this.seq += 1;
         this.dirPressedSeq[dir] = this.seq;

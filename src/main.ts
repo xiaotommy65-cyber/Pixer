@@ -269,6 +269,7 @@ export function createApp(): AppHandle | null {
       getStudioSprites: () => ({
         sprites: spriteAtelierView.exportCartridgeSprites(),
         paletteRow: spriteAtelierView.getSelectedPaletteRow(),
+        editEpoch: spriteAtelierView.getEditEpoch(),
       }),
       onImportCartridgeFile: (file) =>
         importCartridgeFileWithPrompt({
@@ -486,7 +487,7 @@ export function createApp(): AppHandle | null {
     syncGovernorResolution();
   };
   window.addEventListener('resize', handleViewportMetrics, { signal });
-  window.addEventListener('orientationchange', handleViewportMetrics, { signal });
+  screen.orientation?.addEventListener?.('change', handleViewportMetrics, { signal });
 
   shell.append(
     ambientGlow,
@@ -560,8 +561,7 @@ export function createApp(): AppHandle | null {
               host.stepFrame(dt, input);
               const snap = host.getSnapshot();
               const stats = bridge.render(gpuEngine, snap, runner.sparkleBenchmark ? runner.benchmarkSprites : null);
-              const vp = gpuEngine.getLogicalViewport();
-              if (governor.setLogicalViewport(vp.width, vp.height)) {
+              if (governor.setLogicalViewport(gpuEngine.getLogicalWidth(), gpuEngine.getLogicalHeight())) {
                 syncGovernorResolution();
               }
               consoleView.updateHud(snap, stats, fpsSmooth);
@@ -570,15 +570,13 @@ export function createApp(): AppHandle | null {
               if (shellPhase === 'IN_GAME' && host.activeCartridge) {
                 const snap = host.getSnapshot();
                 const stats = bridge.render(gpuEngine, snap, runner.sparkleBenchmark ? runner.benchmarkSprites : null);
-                const vp = gpuEngine.getLogicalViewport();
-                if (governor.setLogicalViewport(vp.width, vp.height)) {
+                if (governor.setLogicalViewport(gpuEngine.getLogicalWidth(), gpuEngine.getLogicalHeight())) {
                   syncGovernorResolution();
                 }
                 consoleView.updateHud(snap, stats, fpsSmooth);
               } else if (!skipIdleRender) {
                 const stats = bridge.renderIdle(gpuEngine, now / 1000, false);
-                const vp = gpuEngine.getLogicalViewport();
-                if (governor.setLogicalViewport(vp.width, vp.height)) {
+                if (governor.setLogicalViewport(gpuEngine.getLogicalWidth(), gpuEngine.getLogicalHeight())) {
                   syncGovernorResolution();
                 }
                 consoleView.updateStats(stats, fpsSmooth);

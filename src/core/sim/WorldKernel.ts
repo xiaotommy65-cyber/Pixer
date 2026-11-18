@@ -99,6 +99,8 @@ export class WorldKernel {
   public elapsedSec = 0;
   public cameraX = 0;
   public cameraY = 0;
+  public prevCameraX = 0;
+  public prevCameraY = 0;
   public debugHitboxes = false;
   public scoutMode = false;
   public noticeBanner = '';
@@ -185,6 +187,8 @@ export class WorldKernel {
     this.pulseCooldown = 0;
     this.cameraX = 0;
     this.cameraY = 0;
+    this.prevCameraX = 0;
+    this.prevCameraY = 0;
 
     this.hero.x = cfg.spawnX ?? 24;
     this.hero.y = cfg.spawnY ?? 120;
@@ -383,6 +387,8 @@ export class WorldKernel {
 
   public step(dt: number, rawInput: InputState, params: RuntimeParams): SimEvent[] {
     const events: SimEvent[] = [];
+    this.prevCameraX = this.cameraX;
+    this.prevCameraY = this.cameraY;
     this.input.update(rawInput, dt);
 
     const simDt = this.juice.advanceRealTime(dt, params.shakeScale);
@@ -507,7 +513,7 @@ export class WorldKernel {
     handleHeroEntityInteractions(this, params, actions);
   }
 
-  public snapshot(params: RuntimeParams): RenderSceneSnapshot {
-    return buildWorldSnapshot(this, params);
+  public snapshot(params: RuntimeParams, alpha = 1): RenderSceneSnapshot {
+    return buildWorldSnapshot(this, params, alpha);
   }
 }

@@ -229,7 +229,17 @@ export class SceneGpuBridge {
     const sw = e.w * (e.scaleX ?? 1) * this.zoom * ps;
     const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
     const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
-    if (sx < -this.cullPad || sx > this.viewW + this.cullPad || sy < -this.cullPad || sy - sh > this.viewH + this.cullPad) return;
+    const halfW = sw * 0.5;
+    const top = sy - sh * anchorY;
+    const bot = sy + sh * (1 - anchorY);
+    if (
+      sx + halfW < -this.cullPad ||
+      sx - halfW > this.viewW + this.cullPad ||
+      bot < -this.cullPad ||
+      top > this.viewH + this.cullPad
+    ) {
+      return;
+    }
     gpu.drawSpriteRaw(
       e.sprite,
       sx,
@@ -290,11 +300,14 @@ export class SceneGpuBridge {
       const anchorY = e.anchorY ?? 0.5;
       const ps = this.perspScaleAtWorldY(e.y + e.h * 0.5);
       const sx = this.viewW * 0.5 + (e.x + e.w * 0.5 - this.camCenterX) * this.zoom * ps;
-      if (sx < -this.cullPad || sx > this.viewW + this.cullPad) continue;
+      const halfW = e.w * (e.scaleX ?? 1) * this.zoom * ps * 0.5;
+      if (sx + halfW < -this.cullPad || sx - halfW > this.viewW + this.cullPad) continue;
       const syBase = this.viewH * 0.5 + (e.y + e.h * anchorY - this.camCenterY) * this.zoom * ps;
       const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
       const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
-      if (sy < -this.cullPad || sy - sh > this.viewH + this.cullPad) continue;
+      const top = sy - sh * anchorY;
+      const bot = sy + sh * (1 - anchorY);
+      if (bot < -this.cullPad || top > this.viewH + this.cullPad) continue;
 
       const slot = this.acquireDepthSlot(count);
       slot.kind = 'entity';

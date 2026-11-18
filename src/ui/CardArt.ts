@@ -313,8 +313,33 @@ function buildPolaroidCanvas(
 
   const statText = meta ? `SCORE ${score}  ★ ${starsCollected}/${starsTotal}` : 'MOMO IDLE HOME';
   const metrics = ctx.measureText(statText);
+  const tagSize = hasCartridgePayload ? 27 : 0;
+  const statRight = bx + bw - 22 - (tagSize > 0 ? tagSize + 10 : 0);
   ctx.fillStyle = '#755c4e';
-  ctx.fillText(statText, bx + bw - 22 - metrics.width, footY);
+  ctx.fillText(statText, statRight - metrics.width, footY);
+
+  if (hasCartridgePayload) {
+    const qx = bx + bw - 22 - tagSize;
+    const qy = scrY + scrH + 11;
+    let h = 2166136261;
+    const tagKey = `${meta?.code ?? 'CUS'}:${meta?.id ?? 'pixer'}`;
+    for (let i = 0; i < tagKey.length; i++) {
+      h = Math.imul(h ^ tagKey.charCodeAt(i), 16777619) >>> 0;
+    }
+    ctx.fillStyle = ink;
+    for (let r = 0; r < 9; r++) {
+      for (let col = 0; col < 9; col++) {
+        const corner =
+          (r < 3 && col < 3 && (r !== 1 || col !== 1)) ||
+          (r < 3 && col > 5 && (r !== 1 || col !== 7)) ||
+          (r > 5 && col < 3 && (r !== 7 || col !== 1));
+        const bit = ((h >>> ((r * 9 + col) % 24)) ^ (r * 3 + col)) & 1;
+        if (corner || (bit === 1 && !(r < 4 && col < 4) && !(r < 4 && col > 4) && !(r > 4 && col < 4))) {
+          ctx.fillRect(qx + col * 3, qy + r * 3, 3, 3);
+        }
+      }
+    }
+  }
   return c;
 }
 

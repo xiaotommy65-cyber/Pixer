@@ -46,7 +46,9 @@ import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGov
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
 import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
 import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
+import type { CartridgeJsonV1 } from '../../src/core/sim/CartridgeSchema.ts';
 import { CutsceneSequencer } from '../../src/core/sim/CutsceneSequencer.ts';
+import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
 import { EventActionVm, MAX_VM_OPS_PER_TICK, type VmCollisionPair } from '../../src/core/sim/EventActionVm.ts';
 import {
   computeFlowFieldInto,
@@ -67,6 +69,7 @@ import {
   COLLISION_SOLID,
   TilemapGrid,
 } from '../../src/core/sim/TilemapGrid.ts';
+import { WorldKernel } from '../../src/core/sim/WorldKernel.ts';
 import { generateEmberkeepCampaign, verifyModuleSolvability } from '../../src/game/emberkeep/DungeonGenerator.ts';
 import { check, emptyInput } from './SimTestHarness.ts';
 
@@ -382,12 +385,68 @@ export function testM2EnginePrimitives(): void {
   const resBudget = vm.stepTick(vmHost, [], 0);
   check(resBudget.abortedByBudget && resBudget.opsExecuted === MAX_VM_OPS_PER_TICK, 'EventActionVm must abort cleanly at MAX_VM_OPS_PER_TICK');
 
-  // 4. CartridgeRunner fixed-60Hz accumulator render alpha
+  // 4. CartridgeRunner fixed-60Hz accumulator render alpha + 60Hz jitter snap
   const runner = new CartridgeRunner('cloudberry-hop');
   runner.update(STEP_DT * 0.5, emptyInput());
   check(Math.abs(runner.getRenderAlpha() - 0.5) < 1e-6, 'CartridgeRunner should expose fractional alpha=0.5 between 120Hz steps');
   runner.stepFixed(STEP_DT, emptyInput());
   check(runner.getRenderAlpha() === 1, 'Direct stepFixed should reset render alpha to 1');
+
+  const runnerJitter = new CartridgeRunner('cloudberry-hop');
+  runnerJitter.update(STEP_DT - 0.00015, emptyInput());
+  check(runnerJitter.getRenderAlpha() === 0, 'CartridgeRunner must snap sub-0.25ms 60Hz RAF jitter to 1 exact step');
+
+  // 5. Sub-step camera interpolation (alpha=0.5) & descending moving-platform carry precision
+  const platJson: CartridgeJsonV1 = {
+    version: 1,
+    meta: { id: 'cam-plat-test', code: 'PA-T0', title: 'Cam & Platform Test', genre: 'platformer', viewport: 'wide' },
+    player: { controller: 'platformer', sprite: 'hero_a', w: 16, h: 16, maxHearts: 3 },
+    archetypes: {
+      moving_plat: { sprite: 'moving_plat', w: 32, h: 10, tags: ['moving_plat'] },
+    },
+    stages: [{
+      id: 'st-0',
+      name: 'Test',
+      hint: 'Test',
+      worldWidth: 1024,
+      worldHeight: 240,
+      bgmTheme: 'meadow',
+      spawn: { x: 260, y: 64 },
+      movingPlatforms: [{ x: 248, y: 80, tilesWide: 3, minY: 80, maxY: 180, vy: 240 }],
+    }],
+  };
+  const rtCam = new DataCartridgeRuntime(platJson);
+  const rtParams = runner.getParams();
+  for (let i = 0; i < 10; i++) {
+    rtCam.prepareFixedStep();
+    rtCam.step(STEP_DT, { ...emptyInput(), right: true }, rtParams);
+  }
+  const camX0 = rtCam.snapshot(rtParams, 0).cameraX;
+  const camXMid = rtCam.snapshot(rtParams, 0.5).cameraX;
+  const snapCam1 = rtCam.snapshot(rtParams, 1);
+  check(
+    snapCam1.cameraX > camX0 &&
+      Math.abs(camXMid - (camX0 + snapCam1.cameraX) * 0.5) < 1e-6,
+    'DataCartridgeRuntime cameraX must interpolate cleanly by render alpha to match SoaEntityPool',
+  );
+  // Hero starts at y=64 (feet at 80 = platform top) and must stay locked onto platform descending at 240px/s (4px/tick)
+  const heroAfterDesc = snapCam1.entities.find((e) => e.id === 'hero');
+  const platTile = snapCam1.tiles.find((t) => t.sprite === 'moving_plat');
+  check(
+    heroAfterDesc !== undefined && platTile !== undefined && Math.abs(heroAfterDesc.y + 16 - platTile.y) <= 0.01,
+    'Hero must stay locked onto fast-descending moving platform (vy=240, dy=4px > 2px)',
+  );
+
+  const wk = new WorldKernel({ cartridgeId: 'sandbox-toybox', worldWidth: 1024, worldHeight: 240, viewport: 'wide' });
+  wk.hero.x = 300;
+  wk.step(STEP_DT, { ...emptyInput(), right: true }, rtParams);
+  const wkCamX0 = wk.snapshot(rtParams, 0).cameraX;
+  const wkCamXMid = wk.snapshot(rtParams, 0.5).cameraX;
+  const wk1 = wk.snapshot(rtParams, 1);
+  check(
+    wk1.cameraX > wkCamX0 && Math.abs(wkCamXMid - (wkCamX0 + wk1.cameraX) * 0.5) < 1e-6,
+    'WorldKernel cameraX must interpolate cleanly by render alpha',
+  );
 
   console.log('[SIM OK] M2 primitives (SoaEntityPool 2048, TilemapGrid 4-bit auto-tiling, EventActionVm 512-cap, accumulator alpha)');
 }

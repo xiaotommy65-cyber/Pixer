@@ -304,6 +304,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private stageAmbientColor = '#120e24';
   private cameraX = 0;
   private cameraY = 0;
+  private prevCameraX = 0;
+  private prevCameraY = 0;
   private camVelX = 0;
   private camVelY = 0;
   private prevCamTargetX = 0;
@@ -332,7 +334,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private invulnTimer = 0;
   private walkAnim = 0;
   private relics = { doubleJump: false, airDash: false };
-  private heroSquash = { scaleX: 1, scaleY: 1 };
+  private readonly heroSquash = { scaleX: 1, scaleY: 1 };
+  private readonly aabbBox = { x: 0, y: 0, vx: 0, vy: 0 };
   private readonly aabbRes: TileAabbStepResult = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
 
   // Shmup state
@@ -840,6 +843,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const maxCamY = Math.max(0, worldH - this.stageViewport.height);
     this.cameraX = clamp(st.spawn.x - this.stageViewport.width * 0.42, 0, maxCamX);
     this.cameraY = clamp(st.spawn.y - this.stageViewport.height * 0.55, 0, maxCamY);
+    this.prevCameraX = this.cameraX;
+    this.prevCameraY = this.cameraY;
     this.prevCamTargetX = this.cameraX;
     this.prevCamTargetY = this.cameraY;
 
@@ -933,6 +938,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
 
   public prepareFixedStep(): void {
     this.pool.capturePrev();
+    this.prevCameraX = this.cameraX;
+    this.prevCameraY = this.cameraY;
   }
 
   public retryCurrentStage(): void {
@@ -1001,6 +1008,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
 
   public step(dt: number, rawInput: InputState, params: RuntimeParams): SimEvent[] {
     this.eventsOut.length = 0;
+    this.prevCameraX = this.cameraX;
+    this.prevCameraY = this.cameraY;
     this.input.update(rawInput, dt);
     const simDt = this.juice.advanceRealTime(dt, params.shakeScale);
     if (this.noticeTimer > 0) this.noticeTimer = Math.max(0, this.noticeTimer - dt);
@@ -1089,7 +1098,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       this.input.consumeBuffer('jump');
       pool.vy[p] = -params.jumpPower;
       this.coyote = 0;
-      this.heroSquash = { scaleX: 0.78, scaleY: 1.24 };
+      this.heroSquash.scaleX = 0.78;
+      this.heroSquash.scaleY = 1.24;
       this.eventsOut.push('jump');
       this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#fffaf0', '#56d39c'], 4, params.sparkleDensity);
     } else if (this.input.hasBuffered('jump') && this.relics.doubleJump && this.airJumpsLeft > 0 && !this.aabbRes.onGround) {
@@ -1097,7 +1107,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       this.airJumpsLeft--;
       pool.vy[p] = -params.jumpPower * 0.94;
       this.dashTimer = 0;
-      this.heroSquash = { scaleX: 0.74, scaleY: 1.28 };
+      this.heroSquash.scaleX = 0.74;
+      this.heroSquash.scaleY = 1.28;
       this.eventsOut.push('jump');
       this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#5ec2f7', '#fffaf0'], 7, params.sparkleDensity);
     }
@@ -1121,12 +1132,14 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         this.dashCooldown = 0.55;
         pool.vx[p] = sign * 235;
         pool.vy[p] = 0;
-        this.heroSquash = { scaleX: 1.32, scaleY: 0.72 };
+        this.heroSquash.scaleX = 1.32;
+        this.heroSquash.scaleY = 0.72;
         this.eventsOut.push('snap');
       } else {
         const sp = this.spawnArchetype('spark', pool.x[p] + 8 + sign * 7, pool.y[p] + 7, sign * 155, -22);
         if (sp >= 0) pool.timerA[sp] = 0.42;
-        this.heroSquash = { scaleX: 1.15, scaleY: 0.88 };
+        this.heroSquash.scaleX = 1.15;
+        this.heroSquash.scaleY = 0.88;
         this.eventsOut.push('ignite');
       }
     }
@@ -1140,7 +1153,11 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     }
 
     // 2. Tilemap O(1) resolution + moving platform ride
-    const box = { x: pool.x[p], y: pool.y[p], vx: pool.vx[p], vy: pool.vy[p] };
+    const box = this.aabbBox;
+    box.x = pool.x[p];
+    box.y = pool.y[p];
+    box.vx = pool.vx[p];
+    box.vy = pool.vy[p];
     const wasOnGround = this.aabbRes.onGround;
     this.tilemap.resolveAabbMotion(box, HERO_HB.x, HERO_HB.y, HERO_HB.w, HERO_HB.h, dt, this.aabbRes);
 
@@ -1161,7 +1178,13 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         const hbR = box.x + HERO_HB.x + HERO_HB.w;
         const hbL = box.x + HERO_HB.x;
         const hbBot = box.y + HERO_HB.y + HERO_HB.h;
-        if (hbR > pool.x[s] && hbL < pool.x[s] + pool.w[s] && box.vy >= 0 && hbBot >= pool.y[s] - 2 && hbBot <= prevMpY + 8) {
+        if (
+          hbR > pool.x[s] &&
+          hbL < pool.x[s] + pool.w[s] &&
+          box.vy >= 0 &&
+          hbBot >= Math.min(prevMpY, pool.y[s]) - 2 &&
+          hbBot <= prevMpY + 8
+        ) {
           box.x += pool.x[s] - prevMpX;
           box.y = pool.y[s] - HERO_HB.y - HERO_HB.h;
           box.vy = 0;
@@ -1257,7 +1280,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
 
     if (!wasOnGround && this.aabbRes.onGround && this.aabbRes.landVy > 95) {
       const amt = Math.min(0.28, (this.aabbRes.landVy / 320) * 0.28);
-      this.heroSquash = { scaleX: 1 + amt, scaleY: 1 - amt * 0.9 };
+      this.heroSquash.scaleX = 1 + amt;
+      this.heroSquash.scaleY = 1 - amt * 0.9;
     }
 
     // 3. Abyss rescue
@@ -1336,7 +1360,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         this.eventsOut.push('key');
       } else if ((f & EF_BOUNCY) !== 0 && dist < 15 && pool.vy[p] >= -20) {
         pool.vy[p] = -(this.archetypes[archIdx]?.def.bounceVy ?? 315);
-        this.heroSquash = { scaleX: 0.72, scaleY: 1.32 };
+        this.heroSquash.scaleX = 0.72;
+        this.heroSquash.scaleY = 1.32;
         this.eventsOut.push('bounce');
       } else if ((f & EF_STOMPABLE) !== 0 && dist < (pool.w[s] * 0.5 + 8)) {
         if (pool.vy[p] > 35 && pool.y[p] + 12 < pool.y[s] + pool.h[s] * 0.65) {
@@ -1525,8 +1550,10 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const isShmup = this.def.player.controller === 'shmup';
     const loadout = isShmup ? getActiveLoadout(this.def, this.shmup.fighterId) : undefined;
     const camZoom = isShmup ? 1.0 : this.cameraZoom;
-    const camX = this.cameraX + this.juice.shakeX + this.juice.kickX;
-    const camY = this.cameraY + this.juice.shakeY + this.juice.kickY;
+    const interpCamX = alpha < 1 ? this.prevCameraX + (this.cameraX - this.prevCameraX) * alpha : this.cameraX;
+    const interpCamY = alpha < 1 ? this.prevCameraY + (this.cameraY - this.prevCameraY) * alpha : this.cameraY;
+    const camX = interpCamX + this.juice.shakeX + this.juice.kickX;
+    const camY = interpCamY + this.juice.shakeY + this.juice.kickY;
     const safeZoom = Math.max(0.5, camZoom);
     const viewW = this.stageViewport.width / safeZoom;
     const viewH = this.stageViewport.height / safeZoom;

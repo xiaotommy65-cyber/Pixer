@@ -144,7 +144,7 @@ export function createHandheldOrientationController(params: {
 
   params.landscapeBtn.addEventListener('click', () => setLandscape(!handheldLandscape), { signal: params.signal });
   window.addEventListener('resize', sync, { signal: params.signal });
-  window.addEventListener('orientationchange', sync, { signal: params.signal });
+  screen.orientation?.addEventListener?.('change', sync, { signal: params.signal });
 
   return {
     isLandscape: () => handheldLandscape,

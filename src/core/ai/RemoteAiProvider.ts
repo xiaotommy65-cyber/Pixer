@@ -38,6 +38,11 @@ export class RemoteHttpAiProvider implements AiProvider {
       appLogger.error('network', 'ai.remote.fetchCheck', '無法發送 AI 網路請求：執行環境不支援 fetch', err, { path });
       throw err;
     }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      const err = new Error('network offline');
+      appLogger.warn('network', 'ai.remote.offline', `偵測到離線狀態，略過遠端請求 (${path})`, err, { path });
+      throw err;
+    }
 
     const endpoint = `${this.baseUrl}${path}`;
     const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -61,44 +66,64 @@ export class RemoteHttpAiProvider implements AiProvider {
     const onExternalAbort = () => ctrl.abort();
     externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
 
+    const isRetryableStatus = (status: number) => status === 429 || status === 502 || status === 503 || status === 504;
+
     try {
-      const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: serializedBody,
-        signal: ctrl.signal,
-      });
-      if (!resp.ok) {
-        throw new Error(`AI proxy HTTP ${resp.status} (${resp.statusText || 'error'})`);
-      }
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: serializedBody,
+            cache: 'no-store',
+            signal: ctrl.signal,
+          });
+          if (!resp.ok) {
+            if (attempt === 0 && isRetryableStatus(resp.status) && !ctrl.signal.aborted) {
+              await new Promise((r) => setTimeout(r, 140));
+              continue;
+            }
+            throw new Error(`AI proxy HTTP ${resp.status} (${resp.statusText || 'error'})`);
+          }
 
-      // Parse response JSON explicitly so malformed non-JSON proxy errors (e.g. HTML 502)
-      // are distinguished from transport errors in diagnostic logs.
-      let parsed: TRes;
-      try {
-        parsed = (await resp.json()) as TRes;
-      } catch (parseErr) {
-        const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
-        appLogger.error(
-          'parsing',
-          'ai.remote.parseResponse',
-          `AI 代理回應 JSON 解析失敗 (${path})`,
-          parseErr,
-          { endpoint, status: resp.status },
-          dt,
-        );
-        throw parseErr;
-      }
+          // Parse response JSON explicitly so malformed non-JSON proxy errors (e.g. HTML 502)
+          // are distinguished from transport errors in diagnostic logs.
+          let parsed: TRes;
+          try {
+            parsed = (await resp.json()) as TRes;
+          } catch (parseErr) {
+            const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+            appLogger.error(
+              'parsing',
+              'ai.remote.parseResponse',
+              `AI 代理回應 JSON 解析失敗 (${path})`,
+              parseErr,
+              { endpoint, status: resp.status },
+              dt,
+            );
+            throw parseErr;
+          }
 
-      const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
-      appLogger.success(
-        'network',
-        'ai.remote.postJson',
-        `AI 網路請求成功 (${path})`,
-        { endpoint, status: resp.status, requestBytes: serializedBody.length },
-        dt,
-      );
-      return parsed;
+          const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+          appLogger.success(
+            'network',
+            'ai.remote.postJson',
+            `AI 網路請求成功 (${path})`,
+            { endpoint, status: resp.status, requestBytes: serializedBody.length, attempt: attempt + 1 },
+            dt,
+          );
+          return parsed;
+        } catch (attemptErr) {
+          const isAbort = ctrl.signal.aborted || (attemptErr instanceof Error && attemptErr.name === 'AbortError');
+          const isHttpError = attemptErr instanceof Error && attemptErr.message.startsWith('AI proxy HTTP ');
+          if (attempt === 0 && !isAbort && !isHttpError) {
+            await new Promise((r) => setTimeout(r, 140));
+            continue;
+          }
+          throw attemptErr;
+        }
+      }
+      throw new Error('Unreachable retry termination');
     } catch (err) {
       const dt = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
       const reason = timedOut ? 'timeout' : externalSignal?.aborted ? 'aborted' : 'request_failed';

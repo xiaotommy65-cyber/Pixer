@@ -91,7 +91,7 @@ const BGM_OPTIONS: readonly { value: BgmTheme; label: string }[] = [
 ];
 
 export interface WorkshopStudioBridge {
-  getStudioSprites: () => { sprites: Record<string, string[]>; paletteRow: number };
+  getStudioSprites: () => { sprites: Record<string, string[]>; paletteRow: number; editEpoch?: number };
   onImportCartridgeFile?: (file: File) => Promise<void>;
 }
 
@@ -122,6 +122,8 @@ export class WorkshopView {
   private bgmTheme: BgmTheme = 'meadow';
   private paletteRow = 0;
   private useStudioSprites = true;
+  private importedSprites: Record<string, string[]> | undefined;
+  private importedSpritesEpoch = -1;
   private customRules: RuleDraft[] = [
     { whenKey: 'OnCollide:player+star', doType: 'PlaySfx', sfxPreset: 'star', juicePreset: 'relic_burst' },
     { whenKey: 'OnButton:skillY', doType: 'Juice', sfxPreset: 'laser', juicePreset: 'charge_shot' },
@@ -414,6 +416,10 @@ export class WorkshopView {
         undefined,
         () => {
           this.editingCustomId = undefined;
+          this.importedSprites = undefined;
+          this.importedSpritesEpoch = -1;
+          this.useStudioSprites = true;
+          this.studioSpriteCheck.checked = true;
           this.titleInput.value = '我的新冒險';
           this.seedStarterLevel();
           this.renderLevelCells();
@@ -792,7 +798,12 @@ export class WorkshopView {
     const id = targetId ?? this.editingCustomId ?? `custom-maker-${Date.now().toString(36)}`;
     const title = this.titleInput.value.trim() || '我的自製卡匣';
     const studioData = this.studioBridge?.getStudioSprites();
-    const useStudio = this.useStudioSprites && Boolean(studioData);
+    const currentEpoch = studioData?.editEpoch ?? 0;
+    if (this.importedSprites && currentEpoch !== this.importedSpritesEpoch) {
+      this.importedSprites = undefined;
+    }
+    const resolvedSprites = this.importedSprites ?? studioData?.sprites;
+    const useStudio = this.useStudioSprites && Boolean(resolvedSprites);
 
     const tiles: number[] = [];
     const collision: number[] = [];
@@ -844,7 +855,7 @@ export class WorkshopView {
         paletteRow: this.paletteRow,
       },
       initialVars: { combo: 0 },
-      sprites: useStudio ? studioData?.sprites : undefined,
+      sprites: useStudio ? resolvedSprites : undefined,
       player: {
         controller: 'platformer',
         sprite: useStudio ? 'studio_hero_a' : 'hero_a',
@@ -937,6 +948,8 @@ export class WorkshopView {
       }
       this.editingCustomId = res.id;
     }
+    this.host.syncCartridgeSpritesToAtlas(cart);
+    const theme = PALETTE_THEMES[cart.meta.paletteRow ?? 0];
     const cover = renderCartridgeCoverCanvas(this.atlas, cart);
     const dataUrl = await exportCartridgeCardPngDataUrl(
       cover,
@@ -946,7 +959,7 @@ export class WorkshopView {
         title: cart.meta.title,
         subtitle: cart.meta.subtitle ?? '',
         genre: '自製平台',
-        accentHex: '#ff708d',
+        accentHex: theme?.colors[4] ?? '#ff708d',
         badgeText: '',
         controlsHint: '',
         goalHint: '',
@@ -998,6 +1011,11 @@ export class WorkshopView {
     this.titleInput.value = cart.meta.title;
     this.paletteRow = cart.meta.paletteRow ?? 0;
     this.paletteSelect.value = String(this.paletteRow);
+    const hasStudioSprites = Boolean(cart.sprites && Object.keys(cart.sprites).length > 0) || cart.player.sprite.startsWith('studio_');
+    this.useStudioSprites = hasStudioSprites;
+    this.studioSpriteCheck.checked = hasStudioSprites;
+    this.importedSprites = cart.sprites ? (JSON.parse(JSON.stringify(cart.sprites)) as Record<string, string[]>) : undefined;
+    this.importedSpritesEpoch = this.studioBridge?.getStudioSprites().editEpoch ?? 0;
     const st = cart.stages[0];
     if (st) {
       this.bgmTheme = st.bgmTheme;

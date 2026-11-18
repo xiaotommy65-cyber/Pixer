@@ -523,6 +523,41 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
     'SceneGpuBridge must forward fractional camera offset for overscan sub-pixel panning',
   );
 
+  // Verify SceneGpuBridge entity frustum culling respects half-width and anchorY in both drawEntity & renderDepthSorted
+  const edgeSnap: typeof shmupSnap = {
+    ...shmupSnap,
+    maxHearts: 0,
+    hearts: 0,
+    starsTotal: 0,
+    starsCollected: 0,
+    hasKey: false,
+    bossMaxHp: 0,
+    bossHp: 0,
+    screenFlashAlpha: 0,
+    ambientDarkness: 0,
+    tiles: [],
+    fgTiles: undefined,
+    lights: [],
+    particles: [],
+    bgStars: [],
+    bgClouds: [],
+    bgParallaxLayers: undefined,
+    cameraX: 0,
+    cameraY: 0,
+    cameraZoom: 1,
+    viewport: { width: 320, height: 180 },
+    entities: [{ id: 'edge-boss', sprite: 'star_a', x: -150, y: -150, w: 160, h: 160, anchorY: 0.5, castShadow: false }],
+    hd2dDepth: { enabled: false },
+  };
+  capturedModesAlpha.length = 0;
+  bridge.render(gpu, edgeSnap, null);
+  const flatDraws = capturedModesAlpha.length;
+  edgeSnap.hd2dDepth = { enabled: true, sortByDepthY: true, horizonHazeAlpha: 0, tiltShiftAlpha: 0 };
+  capturedModesAlpha.length = 0;
+  bridge.render(gpu, edgeSnap, null);
+  const sortedDraws = capturedModesAlpha.length;
+  check(flatDraws === 1 && sortedDraws === 1, `SceneGpuBridge must not prematurely cull partially-visible wide anchorY=0.5 entities (flat=${flatDraws}, sorted=${sortedDraws})`);
+
   // Verify WGSL / GLSL ES 3.00 shader parity markers
   const rootDir = process.cwd();
   const wgslSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGpuShaders.ts'), 'utf8');
@@ -745,9 +780,65 @@ export async function testM3LoadCartridgeAndPngCodec(): Promise<void> {
     }
   }
 
+  // Verify multi-cartridge studio_* sprite isolation on mount & full deterministic PNG reload
+  const makeStudioCart = (id: string, hexDigit: string): CartridgeJsonV1 => ({
+    ...customCartridge,
+    meta: { ...customCartridge.meta, id, title: `Studio ${id}` },
+    sprites: {
+      ...customCartridge.sprites,
+      studio_hero_a: Array.from({ length: 16 }, () => hexDigit.repeat(16)),
+      studio_hero_b: Array.from({ length: 16 }, () => hexDigit.repeat(16)),
+    },
+    player: { ...customCartridge.player, sprite: 'studio_hero_a', spriteB: 'studio_hero_b' },
+  });
+  const cartA = makeStudioCart('custom-studio-a', '4');
+  const cartB = makeStudioCart('custom-studio-b', '8');
+  const loadA = host.loadCartridge(cartA, { save: true, mount: false });
+  const loadB = host.loadCartridge(cartB, { save: true, mount: true });
+  check(loadA.ok && loadB.ok, 'Both studio cartridges A and B must load cleanly');
+  const heroRectB = atlas.getRect('studio_hero_a');
+  const hx = Math.floor(heroRectB.u0 * ATLAS_SIZE) + 2;
+  const hy = Math.floor(heroRectB.v0 * ATLAS_SIZE) + 2;
+  check(atlas.indexPixels[hy * ATLAS_SIZE + hx] === 8, 'Cartridge B mount must show color 8 in studio_hero_a');
+  host.mount('custom-studio-a', true);
+  const heroRectA = atlas.getRect('studio_hero_a');
+  const hax = Math.floor(heroRectA.u0 * ATLAS_SIZE) + 2;
+  const hay = Math.floor(heroRectA.v0 * ATLAS_SIZE) + 2;
+  check(atlas.indexPixels[hay * ATLAS_SIZE + hax] === 4, 'Remounting Cartridge A must restore its own studio_hero_a pixels (color 4)');
+
+  const studioPng = await embedCartridgeIntoPng(minimalPng, cartA);
+  const studioDecoded = await extractCartridgeFromPng(studioPng);
+  check(studioDecoded.ok, 'Studio cartridge Polaroid PNG must decode');
+  if (studioDecoded.ok) {
+    const freshSave = new SaveService();
+    const freshHost = new EngineHost(new CartridgeRunner('cloudberry-hop'), new ToySynth(), freshSave);
+    const freshAtlas = new TextureAtlas();
+    freshHost.bindAtlas(freshAtlas);
+    const freshLoaded = freshHost.loadCartridge(studioDecoded.data, { save: true, mount: true });
+    check(freshLoaded.ok, 'Decoded Polaroid PNG must mount cleanly on a fresh EngineHost');
+    for (let f = 0; f < 24; f++) {
+      host.stepFrame(1 / 60, { ...emptyInput(), right: true });
+      freshHost.stepFrame(1 / 60, { ...emptyInput(), right: true });
+    }
+    const origSnap = host.getSnapshot();
+    const freshSnap = freshHost.getSnapshot();
+    const origHero = origSnap.entities.find((e) => e.sprite === 'studio_hero_a' || e.sprite === 'studio_hero_b');
+    const freshHero = freshSnap.entities.find((e) => e.sprite === 'studio_hero_a' || e.sprite === 'studio_hero_b');
+    check(
+      Boolean(origHero && freshHero) &&
+        (origHero?.x ?? 0) > 24 &&
+        Math.abs((origHero?.x ?? 0) - (freshHero?.x ?? 0)) < 1e-4 &&
+        origSnap.score === freshSnap.score,
+      'Reloaded Polaroid PNG cartridge must simulate identically to the original',
+    );
+    freshHost.destroy();
+  }
+  host.deleteCustomCartridge('custom-studio-a');
+  host.deleteCustomCartridge('custom-studio-b');
+
   check(host.deleteCustomCartridge('custom-m3-test') && !host.hasCustomCartridge('custom-m3-test'), 'deleteCustomCartridge must cleanly remove saved cartridge and registry entry');
   host.destroy();
-  console.log('[SIM OK] M3 EngineHost.loadCartridge & Polaroid PNG iTXt Codec (with Bomb/CRC guards) verified');
+  console.log('[SIM OK] M3 EngineHost.loadCartridge & Polaroid PNG iTXt Codec (with Bomb/CRC/Sprite-Sync guards) verified');
 }
 
 export function testM41DynamicViewportAndCamera(): void {

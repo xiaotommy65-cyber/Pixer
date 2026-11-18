@@ -51,7 +51,7 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 
 ---
 
-## Milestone 3 — Creative Loop & Polaroid PNG Cartridges (CURRENT PRIORITY)
+## Milestone 3 — Creative Loop & Polaroid PNG Cartridges (DONE)
 **Goal**: Connect visual editors and social/classroom cartridge sharing to the M2 schema.
 
 ### Specs
@@ -60,7 +60,7 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 3. **Polaroid PNG Cartridge Card**: Render a stylized cartridge card image (pixel cover + title + QR/tag) carrying full embedded Cartridge JSON for instant drag-and-drop sharing and remixing.
 
 ### Done Criteria (M3)
-- [ ] A new playable cartridge (`PA-04`) can be built purely in-app, exported as a PNG card, and reloaded identically.
+- [x] A new playable cartridge (`PA-04`) can be built purely in-app, exported as a PNG card, and reloaded identically.
 
 ---
 

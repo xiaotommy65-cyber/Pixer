@@ -164,6 +164,7 @@ export class SpriteAtelierView {
   private undoBtn: HTMLButtonElement;
   private previewCanvas: HTMLCanvasElement;
   private animPhase = 0;
+  private editEpoch = 0;
   private readonly ac = new AbortController();
 
   constructor(gpu: GpuEngine, synth: ToySynth, save: SaveService, onHeroSaved?: () => void) {
@@ -261,6 +262,7 @@ export class SpriteAtelierView {
         const nextCount = Number(this.frameCountSelect.value) as 2 | 3 | 4;
         this.slots[this.activeSlot].frameCount = nextCount;
         if (this.activeFrameIdx >= nextCount) this.activeFrameIdx = nextCount - 1;
+        this.editEpoch++;
         this.syncToolbarState();
         this.renderBoard();
       },
@@ -515,6 +517,10 @@ export class SpriteAtelierView {
     return this.selectedThemeIdx;
   }
 
+  public getEditEpoch(): number {
+    return this.editEpoch;
+  }
+
   /** Packages current Sprite Studio slots into CartridgeJsonV1.sprites grids. */
   public exportCartridgeSprites(): Record<string, string[]> {
     const out: Record<string, string[]> = {};
@@ -620,6 +626,7 @@ export class SpriteAtelierView {
   }
 
   private commitAtlasUpdate(): void {
+    this.editEpoch++;
     if (this.activeSlot === 'hero' && (this.activeFrameIdx === 0 || this.activeFrameIdx === 1)) {
       this.gpu.atlas.syncHeroSlots();
       this.gpu.syncAtlasToGpu();

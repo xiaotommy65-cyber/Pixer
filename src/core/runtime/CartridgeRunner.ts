@@ -313,7 +313,10 @@ export class CartridgeRunner {
     }
     this.prevRestart = input.restart;
 
-    const clamped = Math.min(0.1, Math.max(0, deltaSec));
+    let clamped = Math.min(0.1, Math.max(0, deltaSec));
+    if (Math.abs(clamped - STEP_DT) <= 0.00025) {
+      clamped = STEP_DT;
+    }
     this.accumulator += clamped;
     this.interpolating = true;
 

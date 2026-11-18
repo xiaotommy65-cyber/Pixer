@@ -91,6 +91,14 @@ export class GpuEngine {
     return { width: this.viewW, height: this.viewH };
   }
 
+  public getLogicalWidth(): number {
+    return this.viewW;
+  }
+
+  public getLogicalHeight(): number {
+    return this.viewH;
+  }
+
   public setFilterModeCode(mode: number): void {
     this.screenFilterCode = Math.max(0, Math.min(2, Math.round(mode)));
   }

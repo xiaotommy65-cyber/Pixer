@@ -266,6 +266,10 @@ export class EngineHost {
   public insertWithSram(id: CartridgeId): boolean {
     this.synth.stopCharge(false);
     this.prevChargeRatio = 0;
+    const cart = getCartridgeJson(id);
+    if (cart) {
+      this.syncCartridgeSpritesToAtlas(cart);
+    }
     const sram = this.save.getCartridgeSram(id);
     const resumed = this.runner.switchCartridge(id, sram?.data);
     this.activeCartridgeId = id;
@@ -483,6 +487,18 @@ export class EngineHost {
     return loaded;
   }
 
+  public syncCartridgeSpritesToAtlas(cartridge: CartridgeJsonV1): void {
+    if (!this.atlas || !cartridge.sprites) return;
+    for (const [sid, grid] of Object.entries(cartridge.sprites)) {
+      this.atlas.registerDynamicGridSprite(sid, grid);
+      this.events.emit('sprite:registered', {
+        spriteId: sid,
+        w: grid[0]?.length ?? 16,
+        h: grid.length,
+      });
+    }
+  }
+
   public loadCartridge(rawJson: unknown, opts?: LoadCartridgeOptions): LoadCartridgeResult {
     let parsed: unknown = rawJson;
     if (typeof rawJson === 'string') {
@@ -523,16 +539,7 @@ export class EngineHost {
     const cartridge = JSON.parse(JSON.stringify(valid.data)) as CartridgeJsonV1;
     cartridge.meta.id = id;
 
-    if (this.atlas && cartridge.sprites) {
-      for (const [sid, grid] of Object.entries(cartridge.sprites)) {
-        this.atlas.registerDynamicGridSprite(sid, grid);
-        this.events.emit('sprite:registered', {
-          spriteId: sid,
-          w: grid[0]?.length ?? 16,
-          h: grid.length,
-        });
-      }
-    }
+    this.syncCartridgeSpritesToAtlas(cartridge);
 
     this.registerCartridgePlugin({
       meta: {
