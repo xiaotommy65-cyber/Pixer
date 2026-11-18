@@ -40,6 +40,7 @@ export class CartridgeRunner {
   private sandboxScript = SANDBOX_DEFAULT_SCRIPT;
   private dndModuleJson?: string;
   private accumulator = 0;
+  private interpolating = false;
   private eventListener?: (ev: SimEvent, detail: SimEventDetail) => void;
   private prevRestart = false;
   private debugHitboxes = false;
@@ -192,6 +193,7 @@ export class CartridgeRunner {
     const sb = this.createInstance('sandbox-toybox');
     this.instance = sb;
     this.accumulator = 0;
+    this.interpolating = false;
     this.events.emit('cartridge:mounted', { id: 'sandbox-toybox', resumedSram: false });
     return sb.scriptError ?? null;
   }
@@ -216,6 +218,7 @@ export class CartridgeRunner {
       this.lastEmittedStageIdx = -1;
       this.instance = inst;
       this.accumulator = 0;
+      this.interpolating = false;
       this.events.emit('cartridge:mounted', { id: 'emberkeep-dnd', resumedSram: false });
       appLogger.success('parsing', 'cartridge.applyDndModule', '已套用自訂 D&D 地牢模組 JSON 並啟動卡匣', {
         rawBytes: jsonSource.length,
@@ -282,6 +285,10 @@ export class CartridgeRunner {
     return this.sparkleBenchmark;
   }
 
+  public getRenderAlpha(): number {
+    return this.interpolating ? Math.max(0, Math.min(1, this.accumulator / STEP_DT)) : 1;
+  }
+
   public update(deltaSec: number, input: InputState): void {
     if (input.restart && !this.prevRestart) {
       this.restart();
@@ -290,14 +297,21 @@ export class CartridgeRunner {
 
     const clamped = Math.min(0.1, Math.max(0, deltaSec));
     this.accumulator += clamped;
+    this.interpolating = true;
 
     while (this.accumulator >= STEP_DT) {
-      this.stepFixed(STEP_DT, input);
+      this.stepFixedInternal(STEP_DT, input, false);
       this.accumulator -= STEP_DT;
     }
   }
 
   public stepFixed(dt: number, input: InputState): SimEvent[] {
+    this.interpolating = false;
+    return this.stepFixedInternal(dt, input, true);
+  }
+
+  private stepFixedInternal(dt: number, input: InputState, directStep: boolean): SimEvent[] {
+    this.instance.prepareFixedStep?.();
     const events = this.instance.step(dt, input, this.params);
     const combo = isComboTrackingCartridge(this.instance) ? this.instance.getComboCount() : 0;
 
@@ -306,7 +320,7 @@ export class CartridgeRunner {
       this.eventListener?.(ev, { kind: ev, combo });
     }
 
-    const snap = this.instance.snapshot(this.params);
+    const snap = this.instance.snapshot(this.params, directStep ? 1 : this.getRenderAlpha());
     if (snap.stage && snap.stage.index !== this.lastEmittedStageIdx) {
       this.lastEmittedStageIdx = snap.stage.index;
       this.events.emit('stage:changed', {
@@ -343,6 +357,6 @@ export class CartridgeRunner {
   }
 
   public getSnapshot(): RenderSceneSnapshot {
-    return this.instance.snapshot(this.params);
+    return this.instance.snapshot(this.params, this.getRenderAlpha());
   }
 }

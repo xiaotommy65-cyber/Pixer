@@ -32,8 +32,9 @@ export interface CartridgeMeta {
 
 export interface CartridgeInstance {
   readonly scriptError?: string | null;
+  prepareFixedStep?(): void;
   step(dt: number, input: InputState, params: RuntimeParams): SimEvent[];
-  snapshot(params: RuntimeParams): RenderSceneSnapshot;
+  snapshot(params: RuntimeParams, alpha?: number): RenderSceneSnapshot;
   getStatus(): 'playing' | 'won' | 'lost';
   dispatchCommand?(commandId: string): SimEvent[];
   serializeSave?(): unknown;

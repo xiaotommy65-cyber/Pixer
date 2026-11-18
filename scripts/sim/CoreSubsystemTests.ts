@@ -5,13 +5,25 @@ import {
 } from '../../src/assets/AudioPatterns.ts';
 import { ToySynth } from '../../src/core/audio/ToySynth.ts';
 import { InputMap } from '../../src/core/input/InputMap.ts';
-import { STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
+import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
 import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGovernor.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
 import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
 import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
 import { CutsceneSequencer } from '../../src/core/sim/CutsceneSequencer.ts';
+import { EventActionVm, MAX_VM_OPS_PER_TICK, type VmCollisionPair } from '../../src/core/sim/EventActionVm.ts';
 import { JuiceSystem } from '../../src/core/sim/JuiceSystem.ts';
+import { EF_PLAYER, MAX_ENTITIES, SoaEntityPool } from '../../src/core/sim/SoaEntityPool.ts';
+import {
+  AUTO_MASK_E,
+  AUTO_MASK_N,
+  AUTO_MASK_S,
+  AUTO_MASK_W,
+  COLLISION_CLOUD,
+  COLLISION_HAZARD,
+  COLLISION_SOLID,
+  TilemapGrid,
+} from '../../src/core/sim/TilemapGrid.ts';
 import { generateEmberkeepCampaign, verifyModuleSolvability } from '../../src/game/emberkeep/DungeonGenerator.ts';
 import { check, emptyInput } from './SimTestHarness.ts';
 
@@ -252,4 +264,87 @@ export function testEngine2CameraAndCutscene(): void {
   save.savePerformanceProfile('balanced');
 
   console.log('[SIM OK] Engine 2.0 (CameraDirector, CutsceneSequencer, DisplayThermalGovernor & SaveService)');
+}
+
+export function testM2EnginePrimitives(): void {
+  // 1. SoaEntityPool (MAX_ENTITIES = 2048) O(1) alloc/free + capturePrev/teleport/interpolation
+  const pool = new SoaEntityPool();
+  check(pool.capacity === 2048 && pool.getFreeCount() === MAX_ENTITIES, 'SoaEntityPool must pre-allocate 2048 slots');
+  for (let i = 0; i < MAX_ENTITIES; i++) {
+    const slot = pool.alloc(i, 10, 16, 16);
+    check(slot >= 0, `SoaEntityPool slot ${i} allocation should succeed`);
+  }
+  check(pool.activeCount === 2048 && pool.alloc(0, 0) === -1, 'SoaEntityPool must reject allocation beyond 2048');
+  check(pool.free(100) && Number(pool.activeCount) === 2047 && !pool.free(100), 'SoaEntityPool double-free guard');
+  const reused = pool.alloc(10, 20);
+  check(reused === 100 && Number(pool.activeCount) === 2048, 'SoaEntityPool should O(1) reuse freed slot');
+
+  pool.reset();
+  const heroSlot = pool.alloc(10, 20);
+  pool.flags[heroSlot] |= EF_PLAYER;
+  pool.capturePrev();
+  pool.x[heroSlot] = 30;
+  check(pool.renderX(heroSlot, 0.5) === 20, 'SoaEntityPool alpha=0.5 should interpolate halfway between prev and curr');
+  pool.teleport(heroSlot, 200, 50);
+  check(pool.renderX(heroSlot, 0.25) === 200, 'SoaEntityPool teleport must snap prevX=currX without smearing');
+
+  // 2. TilemapGrid 4-bit Auto-Tiling & O(1) spatial collision
+  const tm = new TilemapGrid(16, 12);
+  tm.fillRectTiles(2, 2, 3, 3, 1, COLLISION_SOLID);
+  check(tm.getAutoMask(2, 2) === (AUTO_MASK_E | AUTO_MASK_S), 'Top-left tile mask must be E|S (6)');
+  check(tm.getAutoMask(3, 3) === (AUTO_MASK_N | AUTO_MASK_E | AUTO_MASK_S | AUTO_MASK_W), 'Center tile mask must be NESW (15)');
+  check(tm.getAutoMask(4, 4) === (AUTO_MASK_N | AUTO_MASK_W), 'Bottom-right tile mask must be N|W (9)');
+
+  tm.fillRectTiles(0, 9, 16, 1, 2, COLLISION_CLOUD);
+  tm.setTile(7, 8, 3, COLLISION_HAZARD);
+  const box = { x: 112, y: 120, vx: 0, vy: 200 };
+  const colRes = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
+  tm.resolveAabbMotion(box, 2, 2, 12, 14, 0.1, colRes);
+  check(colRes.onGround && box.y === 9 * 16 - 16, 'TilemapGrid must land AABB cleanly on one-way cloud top');
+  check(colRes.hitHazard, 'TilemapGrid must detect overlapping hazard tile in O(1)');
+
+  // 3. EventActionVm (When -> Do + MAX_VM_OPS_PER_TICK safety guard)
+  const vm = new EventActionVm();
+  let sfxCount = 0;
+  let outcomeSeen = '';
+  const vmHost = {
+    isButton: (b: string) => b === 'action',
+    spawn: () => {},
+    destroy: () => {},
+    impulse: () => {},
+    playSfx: () => {
+      sfxCount++;
+    },
+    triggerJuice: () => {},
+    endGame: (outcome: string) => {
+      outcomeSeen = outcome;
+    },
+  };
+  const collisions: VmCollisionPair[] = [{ selfSlot: 0, otherSlot: 1, selfTag: 'player', otherTag: 'star' }];
+  vm.loadRules([
+    { when: { type: 'OnStart' }, do: [{ type: 'SetVar', name: 'score', op: '=', value: 10 }] },
+    { when: { type: 'OnCollide', sourceTag: 'player', targetTag: 'star' }, do: [{ type: 'SetVar', name: 'score', op: '+=', value: 100 }, { type: 'PlaySfx', preset: 'star' }] },
+    { when: { type: 'OnButton', button: 'action', edge: 'pressed' }, do: [{ type: 'SetVar', name: 'score', op: '+=', value: 5 }] },
+    { when: { type: 'OnEvery', intervalTicks: 2 }, do: [{ type: 'SetVar', name: 'ticks', op: '+=', value: 1 }] },
+    { when: { type: 'OnVar', varName: 'score', op: '>=', value: 115, edge: true }, do: [{ type: 'EndGame', outcome: 'won' }] },
+  ]);
+  vm.stepTick(vmHost, collisions, 1);
+  check(vm.getVar('score') === 115 && sfxCount === 1 && outcomeSeen === 'won', 'EventActionVm OnStart/OnCollide/OnButton/OnVar must execute deterministically');
+  vm.stepTick(vmHost, [], 0);
+  check(vm.getVar('ticks') === 1, 'EventActionVm OnEvery(2) must increment on tick 2');
+
+  // Budget loop guard test (> MAX_VM_OPS_PER_TICK)
+  const manyActions = Array.from({ length: MAX_VM_OPS_PER_TICK + 20 }, () => ({ type: 'SetVar' as const, name: 'x', op: '+=' as const, value: 1 }));
+  vm.loadRules([{ when: { type: 'OnStart' }, do: manyActions }]);
+  const resBudget = vm.stepTick(vmHost, [], 0);
+  check(resBudget.abortedByBudget && resBudget.opsExecuted === MAX_VM_OPS_PER_TICK, 'EventActionVm must abort cleanly at MAX_VM_OPS_PER_TICK');
+
+  // 4. CartridgeRunner fixed-60Hz accumulator render alpha
+  const runner = new CartridgeRunner('cloudberry-hop');
+  runner.update(STEP_DT * 0.5, emptyInput());
+  check(Math.abs(runner.getRenderAlpha() - 0.5) < 1e-6, 'CartridgeRunner should expose fractional alpha=0.5 between 120Hz steps');
+  runner.stepFixed(STEP_DT, emptyInput());
+  check(runner.getRenderAlpha() === 1, 'Direct stepFixed should reset render alpha to 1');
+
+  console.log('[SIM OK] M2 primitives (SoaEntityPool 2048, TilemapGrid 4-bit auto-tiling, EventActionVm 512-cap, accumulator alpha)');
 }

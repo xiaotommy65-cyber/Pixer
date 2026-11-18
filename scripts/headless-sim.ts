@@ -21,6 +21,7 @@ import {
   testCoreSubsystems,
   testDungeonGeneratorSolvability,
   testEngine2CameraAndCutscene,
+  testM2EnginePrimitives,
 } from './sim/CoreSubsystemTests.ts';
 import { testExtensibilityAndAiSpis } from './sim/ExtensibilityAiTests.ts';
 import { testHalAndInputPipeline } from './sim/HalAndInputTests.ts';
@@ -29,6 +30,7 @@ async function runAll() {
   registerBuiltinCartridges();
 
   testCoreSubsystems();
+  testM2EnginePrimitives();
   testEngine2CameraAndCutscene();
   testDungeonGeneratorSolvability();
   testSramSaveHydrateRoundtrips();
