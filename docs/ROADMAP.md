@@ -64,7 +64,38 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 
 ---
 
-## Future Phase (Do NOT implement until M1–M3 complete)
+## Milestone 4 — Engine 3.0: Large-World, Dynamic Viewport & Multi-Layer HD-2D Core (PLANNED ENGINE UPGRADE)
+**Goal**: Upgrade Pixer's core from a fixed `320×180` small-stage console into a scalable 2D/2.5D engine capable of large interconnected worlds, wide/zoomable logical viewports, multi-layer parallax depth, 4× atlas capacity, and zero-GC spatial simulation—while keeping `PA-01`–`PA-05` compatible and `src/core/` UI-free for future Edu Edition.
+
+### Specs
+1. **M4.1 — Dynamic Logical Viewport & True 2D Camera**:
+   - Decouple hardcoded `GAME_W=320` / `GAME_H=180` into a runtime `LogicalViewport` (`320×180` classic default, `426×240` / `480×270` wide presets, plus dynamic camera zoom) wired cleanly through `GpuEngine`, `WebGpuBackend`, `WebGl2Backend`, `Canvas2DBackend`, `SceneGpuBridge`, and `DisplayThermalGovernor`.
+   - Maintain dynamic `+2px` Celeste-style overscan crop (`(viewW + 2) × (viewH + 2)`) across all 3 GPU/Canvas backends.
+   - Add smooth vertical camera tracking (`cameraY`), deadzone/look-ahead damping, and **Room Bounds / Seamless Area Transitions** in `CameraDirector` and runtimes.
+2. **M4.2 — Chunked Large Worlds & Zero-GC Spatial Grid**:
+   - Replace the flat `256×64` tilemap cap in `TilemapGrid` with **16×16 Chunk Streaming** supporting expansive interconnected maps (`≥ 1024×256` tiles / `≥ 16,384×4,096 px`), activating only camera-visible + margin chunks for collision and rendering.
+   - Add a pre-allocated, zero-GC **Uniform Spatial Hash Grid** to `SoaEntityPool` for `O(1)` broad-phase neighbor, projectile, and trigger queries (eliminating `O(N²)` entity scans).
+   - Keep `WorldKernel` / `WorldSnapshot` (`PA-03`–`PA-05`) compatible while adding reusable snapshot pools and frustum-culled tile/shadow queries.
+3. **M4.3 — Multi-Layer HD-2D Depth & `1024×1024` TextureAtlas**:
+   - Expand `TextureAtlas` from `512×512` to `1024×1024` (4× sprite capacity, preserving `16×N` Palette LUT + dynamic `>=128px` RGBA region) and raise `MAX_INSTANCES_PER_PASS` (`8192 → 16384`).
+   - Extend `RenderSceneSnapshot` & `SceneGpuBridge` with **Multi-Layer Depth**: independent `bgParallaxLayers` (`0.15x–0.65x` scroll multipliers), Y-sorted extruded midground (`tiles` + `entities`), and **Foreground Occluder Layer** (`fgTiles` for canopies/eaves/mist drawn above actors).
+4. **M4.4 — Multi-Backend Parity & Headless Engine Benchmarks**:
+   - Keep `WGSL`, `GLSL ES 3.00`, and `Canvas2DBackend` visually identical across dynamic viewports and `1024×1024` atlases.
+   - Add automated `npm run sim` gates for chunked large maps (`≥ 4096×1024`), `2,048`-entity spatial-hash determinism, dynamic viewport overscan math, and zero per-frame snapshot allocations.
+
+### Out of Scope (M4)
+- Do NOT add true 3D polygon meshes or perspective 3D scene graphs (keep authentic 2.5D HD-pixel instancing).
+- Do NOT rewrite legacy `PA-03`/`PA-04`/`PA-05` gameplay into `DataCartridgeRuntime` or build Edu Edition backend/iframe features yet.
+
+### Done Criteria (M4)
+- [ ] Cartridges can configure `320×180` or wide `480×270` logical viewports with smooth zoom and sub-pixel overscan parity on WebGPU, WebGL2, and Canvas2D.
+- [ ] A chunked multi-room test stage (`≥ 4096×1024 px` with vertical camera follow, parallax backdrop layers, and foreground canopy/eave occlusion) runs deterministically with zero per-frame snapshot GC.
+- [ ] `TextureAtlas` (`1024×1024`) + `SpatialHashGrid` (`2,048` active entities) + all 5 existing cartridges pass `npm run lint && npm run sim && npm run build`.
+
+---
+
+## Future Phase (Do NOT implement until M1–M4 complete)
 - **Edu Edition (`Pixer Edu`) & Managed AI Backend**:
   - Server-side low-cost Structured Output AI compiler -> schema validation + headless `sim` check -> sandboxed `iframe` + `postMessage` embed (`Pixer.embed()` / YouTube-style copy-paste for teachers).
   - Targeted JSON diff co-pilot, teacher "Buggy Cartridge" debugging challenges, and anonymous class-code workflows parallel to Scratch.
+

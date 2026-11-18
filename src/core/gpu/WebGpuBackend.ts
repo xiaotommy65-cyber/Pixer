@@ -4,6 +4,8 @@ import {
   GAME_H,
   GAME_W,
   MAX_INSTANCES_PER_PASS,
+  OVERSCAN_H,
+  OVERSCAN_W,
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
@@ -15,6 +17,8 @@ const LUT_ALIGNED_ROW_BYTES = 256;
 interface PostRenderTargets {
   w: number;
   h: number;
+  osW: number;
+  osH: number;
   bloomW: number;
   bloomH: number;
   sceneTexture: GPUTexture;
@@ -494,12 +498,14 @@ export class WebGpuBackend implements IGpuBackend {
     }
     this.destroyRenderTargets();
 
-    const bloomW = Math.max(1, Math.floor(w / 4));
-    const bloomH = Math.max(1, Math.floor(h / 4));
+    const osW = Math.max(1, Math.round((w * OVERSCAN_W) / GAME_W));
+    const osH = Math.max(1, Math.round((h * OVERSCAN_H) / GAME_H));
+    const bloomW = Math.max(1, Math.floor(osW / 4));
+    const bloomH = Math.max(1, Math.floor(osH / 4));
     const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
 
-    const sceneTexture = this.device.createTexture({ size: [w, h, 1], format: 'rgba8unorm', usage });
-    const emissiveTexture = this.device.createTexture({ size: [w, h, 1], format: 'rgba8unorm', usage });
+    const sceneTexture = this.device.createTexture({ size: [osW, osH, 1], format: 'rgba8unorm', usage });
+    const emissiveTexture = this.device.createTexture({ size: [osW, osH, 1], format: 'rgba8unorm', usage });
     const bloomTexA = this.device.createTexture({ size: [bloomW, bloomH, 1], format: 'rgba8unorm', usage });
     const bloomTexB = this.device.createTexture({ size: [bloomW, bloomH, 1], format: 'rgba8unorm', usage });
 
@@ -523,6 +529,8 @@ export class WebGpuBackend implements IGpuBackend {
     this.renderTargets = {
       w,
       h,
+      osW,
+      osH,
       bloomW,
       bloomH,
       sceneTexture,
@@ -675,14 +683,14 @@ export class WebGpuBackend implements IGpuBackend {
 
     const doBloom = sky.glowIntensity > 0.01;
     if (doBloom) {
-      this.postUniformData[0] = 1 / rtW;
-      this.postUniformData[1] = 1 / rtH;
+      this.postUniformData[0] = 1 / rt.osW;
+      this.postUniformData[1] = 1 / rt.osH;
       this.postUniformData[2] = sky.glowIntensity;
       this.postUniformData[3] = sky.filterMode;
       this.postUniformData[4] = timeSec;
       this.postUniformData[5] = sky.cozyFilter ? 1 : 0;
-      this.postUniformData[6] = rtW;
-      this.postUniformData[7] = rtH;
+      this.postUniformData[6] = 0;
+      this.postUniformData[7] = 0;
       this.device.queue.writeBuffer(this.postDownBuf, 0, this.postUniformData);
 
       this.postUniformData[0] = 1.25 / rt.bloomW;
@@ -694,14 +702,14 @@ export class WebGpuBackend implements IGpuBackend {
       this.device.queue.writeBuffer(this.postBlurVBuf, 0, this.postUniformData);
     }
 
-    this.postUniformData[0] = 1 / rtW;
-    this.postUniformData[1] = 1 / rtH;
+    this.postUniformData[0] = 1 / rt.osW;
+    this.postUniformData[1] = 1 / rt.osH;
     this.postUniformData[2] = sky.glowIntensity;
     this.postUniformData[3] = sky.filterMode;
     this.postUniformData[4] = timeSec;
     this.postUniformData[5] = sky.cozyFilter ? 1 : 0;
-    this.postUniformData[6] = rtW;
-    this.postUniformData[7] = rtH;
+    this.postUniformData[6] = sky.camFracX ?? 0;
+    this.postUniformData[7] = sky.camFracY ?? 0;
     this.device.queue.writeBuffer(this.postCompBuf, 0, this.postUniformData);
 
     const encoder = this.device.createCommandEncoder();

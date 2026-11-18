@@ -2,7 +2,7 @@ import { GAME_H, GAME_W } from '../gpu/GpuTypes.ts';
 import type { InputMap } from '../input/InputMap.ts';
 import type { ShmupFighterSummary, ShmupHudSnapshot } from '../types/HudTypes.ts';
 import { clamp, type RuntimeParams, type SimEvent } from '../types/WorldTypes.ts';
-import type { CartridgeJsonV1, CartridgeLoadoutDef, CartridgeWeaponDef } from './CartridgeSchema.ts';
+import type { CartridgeJsonV1, CartridgeLoadoutDef } from './CartridgeSchema.ts';
 import { JuiceSystem, stepSquashSpring, type SquashSpring } from './JuiceSystem.ts';
 import {
   BM_HOMING,
@@ -1053,8 +1053,4 @@ export function buildShmupHudFromPool(ctx: ShmupRuntimeContext): ShmupHudSnapsho
           }
         : undefined,
   };
-}
-
-export function buildGenericWeaponMap(def: CartridgeJsonV1): Record<string, CartridgeWeaponDef> {
-  return def.player.weapons ?? {};
 }

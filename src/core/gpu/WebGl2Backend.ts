@@ -1,7 +1,11 @@
 import { appLogger } from '../runtime/AppLogger.ts';
 import {
   FLOATS_PER_INSTANCE,
+  GAME_H,
+  GAME_W,
   MAX_INSTANCES_PER_PASS,
+  OVERSCAN_H,
+  OVERSCAN_W,
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
@@ -68,6 +72,8 @@ function createRenderTexture(
 interface GlRenderTargets {
   w: number;
   h: number;
+  osW: number;
+  osH: number;
   bloomW: number;
   bloomH: number;
   mrtFbo: WebGLFramebuffer;
@@ -107,6 +113,7 @@ export class WebGl2Backend implements IGpuBackend {
   private uCompGlowLoc: WebGLUniformLocation | null;
   private uCompFilterLoc: WebGLUniformLocation | null;
   private uCompCozyLoc: WebGLUniformLocation | null;
+  private uCompCamFracLoc: WebGLUniformLocation | null;
 
   private onLostListener?: (e: Event) => void;
   private canvasEl: HTMLCanvasElement;
@@ -161,6 +168,7 @@ export class WebGl2Backend implements IGpuBackend {
     this.uCompGlowLoc = gl.getUniformLocation(this.compositeProg, 'uGlowIntensity');
     this.uCompFilterLoc = gl.getUniformLocation(this.compositeProg, 'uFilterMode');
     this.uCompCozyLoc = gl.getUniformLocation(this.compositeProg, 'uCozyFilter');
+    this.uCompCamFracLoc = gl.getUniformLocation(this.compositeProg, 'uCamFrac');
     if (uSceneTexLoc) gl.uniform1i(uSceneTexLoc, 0);
     if (uBloomTexLoc) gl.uniform1i(uBloomTexLoc, 1);
 
@@ -271,11 +279,13 @@ export class WebGl2Backend implements IGpuBackend {
     }
     this.destroyRenderTargets();
     const gl = this.gl;
-    const bloomW = Math.max(1, Math.floor(w / 4));
-    const bloomH = Math.max(1, Math.floor(h / 4));
+    const osW = Math.max(1, Math.round((w * OVERSCAN_W) / GAME_W));
+    const osH = Math.max(1, Math.round((h * OVERSCAN_H) / GAME_H));
+    const bloomW = Math.max(1, Math.floor(osW / 4));
+    const bloomH = Math.max(1, Math.floor(osH / 4));
 
-    const sceneTex = createRenderTexture(gl, w, h, gl.NEAREST);
-    const emissiveTex = createRenderTexture(gl, w, h, gl.LINEAR);
+    const sceneTex = createRenderTexture(gl, osW, osH, gl.NEAREST);
+    const emissiveTex = createRenderTexture(gl, osW, osH, gl.LINEAR);
     const mrtFbo = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, mrtFbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
@@ -302,6 +312,8 @@ export class WebGl2Backend implements IGpuBackend {
     this.targets = {
       w,
       h,
+      osW,
+      osH,
       bloomW,
       bloomH,
       mrtFbo,
@@ -358,10 +370,10 @@ export class WebGl2Backend implements IGpuBackend {
     const h = Math.max(1, gl.canvas.height);
     const rt = this.ensureRenderTargets(w, h);
 
-    // Pass 1: MRT Scene Color + Emissive Mask
+    // Pass 1: MRT Scene Color + Emissive Mask (Overscan 322x182 virtual space)
     gl.bindFramebuffer(gl.FRAMEBUFFER, rt.mrtFbo);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
-    gl.viewport(0, 0, w, h);
+    gl.viewport(0, 0, rt.osW, rt.osH);
 
     let drawCalls = 1;
     gl.disable(gl.BLEND);
@@ -414,7 +426,7 @@ export class WebGl2Backend implements IGpuBackend {
       gl.useProgram(this.bloomDownProg);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, rt.emissiveTex);
-      gl.uniform2f(this.uDownOffsetLoc, 1 / w, 1 / h);
+      gl.uniform2f(this.uDownOffsetLoc, 1 / rt.osW, 1 / rt.osH);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFboB);
@@ -430,7 +442,7 @@ export class WebGl2Backend implements IGpuBackend {
       drawCalls += 3;
     }
 
-    // Pass 3: Crisp Pixel Upscale + Bloom Composite + Clean/LCD/CRT Post
+    // Pass 3: Crisp Pixel Upscale + Overscan Sub-Pixel Crop + Bloom Composite + Clean/LCD/CRT Post
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, w, h);
     gl.useProgram(this.compositeProg);
@@ -441,6 +453,7 @@ export class WebGl2Backend implements IGpuBackend {
     gl.uniform1f(this.uCompGlowLoc, sky.glowIntensity);
     gl.uniform1f(this.uCompFilterLoc, sky.filterMode);
     gl.uniform1f(this.uCompCozyLoc, sky.cozyFilter ? 1 : 0);
+    gl.uniform2f(this.uCompCamFracLoc, sky.camFracX ?? 0, sky.camFracY ?? 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     drawCalls++;
 

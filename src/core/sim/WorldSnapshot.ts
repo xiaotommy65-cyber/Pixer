@@ -11,7 +11,9 @@ import type { WorldKernel } from './WorldKernel.ts';
 function findFloorDropY(world: WorldKernel, cx: number, bottomY: number): number | null {
   let bestDelta = 46;
   let found: number | null = null;
-  for (const s of world.solids) {
+  const solids = world.solids;
+  for (let i = 0; i < solids.length; i++) {
+    const s = solids[i];
     if (cx >= s.x + 1 && cx <= s.x + s.w - 1 && s.y >= bottomY - 3) {
       const delta = s.y - bottomY;
       if (delta < bestDelta) {
@@ -20,7 +22,9 @@ function findFloorDropY(world: WorldKernel, cx: number, bottomY: number): number
       }
     }
   }
-  for (const mp of world.movingPlatforms) {
+  const platforms = world.movingPlatforms;
+  for (let i = 0; i < platforms.length; i++) {
+    const mp = platforms[i];
     if (cx >= mp.x + 1 && cx <= mp.x + mp.w - 1 && mp.y >= bottomY - 3) {
       const delta = mp.y - bottomY;
       if (delta < bestDelta) {
@@ -34,7 +38,9 @@ function findFloorDropY(world: WorldKernel, cx: number, bottomY: number): number
 
 export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): RenderSceneSnapshot {
   const outTiles = world.tiles.slice();
-  for (const mp of world.movingPlatforms) {
+  const movingPlatforms = world.movingPlatforms;
+  for (let i = 0; i < movingPlatforms.length; i++) {
+    const mp = movingPlatforms[i];
     for (let tx = 0; tx < mp.w; tx += 16) {
       outTiles.push({
         sprite: 'moving_plat',
@@ -59,12 +65,18 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
   let bossHp = 0;
   let bossMaxHp = 0;
 
-  for (const e of world.entities) {
+  const entities = world.entities;
+  for (let i = 0; i < entities.length; i++) {
+    const e = entities[i];
     if (!e.alive) continue;
     if (e.tags.has('boss')) {
       bossHp = e.hp;
       bossMaxHp = e.maxHp;
     }
+
+    const isPortal = e.tags.has('portal');
+    const isBurning = e.tags.has('burning');
+    const isRelic = e.tags.has('relic');
 
     let sprite = e.sprite;
     let yOffset = 0;
@@ -73,20 +85,20 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
       yOffset = Math.sin(t * 4 + e.phase) * 2;
     } else if (e.archetype === 'slime') {
       sprite = Math.floor((t * 4 + e.phase) % 2) === 0 ? 'slime_a' : 'slime_b';
-    } else if (e.archetype === 'key' || e.tags.has('relic') || e.archetype === 'coin') {
+    } else if (e.archetype === 'key' || isRelic || e.archetype === 'coin') {
       yOffset = Math.sin(t * 3.5 + e.phase) * 2.5;
     }
 
-    const dropOffset = findFloorDropY(world, e.x + e.w * 0.5, e.y + e.h);
-    const shouldShadow = dropOffset !== null && !e.tags.has('portal');
+    const dropOffset = isPortal ? null : findFloorDropY(world, e.x + e.w * 0.5, e.y + e.h);
+    const shouldShadow = dropOffset !== null;
     const isGlowing =
       e.archetype === 'star' ||
       e.archetype === 'torch' ||
       e.archetype === 'key' ||
       e.archetype === 'coin' ||
-      e.tags.has('relic') ||
-      e.tags.has('portal') ||
-      e.tags.has('burning');
+      isRelic ||
+      isPortal ||
+      isBurning;
 
     outEntities.push({
       id: e.id,
@@ -99,10 +111,10 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
       scaleY: e.scaleY,
       anchorY: 1,
       flash: Math.min(1, e.flashTimer),
-      emissive: isGlowing ? (e.archetype === 'torch' || e.tags.has('portal') ? 0.95 : 0.72) : undefined,
+      emissive: isGlowing ? (e.archetype === 'torch' || isPortal ? 0.95 : 0.72) : undefined,
       flipX: e.flipX,
-      rot: e.tags.has('portal') ? t * 2.2 : undefined,
-      tint: e.tags.has('burning') ? '#ffd447' : undefined,
+      rot: isPortal ? t * 2.2 : undefined,
+      tint: isBurning ? '#ffd447' : undefined,
       castShadow: shouldShadow,
       shadowOffsetY: dropOffset !== null ? Math.max(0, dropOffset - yOffset) : undefined,
       shadowRadius: e.w * 0.36,
@@ -179,7 +191,9 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
   let debugRects: DebugRectDesc[] | undefined;
   if (world.debugHitboxes) {
     debugRects = [];
-    for (const s of world.getSolidBoxes(false)) {
+    const solidBoxes = world.getSolidBoxes(false);
+    for (let i = 0; i < solidBoxes.length; i++) {
+      const s = solidBoxes[i];
       debugRects.push({
         x: s.x,
         y: s.y,
@@ -189,7 +203,8 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
       });
     }
     debugRects.push({ x: h.x + 2, y: h.y + 2, w: 12, h: 14, color: '#ffd447' });
-    for (const e of world.entities) {
+    for (let i = 0; i < entities.length; i++) {
+      const e = entities[i];
       if (!e.alive) continue;
       debugRects.push({
         x: e.x,

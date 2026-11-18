@@ -140,6 +140,15 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   // 3. Dead selector guard & lifecycle teardown markers
   const domSrc = fs.readFileSync(path.join(rootDir, 'src/ui/dom.ts'), 'utf8');
   check(!domSrc.includes('.bench-btn'), 'Dead selector .bench-btn must remain removed from TACTILE_SELECTOR');
+  const gpuSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/GpuEngine.ts'), 'utf8');
+  const bridgeSrc = fs.readFileSync(path.join(rootDir, 'src/core/runtime/SceneGpuBridge.ts'), 'utf8');
+  check(
+    gpuSrc.includes('public drawSpriteRaw(') &&
+      gpuSrc.includes('this.lastStats.backend = this.backend.kind') &&
+      bridgeSrc.includes('gpu.drawSpriteRaw(') &&
+      !bridgeSrc.includes('gpu.drawSprite('),
+    'Hot-path zero-GC invariant: SceneGpuBridge must use GpuEngine.drawSpriteRaw() and GpuEngine.flush() must reuse lastStats in place',
+  );
   const gamepadSrc = fs.readFileSync(path.join(rootDir, 'src/ui/VirtualGamepadInput.ts'), 'utf8');
   check(
     gamepadSrc.includes('clearAllInputs()') &&
@@ -381,6 +390,8 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   const capturedPaletteRows: number[] = [];
   let capturedGlow = -1;
   let capturedFilterMode = -1;
+  let capturedCamFracX = 0;
+  let capturedCamFracY = 0;
   let uploadCalls = 0;
   let uploadedLut = false;
 
@@ -393,6 +404,8 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
     renderFrame: (sky, alphaItems, alphaCount, additiveItems, additiveCount) => {
       capturedGlow = sky.glowIntensity;
       capturedFilterMode = sky.filterMode;
+      capturedCamFracX = sky.camFracX ?? 0;
+      capturedCamFracY = sky.camFracY ?? 0;
       for (let i = 0; i < alphaCount; i++) {
         const base = i * FLOATS_PER_INSTANCE;
         capturedModesAlpha.push(alphaItems[base + 13]);
@@ -455,8 +468,15 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   );
   capturedPaletteRows.length = 0;
   shmupSnap.paletteRow = 2;
+  shmupSnap.cameraX = 12.25;
+  shmupSnap.cameraY = -4.35;
+  shmupSnap.cameraZoom = 1;
   bridge.render(gpu, shmupSnap, null);
   check(capturedPaletteRows.includes(2), 'SceneGpuBridge must propagate snapshot.paletteRow to GPU instances');
+  check(
+    Math.abs(capturedCamFracX - 0.25) < 1e-4 && Math.abs(capturedCamFracY - -0.35) < 1e-4,
+    'SceneGpuBridge must forward fractional camera offset for overscan sub-pixel panning',
+  );
 
   // Verify WGSL / GLSL ES 3.00 shader parity markers
   const rootDir = process.cwd();
@@ -466,13 +486,16 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
     wgslSrc.includes('uIndexAtlas') &&
       wgslSrc.includes('uPaletteLut') &&
       wgslSrc.includes('fsComposite') &&
+      wgslSrc.includes('OVERSCAN_W') &&
       glslSrc.includes('uIndexAtlas') &&
       glslSrc.includes('uPaletteLut') &&
-      glslSrc.includes('COMPOSITE_FS'),
-    'WebGpuShaders and WebGl2Shaders must maintain LUT + Bloom + Composite parity',
+      glslSrc.includes('COMPOSITE_FS') &&
+      glslSrc.includes('uCamFrac') &&
+      glslSrc.includes('OVERSCAN_W'),
+    'WebGpuShaders and WebGl2Shaders must maintain LUT + Bloom + Overscan Composite parity',
   );
 
-  console.log('[SIM OK] Upgraded GPU Art Pipeline (20-float LUT/Skew + 3-Pass Bloom/Post + Shader Modes) verified');
+  console.log('[SIM OK] Upgraded GPU Art Pipeline (20-float LUT/Skew + 3-Pass Bloom/Post + Overscan) verified');
 }
 
 export async function testStructuredLoggingAndErrorRecovery(): Promise<void> {

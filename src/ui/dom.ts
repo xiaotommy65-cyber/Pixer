@@ -260,7 +260,7 @@ interface TactileTargetSpec {
 }
 
 const TACTILE_SELECTOR =
-  '.jc-sys-btn, .aux-sys-btn, .grip-seg-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .rpg-agent-btn, .rpg-act-btn, .shmup-fighter-card, .shmup-weapon-btn, .shmup-bomb-btn, .chr-btn, .chr-tab, .chr-card, .chr-choice, .toy-btn, .station-tab, .shell-swatch, .palette-chip, .momo-badge';
+  '.jc-sys-btn, .aux-sys-btn, .grip-seg-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .rpg-agent-btn, .rpg-act-btn, .shmup-fighter-card, .shmup-weapon-btn, .shmup-bomb-btn, .chr-btn, .chr-tab, .chr-card, .chr-choice, .toy-btn, .shell-swatch, .palette-chip';
 
 function classifyTactileTarget(node: HTMLElement): TactileTargetSpec | null {
   if ((node as HTMLButtonElement).disabled || node.matches(':disabled')) return null;

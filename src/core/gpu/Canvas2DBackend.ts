@@ -134,6 +134,11 @@ export class Canvas2DBackend implements IGpuBackend {
     ctx.fillRect(0, 0, cw, ch);
 
     ctx.scale(cw / GAME_W, ch / GAME_H);
+    const fx = sky.camFracX ?? 0;
+    const fy = sky.camFracY ?? 0;
+    if (fx !== 0 || fy !== 0) {
+      ctx.translate(-fx, -fy);
+    }
 
     let drawCalls = 1;
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);

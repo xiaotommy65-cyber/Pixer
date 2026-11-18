@@ -125,10 +125,6 @@ export class HomeLobbyView {
     return this.editorBtn;
   }
 
-  public isVisible(): boolean {
-    return this.visible;
-  }
-
   public show(preferredCartridgeId?: CartridgeId | null): void {
     this.visible = true;
     this.focusRow = 'cards';
@@ -150,10 +146,6 @@ export class HomeLobbyView {
   public hide(): void {
     this.visible = false;
     this.element.classList.add('panel-hidden');
-  }
-
-  public getFocusedCartridge(): CartridgeMeta | undefined {
-    return this.cartridges[this.focusedCardIdx];
   }
 
   public refreshCardArt(): void {

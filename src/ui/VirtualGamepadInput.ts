@@ -158,9 +158,6 @@ export class VirtualGamepadInput {
   public setDpadDeadzoneMode(mode: DpadDeadzoneMode): void {
     this.dpadDeadzoneMode = mode;
   }
-  public getDpadDeadzoneMode(): DpadDeadzoneMode {
-    return this.dpadDeadzoneMode;
-  }
 
   public setStickCurveMode(mode: StickCurveMode): void {
     this.stickCurveMode = mode;

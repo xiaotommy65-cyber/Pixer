@@ -12,19 +12,14 @@
   --jc-right: #ff8fa8;
   --jc-right-shade: #e0607f;
   --console-body: #3b3236;
-  --console-body-hi: #4d4247;
 
   --accent-coral: #ff708d;
   --accent-coral-deep: #d94162;
   --accent-honey: #ffd447;
-  --accent-honey-deep: #eb9d18;
   --accent-sky: #5ec2f7;
   --accent-mint: #56d39c;
 
   --radius-xl: 28px;
-  --radius-lg: 20px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
   --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -141,98 +136,6 @@ select {
   -webkit-touch-callout: none;
 }
 
-/* Header Bar */
-.atelier-header {
-  background: linear-gradient(180deg, #ffffff 0%, #fffaf0 68%, #f6ebda 100%);
-  border: var(--border-w) solid var(--ink);
-  border-radius: 22px;
-  box-shadow:
-    inset 0 3px 0 rgba(255, 255, 255, 0.94),
-    inset 0 -3px 0 rgba(56, 40, 32, 0.06),
-    0 6px 0 var(--ink),
-    0 14px 26px -6px rgba(56, 40, 32, 0.15);
-  padding: 10px 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.brand-cluster {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.momo-badge {
-  width: 44px;
-  height: 44px;
-  background: var(--bg-well);
-  border: 2px solid var(--ink);
-  border-radius: 14px;
-  box-shadow: 0 2.5px 0 var(--ink);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: transform 140ms var(--ease-bounce), box-shadow 140ms ease;
-}
-
-.momo-badge:hover {
-  transform: translateY(-2px) rotate(-4deg);
-}
-
-.momo-badge:active,
-.momo-badge.is-pressed {
-  transition: transform 12ms linear, box-shadow 12ms linear;
-  transform: translateY(2px) scale(0.94);
-  box-shadow: 0 0.5px 0 var(--ink);
-}
-
-.momo-badge.is-hopping {
-  animation: momoHop 420ms var(--ease-bounce);
-}
-
-@keyframes momoHop {
-  0% { transform: scale(1) translateY(0); }
-  45% { transform: scale(1.12, 0.9) translateY(-6px); }
-  100% { transform: scale(1) translateY(0); }
-}
-
-.momo-canvas {
-  width: 34px;
-  height: 34px;
-  image-rendering: pixelated;
-}
-
-.brand-titles {
-  display: flex;
-  flex-direction: column;
-}
-
-.brand-title {
-  margin: 0;
-  font-size: 1.08rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.brand-sub {
-  font-size: 0.75rem;
-  color: var(--ink-soft);
-  font-weight: 600;
-}
-
-.header-tools {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
 
 .gpu-pill {
   display: inline-flex;
@@ -377,59 +280,6 @@ select {
   background: linear-gradient(180deg, #ffe270 0%, #f7c12d 100%);
 }
 
-/* 3-Station Pill Tabs */
-.station-nav {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.station-tab {
-  position: relative;
-  appearance: none;
-  border: var(--border-w) solid var(--ink);
-  border-radius: 16px;
-  background: linear-gradient(180deg, #ffffff 0%, var(--bg-card) 100%);
-  padding: 9px 8px;
-  cursor: pointer;
-  box-shadow:
-    inset 0 2px 0 rgba(255, 255, 255, 0.78),
-    0 4px 0 var(--ink),
-    0 7px 14px rgba(56, 40, 32, 0.06);
-  font-weight: 800;
-  font-size: 0.88rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  touch-action: manipulation;
-  transition: transform 120ms var(--ease-bounce), background 160ms ease, box-shadow 120ms ease;
-}
-
-.station-tab:hover {
-  transform: translateY(-2px);
-}
-
-.station-tab.is-active {
-  background: linear-gradient(180deg, #ffe378 0%, var(--accent-honey) 100%);
-  transform: translateY(-2px);
-  box-shadow:
-    inset 0 2px 0 rgba(255, 255, 255, 0.68),
-    0 5px 0 var(--ink),
-    0 9px 16px rgba(235, 157, 24, 0.16);
-}
-
-.station-tab:active,
-.station-tab.is-pressed {
-  transition: transform 12ms linear, box-shadow 12ms linear;
-  transform: translateY(3px) scale(0.98);
-  box-shadow: inset 0 2px 3px rgba(56, 40, 32, 0.22), 0 1px 0 var(--ink);
-}
-
-.tab-icon {
-  font-size: 1.05rem;
-  line-height: 1;
-}
 
 /* Main Console Panel */
 .panel-hidden {
@@ -703,31 +553,6 @@ select {
     gap: 6px;
   }
 
-  .atelier-header {
-    padding: 6px 9px;
-    gap: 6px;
-    border-radius: 14px;
-  }
-
-  .momo-badge {
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
-  }
-
-  .momo-canvas {
-    width: 26px;
-    height: 26px;
-  }
-
-  .brand-title {
-    font-size: 0.92rem;
-  }
-
-  .brand-sub {
-    display: none;
-  }
-
   .gpu-pill {
     padding: 3px 7px;
     font-size: 0.64rem;
@@ -743,23 +568,6 @@ select {
     font-size: 0.72rem;
   }
 
-  .station-nav {
-    gap: 5px;
-  }
-
-  .station-tab {
-    flex-direction: row;
-    gap: 4px;
-    font-size: 0.7rem;
-    padding: 6px 4px;
-    border-radius: 11px;
-    box-shadow: 0 3px 0 var(--ink);
-  }
-
-  .tab-icon {
-    font-size: 0.88rem;
-  }
-
   .atelier-grid-layout,
   .workshop-columns {
     grid-template-columns: 1fr;
@@ -770,39 +578,6 @@ select {
   .atelier-shell {
     padding: 3px 10px 6px;
     gap: 3px;
-  }
-
-  .atelier-header {
-    padding: 3px 8px;
-    border-radius: 12px;
-    box-shadow: 0 3px 0 var(--ink);
-    flex-wrap: nowrap;
-    overflow-x: auto;
-  }
-
-  .header-tools {
-    flex-wrap: nowrap;
-    gap: 5px;
-  }
-
-  .momo-badge {
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
-  }
-
-  .momo-canvas {
-    width: 20px;
-    height: 20px;
-  }
-
-  .brand-title {
-    font-size: 0.86rem;
-    white-space: nowrap;
-  }
-
-  .brand-sub {
-    display: none;
   }
 
   .gpu-pill {
@@ -820,17 +595,6 @@ select {
     padding: 2px 7px;
     font-size: 0.68rem;
     white-space: nowrap;
-  }
-
-  .station-nav {
-    gap: 5px;
-  }
-
-  .station-tab {
-    padding: 3px 5px;
-    font-size: 0.68rem;
-    border-radius: 10px;
-    box-shadow: 0 2px 0 var(--ink);
   }
 }
 
@@ -869,11 +633,6 @@ body.is-handheld-lock {
   height: 100vw;
   transform: translate(-50%, -50%) rotate(90deg);
   transform-origin: center center;
-}
-
-.atelier-shell.is-handheld-landscape .atelier-header,
-.atelier-shell.is-handheld-landscape .station-nav {
-  display: none !important;
 }
 
 /* ---------- Ergonomic Grip Segmented Control & PWA Install / Offline UI ---------- */
@@ -985,10 +744,6 @@ body.is-handheld-lock {
   .grip-seg-btn {
     padding: 4px 6px;
     font-size: 0.68rem;
-  }
-
-  .header-tools {
-    gap: 5px;
   }
 }
 

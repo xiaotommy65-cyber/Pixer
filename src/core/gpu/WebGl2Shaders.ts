@@ -1,4 +1,4 @@
-import { GAME_H, GAME_W } from './GpuTypes.ts';
+import { GAME_H, GAME_W, OVERSCAN_H, OVERSCAN_PAD, OVERSCAN_W } from './GpuTypes.ts';
 
 export const SKY_VS = `#version 300 es
 out vec2 vUv;
@@ -64,8 +64,8 @@ void main() {
   vec2 rotated = vec2(sheared.x * c - sheared.y * s, sheared.x * s + sheared.y * c);
   vec2 world = aRectPosSize.xy + rotated;
 
-  float ndcX = (world.x / ${GAME_W}.0) * 2.0 - 1.0;
-  float ndcY = 1.0 - (world.y / ${GAME_H}.0) * 2.0;
+  float ndcX = ((world.x + ${OVERSCAN_PAD}.0) / ${OVERSCAN_W}.0) * 2.0 - 1.0;
+  float ndcY = 1.0 - ((world.y + ${OVERSCAN_PAD}.0) / ${OVERSCAN_H}.0) * 2.0;
 
   gl_Position = vec4(ndcX, ndcY, 0.0, 1.0);
   vTexUv = mix(aUvBounds.xy, aUvBounds.zw, u01);
@@ -338,13 +338,18 @@ uniform sampler2D uBloomTex;
 uniform float uGlowIntensity;
 uniform float uFilterMode;
 uniform float uCozyFilter;
+uniform vec2 uCamFrac;
 out vec4 fragColor;
 void main() {
-  vec3 sceneCol = texture(uSceneTex, vUv).rgb;
+  vec2 sceneUv = vec2(
+    (${OVERSCAN_PAD}.0 + vUv.x * ${GAME_W}.0 + uCamFrac.x) / ${OVERSCAN_W}.0,
+    (${OVERSCAN_PAD}.0 + vUv.y * ${GAME_H}.0 - uCamFrac.y) / ${OVERSCAN_H}.0
+  );
+  vec3 sceneCol = texture(uSceneTex, sceneUv).rgb;
   vec3 col = sceneCol;
 
   if (uGlowIntensity > 0.01) {
-    vec3 bloom = texture(uBloomTex, vUv).rgb;
+    vec3 bloom = texture(uBloomTex, sceneUv).rgb;
     vec3 bloomTerm = bloom * uGlowIntensity * 0.72;
     col = sceneCol + bloomTerm * (vec3(1.0) - sceneCol * 0.28);
   }

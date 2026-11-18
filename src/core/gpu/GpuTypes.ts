@@ -1,5 +1,8 @@
 export const GAME_W = 320;
 export const GAME_H = 180;
+export const OVERSCAN_PAD = 1;
+export const OVERSCAN_W = GAME_W + OVERSCAN_PAD * 2;
+export const OVERSCAN_H = GAME_H + OVERSCAN_PAD * 2;
 export const FLOATS_PER_INSTANCE = 20;
 export const MAX_INSTANCES_PER_PASS = 8192;
 
@@ -51,6 +54,8 @@ export interface SkyGradient {
   cozyFilter: boolean;
   glowIntensity: number;
   filterMode: number; // 0 = clean, 1 = lcd, 2 = crt
+  camFracX?: number;
+  camFracY?: number;
 }
 
 export interface GpuFrameStats {

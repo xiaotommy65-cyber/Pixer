@@ -1,4 +1,4 @@
-import { GAME_H, GAME_W } from './GpuTypes.ts';
+import { GAME_H, GAME_W, OVERSCAN_H, OVERSCAN_PAD, OVERSCAN_W } from './GpuTypes.ts';
 
 export const WGSL_CODE = /* wgsl */ `
 struct SkyUniforms {
@@ -97,8 +97,8 @@ fn vsSprite(@builtin(vertex_index) vid: u32, inst: InstanceIn) -> SpriteOut {
   );
   let world = inst.rectPosSize.xy + rotated;
 
-  let ndcX = (world.x / ${GAME_W}.0) * 2.0 - 1.0;
-  let ndcY = 1.0 - (world.y / ${GAME_H}.0) * 2.0;
+  let ndcX = ((world.x + ${OVERSCAN_PAD}.0) / ${OVERSCAN_W}.0) * 2.0 - 1.0;
+  let ndcY = 1.0 - ((world.y + ${OVERSCAN_PAD}.0) / ${OVERSCAN_H}.0) * 2.0;
 
   var out: SpriteOut;
   out.pos = vec4f(ndcX, ndcY, 0.0, 1.0);
@@ -313,7 +313,7 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
 export const WGSL_POST_CODE = /* wgsl */ `
 struct PostUniforms {
   params0: vec4f, // x: texelX, y: texelY, z: glowIntensity, w: filterMode (0=clean, 1=lcd, 2=crt)
-  params1: vec4f, // x: timeSec, y: cozyFilter, z: viewW, w: viewH
+  params1: vec4f, // x: timeSec, y: cozyFilter, z: camFracX, w: camFracY
 };
 
 @group(0) @binding(0) var<uniform> uPost: PostUniforms;
@@ -368,12 +368,13 @@ fn fsBloomBlur(in: PostOut) -> @location(0) vec4f {
 
 @fragment
 fn fsComposite(in: PostOut) -> @location(0) vec4f {
-  let sceneCol = textureSampleLevel(uTexA, uNearestSamp, in.uv, 0.0).rgb;
+  let sceneUv = (vec2f(${OVERSCAN_PAD}.0, ${OVERSCAN_PAD}.0) + in.uv * vec2f(${GAME_W}.0, ${GAME_H}.0) + uPost.params1.zw) / vec2f(${OVERSCAN_W}.0, ${OVERSCAN_H}.0);
+  let sceneCol = textureSampleLevel(uTexA, uNearestSamp, sceneUv, 0.0).rgb;
   let glow = max(0.0, uPost.params0.z);
   var col = sceneCol;
 
   if (glow > 0.01) {
-    let bloom = textureSampleLevel(uTexB, uLinearSamp, in.uv, 0.0).rgb;
+    let bloom = textureSampleLevel(uTexB, uLinearSamp, sceneUv, 0.0).rgb;
     let bloomTerm = bloom * glow * 0.72;
     col = sceneCol + bloomTerm * (vec3f(1.0) - sceneCol * 0.28);
   }

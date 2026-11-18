@@ -51,6 +51,8 @@ export class GpuEngine {
     cozyFilter: true,
     glowIntensity: 1.0,
     filterMode: 0,
+    camFracX: 0,
+    camFracY: 0,
   };
   private screenFilterCode = 0;
   private onBackendChange?: (kind: GpuBackendKind, canvas?: HTMLCanvasElement) => void;
@@ -237,6 +239,8 @@ export class GpuEngine {
     cozyFilter = true,
     glowIntensity = 1.0,
     filterMode = this.screenFilterCode,
+    camFracX = 0,
+    camFracY = 0,
   ): void {
     const topPacked = packHexRgb(topHex);
     this.currentSky.top[0] = ((topPacked >> 16) & 255) * INV_255;
@@ -251,6 +255,8 @@ export class GpuEngine {
     this.currentSky.cozyFilter = cozyFilter;
     this.currentSky.glowIntensity = Math.max(0, Math.min(2.0, glowIntensity));
     this.currentSky.filterMode = filterMode;
+    this.currentSky.camFracX = camFracX;
+    this.currentSky.camFracY = camFracY;
     this.alphaCount = 0;
     this.addCount = 0;
     this.spriteTotal = 0;
@@ -383,6 +389,53 @@ export class GpuEngine {
     );
   }
 
+  public drawSpriteRaw(
+    id: SpriteId,
+    x: number,
+    y: number,
+    w?: number,
+    h?: number,
+    flipX = false,
+    rot = 0,
+    tint?: string,
+    alpha = 1,
+    flash = 0,
+    additive = false,
+    pivotX = 0.5,
+    pivotY = 0.5,
+    skewX = 0,
+    paletteRow = 0,
+    emissive = 0,
+  ): void {
+    const rect = this.atlas.getRect(id);
+    const dw = w ?? rect.w;
+    const dh = h ?? rect.h;
+    const u0 = flipX ? rect.u1 : rect.u0;
+    const u1 = flipX ? rect.u0 : rect.u1;
+    this.spriteTotal++;
+    this.pushInstanceHex(
+      additive,
+      x,
+      y,
+      dw,
+      dh,
+      u0,
+      rect.v0,
+      u1,
+      rect.v1,
+      tint,
+      alpha,
+      rot,
+      0,
+      flash,
+      emissive,
+      pivotX,
+      pivotY,
+      skewX,
+      paletteRow,
+    );
+  }
+
   public drawSprite(
     id: SpriteId,
     x: number,
@@ -403,32 +456,23 @@ export class GpuEngine {
       emissive?: number;
     },
   ): void {
-    const rect = this.atlas.getRect(id);
-    const w = opts?.w ?? rect.w;
-    const h = opts?.h ?? rect.h;
-    const u0 = opts?.flipX ? rect.u1 : rect.u0;
-    const u1 = opts?.flipX ? rect.u0 : rect.u1;
-    this.spriteTotal++;
-    this.pushInstanceHex(
-      opts?.additive ?? false,
+    this.drawSpriteRaw(
+      id,
       x,
       y,
-      w,
-      h,
-      u0,
-      rect.v0,
-      u1,
-      rect.v1,
+      opts?.w,
+      opts?.h,
+      opts?.flipX ?? false,
+      opts?.rot ?? 0,
       opts?.tint,
       opts?.alpha ?? 1,
-      opts?.rot ?? 0,
-      0,
       opts?.flash ?? 0,
-      opts?.emissive ?? 0,
+      opts?.additive ?? false,
       opts?.pivotX ?? 0.5,
       opts?.pivotY ?? 0.5,
       opts?.skewX ?? 0,
       opts?.paletteRow ?? 0,
+      opts?.emissive ?? 0,
     );
   }
 
@@ -533,13 +577,11 @@ export class GpuEngine {
       timeSec,
     );
     const frameTimeMs = performance.now() - t0;
-    this.lastStats = {
-      backend: this.backend.kind,
-      drawCalls,
-      spriteCount: this.spriteTotal,
-      lightCount: this.lightTotal,
-      frameTimeMs,
-    };
+    this.lastStats.backend = this.backend.kind;
+    this.lastStats.drawCalls = drawCalls;
+    this.lastStats.spriteCount = this.spriteTotal;
+    this.lastStats.lightCount = this.lightTotal;
+    this.lastStats.frameTimeMs = frameTimeMs;
     return this.lastStats;
   }
 

@@ -16,7 +16,6 @@ export interface ConsoleHudRefs {
   spriteStatTag: HTMLElement;
   fpsTag: HTMLElement;
   statusHintEl: HTMLElement;
-  insertPrompt?: HTMLElement;
   resultOverlay: HTMLElement;
   resultTitle: HTMLElement;
   resultDesc: HTMLElement;
@@ -93,7 +92,6 @@ export class ConsoleHudPresenter {
     this.lastBannerState = 'playing';
     this.resetOverlays();
     this.refs.resultOverlay.classList.add('panel-hidden');
-    this.refs.insertPrompt?.classList.add('panel-hidden');
     this.setStatusHint(
       resumedSram ? `💾 已讀取 SRAM 續關進度｜${meta.controlsHint}` : meta.controlsHint,
     );
@@ -103,7 +101,6 @@ export class ConsoleHudPresenter {
   public showEmpty(): void {
     this.resetOverlays();
     this.setStageDisplay(false);
-    this.refs.insertPrompt?.classList.remove('panel-hidden');
     this.refs.resultOverlay.classList.add('panel-hidden');
     if (this.lastScoreText !== '分數 0') {
       this.lastScoreText = '分數 0';

@@ -94,10 +94,6 @@ export class StudioWorkbenchView {
     );
   }
 
-  public getActiveTab(): WorkbenchTab {
-    return this.activeTab;
-  }
-
   public isOpen(): boolean {
     return !this.element.classList.contains('panel-hidden');
   }

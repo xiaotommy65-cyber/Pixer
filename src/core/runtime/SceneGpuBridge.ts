@@ -180,12 +180,7 @@ export class SceneGpuBridge {
     }
 
     const capY = sy - elevZ * this.zoom * ps;
-    gpu.drawSprite(t.sprite, sx, capY, {
-      w: dw,
-      h: dh,
-      tint: t.tint,
-      paletteRow: this.defaultPaletteRow,
-    });
+    gpu.drawSpriteRaw(t.sprite, sx, capY, dw, dh, false, 0, t.tint, 1, 0, false, 0.5, 0.5, 0, this.defaultPaletteRow, 0);
   }
 
   private drawEntity(gpu: GpuEngine, e: EntityDesc): void {
@@ -200,21 +195,24 @@ export class SceneGpuBridge {
     const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
     const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
     if (sx < -this.cullPad || sx > GAME_W + this.cullPad || sy < -this.cullPad || sy - sh > GAME_H + this.cullPad) return;
-    gpu.drawSprite(e.sprite, sx, sy, {
-      w: sw,
-      h: sh,
-      flipX: e.flipX,
-      rot: e.rot,
-      tint: e.tint,
-      alpha: e.alpha,
-      flash: e.flash,
-      additive: e.additive,
-      pivotX: 0.5,
-      pivotY: anchorY,
-      skewX: e.skewX ?? 0,
-      emissive: e.emissive ?? (e.additive ? 0.85 : 0),
-      paletteRow: e.paletteRow ?? this.defaultPaletteRow,
-    });
+    gpu.drawSpriteRaw(
+      e.sprite,
+      sx,
+      sy,
+      sw,
+      sh,
+      e.flipX ?? false,
+      e.rot ?? 0,
+      e.tint,
+      e.alpha ?? 1,
+      e.flash ?? 0,
+      e.additive ?? false,
+      0.5,
+      anchorY,
+      e.skewX ?? 0,
+      e.paletteRow ?? this.defaultPaletteRow,
+      e.emissive ?? (e.additive ? 0.85 : 0),
+    );
   }
 
   private acquireDepthSlot(index: number): PooledDepthSlot {
@@ -230,19 +228,39 @@ export class SceneGpuBridge {
     let count = 0;
     for (let i = 0; i < tiles.length; i++) {
       const t = tiles[i];
-      if ((t.extrudeH ?? 0) > 0 || (t.elevationZ ?? 0) > 0) {
-        const slot = this.acquireDepthSlot(count);
-        slot.kind = 'tile';
-        slot.sortY = t.sortY ?? t.y + t.h;
-        slot.order = count;
-        slot.tile = t;
-        slot.entity = null;
-        count++;
-      }
+      if ((t.extrudeH ?? 0) <= 0 && (t.elevationZ ?? 0) <= 0) continue;
+      // Pre-sort frustum cull so off-screen walls never enter depthPool or O(K log K) sort
+      const wyMid = t.y + t.h * 0.5;
+      const ps = this.perspScaleAtWorldY(wyMid);
+      const sx = this.projectX(t.x + t.w * 0.5, wyMid);
+      const halfDw = t.w * 0.5 * this.zoom * ps;
+      if (sx + halfDw < -this.cullPad || sx - halfDw > GAME_W + this.cullPad) continue;
+      const yTop = this.projectY(t.y);
+      const yBot = this.projectY(t.y + t.h);
+      const sy = (yTop + yBot) * 0.5;
+      const halfDh = Math.max(1, yBot - yTop) * 0.5;
+      if (sy + halfDh < -this.cullPad || sy - halfDh > GAME_H + this.cullPad) continue;
+
+      const slot = this.acquireDepthSlot(count);
+      slot.kind = 'tile';
+      slot.sortY = t.sortY ?? t.y + t.h;
+      slot.order = count;
+      slot.tile = t;
+      slot.entity = null;
+      count++;
     }
 
     for (let i = 0; i < entities.length; i++) {
       const e = entities[i];
+      const anchorY = e.anchorY ?? 0.5;
+      const ps = this.perspScaleAtWorldY(e.y + e.h * 0.5);
+      const sx = GAME_W * 0.5 + (e.x + e.w * 0.5 - this.camCenterX) * this.zoom * ps;
+      if (sx < -this.cullPad || sx > GAME_W + this.cullPad) continue;
+      const syBase = GAME_H * 0.5 + (e.y + e.h * anchorY - this.camCenterY) * this.zoom * ps;
+      const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
+      const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
+      if (sy < -this.cullPad || sy - sh > GAME_H + this.cullPad) continue;
+
       const slot = this.acquireDepthSlot(count);
       slot.kind = 'entity';
       slot.sortY = e.sortY ?? (e.additive ? e.y + e.h + 18 : e.y + e.h);
@@ -276,7 +294,7 @@ export class SceneGpuBridge {
       const y = 22 + ((i * 37) % 70);
       for (let k = 0; k < 3; k++) {
         const id = k === 0 ? 'cloud_l' : k === 1 ? 'cloud_m' : 'cloud_r';
-        gpu.drawSprite(id, x + k * 16 + 8, y + 8, { alpha: 0.85 });
+        gpu.drawSpriteRaw(id, x + k * 16 + 8, y + 8, undefined, undefined, false, 0, undefined, 0.85);
       }
     }
 
@@ -287,18 +305,23 @@ export class SceneGpuBridge {
     drawGroundShadow(gpu, cx, cy + 28, 17, elevFromFloor, 1);
 
     gpu.drawLight(cx, cy + bob, awake ? 82 : 64, '#fff2cc', awake ? 0.78 : 0.55);
+    const starSize = awake ? 14 : 12;
     for (let i = 0; i < 6; i++) {
       const speed = awake ? 2.2 : 0.9;
       const ang = timeSec * speed + (i * Math.PI) / 3;
-      gpu.drawSprite(awake && i % 2 === 0 ? 'sparkle' : 'star_a', cx + Math.cos(ang) * 72, cy + Math.sin(ang) * 34 + bob, {
-        w: awake ? 14 : 12,
-        h: awake ? 14 : 12,
-        rot: ang,
-      });
+      gpu.drawSpriteRaw(
+        awake && i % 2 === 0 ? 'sparkle' : 'star_a',
+        cx + Math.cos(ang) * 72,
+        cy + Math.sin(ang) * 34 + bob,
+        starSize,
+        starSize,
+        false,
+        ang,
+      );
     }
     const blinkCycle = timeSec % 4.0;
     const mood = awake || blinkCycle < 0.45 ? 'momo_happy' : 'momo_idle';
-    gpu.drawSprite(mood, cx, cy + bob, { w: 48, h: 48 });
+    gpu.drawSpriteRaw(mood, cx, cy + bob, 48, 48);
     return gpu.flush(timeSec);
   }
 
@@ -307,12 +330,17 @@ export class SceneGpuBridge {
     snap: RenderSceneSnapshot,
     benchmarkSprites: readonly BenchmarkSprite[] | null,
   ): GpuFrameStats {
-    gpu.beginFrame(snap.skyTop, snap.skyBottom, snap.cozyFilter, snap.glowIntensity ?? 1.0);
-
     this.defaultPaletteRow = snap.paletteRow ?? 0;
     this.zoom = snap.cameraZoom ?? 1;
-    this.camCenterX = snap.cameraX + GAME_W * 0.5;
-    this.camCenterY = snap.cameraY + GAME_H * 0.5;
+    const snappedCamX = Math.round(snap.cameraX);
+    const snappedCamY = Math.round(snap.cameraY);
+    const camFracX = Math.max(-0.98, Math.min(0.98, (snap.cameraX - snappedCamX) * this.zoom));
+    const camFracY = Math.max(-0.98, Math.min(0.98, (snap.cameraY - snappedCamY) * this.zoom));
+
+    gpu.beginFrame(snap.skyTop, snap.skyBottom, snap.cozyFilter, snap.glowIntensity ?? 1.0, undefined, camFracX, camFracY);
+
+    this.camCenterX = snappedCamX + GAME_W * 0.5;
+    this.camCenterY = snappedCamY + GAME_H * 0.5;
     const hd2d = snap.hd2dDepth;
     const hd2dOn = Boolean(hd2d?.enabled);
     this.perspSkew = hd2dOn ? (hd2d?.perspectiveSkew ?? 0.055) : 0;
@@ -321,21 +349,21 @@ export class SceneGpuBridge {
     for (let i = 0; i < snap.bgStars.length; i++) {
       const s = snap.bgStars[i];
       const pulse = 0.55 + 0.45 * Math.sin(snap.timeSec * 4 + s.phase);
-      gpu.drawStarGlint(Math.round(s.x), Math.round(s.y), Math.max(1.2, s.size * 0.85), s.color, pulse, 2.2);
+      gpu.drawStarGlint(Math.round(s.x) + camFracX, Math.round(s.y) + camFracY, Math.max(1.2, s.size * 0.85), s.color, pulse, 2.2);
     }
 
-    const camX = Math.round(snap.cameraX);
+    const cloudOffsetX = camFracX * 0.55;
     for (let i = 0; i < snap.bgClouds.length; i++) {
       const c = snap.bgClouds[i];
-      const cx = Math.round(c.x - camX * 0.45);
-      const cy = Math.round(c.y);
+      const cx = Math.round(c.x - snappedCamX * 0.45) + cloudOffsetX;
+      const cy = Math.round(c.y) + camFracY;
       const segW = Math.round(16 * c.scale);
       const segH = Math.round(16 * c.scale);
       const halfH = segH * 0.5;
       if (cx > -segW * 3 && cx < GAME_W + segW * 2) {
-        gpu.drawSprite('cloud_l', cx + segW * 0.5, cy + halfH, { w: segW, h: segH, tint: c.tint, alpha: c.alpha });
-        gpu.drawSprite('cloud_m', cx + segW * 1.5, cy + halfH, { w: segW, h: segH, tint: c.tint, alpha: c.alpha });
-        gpu.drawSprite('cloud_r', cx + segW * 2.5, cy + halfH, { w: segW, h: segH, tint: c.tint, alpha: c.alpha });
+        gpu.drawSpriteRaw('cloud_l', cx + segW * 0.5, cy + halfH, segW, segH, false, 0, c.tint, c.alpha);
+        gpu.drawSpriteRaw('cloud_m', cx + segW * 1.5, cy + halfH, segW, segH, false, 0, c.tint, c.alpha);
+        gpu.drawSpriteRaw('cloud_r', cx + segW * 2.5, cy + halfH, segW, segH, false, 0, c.tint, c.alpha);
       }
     }
 
@@ -376,10 +404,10 @@ export class SceneGpuBridge {
 
     if (snap.ambientDarkness && snap.ambientDarkness > 0.01) {
       gpu.drawRect(
-        GAME_W * 0.5,
-        GAME_H * 0.5,
-        GAME_W,
-        GAME_H,
+        GAME_W * 0.5 + camFracX,
+        GAME_H * 0.5 + camFracY,
+        GAME_W + 4,
+        GAME_H + 4,
         snap.ambientColor ?? '#120e24',
         Math.min(0.88, snap.ambientDarkness),
       );
@@ -404,15 +432,7 @@ export class SceneGpuBridge {
       const alpha = Math.max(0, 1 - p.life / p.maxLife);
       if (p.sprite) {
         const add = p.additive ?? true;
-        gpu.drawSprite(p.sprite, px, py, {
-          w: pSize,
-          h: pSize,
-          rot: p.rot,
-          tint: p.color,
-          alpha,
-          additive: add,
-          emissive: add ? 0.9 : 0,
-        });
+        gpu.drawSpriteRaw(p.sprite, px, py, pSize, pSize, false, p.rot ?? 0, p.color, alpha, 0, add, 0.5, 0.5, 0, 0, add ? 0.9 : 0);
       } else if (p.additive) {
         gpu.drawLight(px, py, Math.max(1.8, pSize * 0.85), p.color, alpha * 0.95, 1.8);
       } else {
@@ -423,14 +443,7 @@ export class SceneGpuBridge {
     if (benchmarkSprites) {
       for (let i = 0; i < benchmarkSprites.length; i++) {
         const b = benchmarkSprites[i];
-        gpu.drawSprite(b.sprite, b.x, b.y, {
-          w: b.size,
-          h: b.size,
-          rot: b.rot,
-          tint: b.tint,
-          alpha: 0.9,
-          additive: b.sprite === 'sparkle',
-        });
+        gpu.drawSpriteRaw(b.sprite, b.x + camFracX, b.y + camFracY, b.size, b.size, false, b.rot, b.tint, 0.9, 0, b.sprite === 'sparkle');
       }
     }
 
@@ -449,21 +462,21 @@ export class SceneGpuBridge {
       const hazeAlpha = hd2d?.horizonHazeAlpha ?? 0.16;
       if (hazeAlpha > 0.005) {
         const hazeColor = hd2d?.horizonHazeColor ?? snap.skyTop;
-        gpu.drawSmoothGradient(GAME_W * 0.5, 16, GAME_W, 32, hazeColor, hazeAlpha, 0, 1.45);
+        gpu.drawSmoothGradient(GAME_W * 0.5 + camFracX, 16 + camFracY, GAME_W + 4, 34, hazeColor, hazeAlpha, 0, 1.45);
       }
       const tiltAlpha = hd2d?.tiltShiftAlpha ?? 0.16;
       if (tiltAlpha > 0.005) {
-        gpu.drawSmoothGradient(GAME_W * 0.5, 9, GAME_W, 18, '#0a0814', tiltAlpha, 0, 1.6);
-        gpu.drawSmoothGradient(GAME_W * 0.5, GAME_H - 9, GAME_W, 18, '#0a0814', tiltAlpha * 0.85, 1, 1.6);
+        gpu.drawSmoothGradient(GAME_W * 0.5 + camFracX, 9 + camFracY, GAME_W + 4, 20, '#0a0814', tiltAlpha, 0, 1.6);
+        gpu.drawSmoothGradient(GAME_W * 0.5 + camFracX, GAME_H - 9 + camFracY, GAME_W + 4, 20, '#0a0814', tiltAlpha * 0.85, 1, 1.6);
       }
     }
 
     if (snap.screenFlashAlpha && snap.screenFlashAlpha > 0.01) {
       gpu.drawRect(
-        GAME_W * 0.5,
-        GAME_H * 0.5,
-        GAME_W,
-        GAME_H,
+        GAME_W * 0.5 + camFracX,
+        GAME_H * 0.5 + camFracY,
+        GAME_W + 4,
+        GAME_H + 4,
         snap.screenFlashColor ?? '#fffaf0',
         Math.min(0.42, snap.screenFlashAlpha),
       );
@@ -472,38 +485,30 @@ export class SceneGpuBridge {
     const lb = snap.cameraLetterbox ?? 0;
     if (lb > 0.004) {
       const barH = Math.round(GAME_H * Math.min(0.2, lb));
-      gpu.drawRect(GAME_W * 0.5, barH * 0.5, GAME_W, barH, '#07060b', 0.96);
-      gpu.drawRect(GAME_W * 0.5, GAME_H - barH * 0.5, GAME_W, barH, '#07060b', 0.96);
+      gpu.drawRect(GAME_W * 0.5 + camFracX, barH * 0.5 + camFracY, GAME_W + 4, barH + 2, '#07060b', 0.96);
+      gpu.drawRect(GAME_W * 0.5 + camFracX, GAME_H - barH * 0.5 + camFracY, GAME_W + 4, barH + 2, '#07060b', 0.96);
     }
 
     if (!snap.rpgHud && !snap.chronicleHud) {
       for (let i = 0; i < snap.maxHearts; i++) {
-        gpu.drawSprite(i < snap.hearts ? 'heart_full' : 'heart_empty', 12 + i * 13, 11, {
-          w: 11,
-          h: 11,
-        });
+        gpu.drawSpriteRaw(i < snap.hearts ? 'heart_full' : 'heart_empty', 12 + i * 13 + camFracX, 11 + camFracY, 11, 11);
       }
 
       if (snap.hasKey) {
-        gpu.drawSprite('key', GAME_W - 14, 11, { w: 12, h: 12 });
+        gpu.drawSpriteRaw('key', GAME_W - 14 + camFracX, 11 + camFracY, 12, 12);
       }
 
       for (let i = 0; i < snap.starsTotal; i++) {
         const collected = i < snap.starsCollected;
         const baseOffset = snap.hasKey ? 28 : 14;
-        gpu.drawSprite('star_a', GAME_W - baseOffset - i * 11, 11, {
-          w: 9,
-          h: 9,
-          tint: collected ? '#ffd447' : '#8c9ab5',
-          alpha: collected ? 1 : 0.45,
-        });
+        gpu.drawSpriteRaw('star_a', GAME_W - baseOffset - i * 11 + camFracX, 11 + camFracY, 9, 9, false, 0, collected ? '#ffd447' : '#8c9ab5', collected ? 1 : 0.45);
       }
 
       if (snap.bossMaxHp > 0 && snap.bossHp > 0) {
         const barW = 90;
         const ratio = snap.bossHp / snap.bossMaxHp;
-        gpu.drawRect(GAME_W * 0.5, 11, barW + 6, 9, '#2b1d1a', 0.92, 0, false, 0, 1);
-        gpu.drawRect(GAME_W * 0.5 - barW * 0.5 * (1 - ratio), 11, Math.max(2, barW * ratio), 4.5, '#ff708d', 1, 0, false, 0, 1);
+        gpu.drawRect(GAME_W * 0.5 + camFracX, 11 + camFracY, barW + 6, 9, '#2b1d1a', 0.92, 0, false, 0, 1);
+        gpu.drawRect(GAME_W * 0.5 - barW * 0.5 * (1 - ratio) + camFracX, 11 + camFracY, Math.max(2, barW * ratio), 4.5, '#ff708d', 1, 0, false, 0, 1);
       }
     }
 

@@ -561,12 +561,6 @@
   animation: slotPulse 1.6s ease-in-out infinite;
 }
 
-.cart-slot.is-hot .slot-mouth {
-  background: var(--accent-honey);
-  box-shadow: 0 0 0 5px rgba(255, 212, 71, 0.45);
-  animation: none;
-}
-
 @keyframes slotPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(255, 212, 71, 0); }
   50% { box-shadow: 0 0 0 5px rgba(255, 212, 71, 0.5); }
@@ -851,76 +845,7 @@
   backdrop-filter: blur(2px);
 }
 
-.insert-prompt {
-  justify-content: flex-end;
-  padding-bottom: 7%;
-  pointer-events: none;
-}
-
-.insert-pill {
-  background: var(--bg-card);
-  border: 2.5px solid var(--ink);
-  border-radius: 999px;
-  box-shadow: 0 4px 0 var(--ink);
-  padding: 6px 16px;
-  font-weight: 900;
-  font-size: clamp(0.78rem, 2.2vw, 1rem);
-  color: var(--ink);
-  animation: hintBob 1.6s ease-in-out infinite;
-}
-
-.boot-splash {
-  background: var(--boot-accent, #ff708d);
-  color: #fffdf8;
-  animation: bootFade 1.35s ease forwards;
-}
-
-.boot-art {
-  width: min(34%, 180px);
-  border: 3px solid var(--ink);
-  border-radius: 10px;
-  image-rendering: pixelated;
-  box-shadow: 0 5px 0 var(--ink);
-  animation: bootArt 600ms var(--ease-bounce);
-}
-
-.boot-title {
-  margin: 0;
-  font-size: clamp(1rem, 3.4vw, 1.5rem);
-  font-weight: 900;
-  text-shadow: 0 2px 0 var(--ink);
-}
-
-.boot-brand {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.72rem;
-  font-weight: 700;
-  opacity: 0.9;
-}
-
-.boot-bar {
-  width: min(46%, 220px);
-  height: 9px;
-  border-radius: 999px;
-  border: 2px solid var(--ink);
-  background: rgba(255, 255, 255, 0.35);
-  overflow: hidden;
-}
-
-.boot-bar span {
-  display: block;
-  height: 100%;
-  width: 0;
-  background: #fffdf8;
-  animation: bootBar 1.15s ease-out forwards;
-}
-
-@keyframes bootBar { to { width: 100%; } }
 @keyframes bootArt { from { transform: scale(0.6) rotate(-6deg); opacity: 0; } }
-@keyframes bootFade {
-  0%, 82% { opacity: 1; }
-  100% { opacity: 0; }
-}
 
 .capture-flash {
   position: absolute;
@@ -1022,173 +947,6 @@
   flex: 1;
 }
 
-/* ---------- Game card case (2.5D Stepped Tabletop Organizer Tray) ---------- */
-.card-case {
-  background: linear-gradient(180deg, #faf0de 0%, #f1e1c6 55%, #e5cfab 100%);
-  border: var(--border-w) solid var(--ink);
-  border-radius: 24px;
-  box-shadow:
-    inset 0 4px 0 rgba(255, 255, 255, 0.8),
-    inset 0 -5px 10px rgba(56, 40, 32, 0.1),
-    0 7px 0 var(--ink),
-    0 16px 28px -8px rgba(56, 40, 32, 0.16);
-  padding: 12px 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.case-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.case-head strong {
-  font-size: 0.95rem;
-  font-weight: 900;
-}
-
-.case-head span {
-  font-size: 0.76rem;
-  font-weight: 700;
-  color: var(--ink-soft);
-}
-
-.card-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.game-card {
-  --card-accent: #ff708d;
-  position: relative;
-  flex: 1 1 108px;
-  max-width: 146px;
-  border: 2.5px solid var(--ink);
-  border-radius: 9px 22px 9px 9px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.25) 0%, transparent 45%),
-    linear-gradient(var(--card-accent) 0 20px, #fffdf8 20px);
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.45),
-    0 4px 0 var(--ink),
-    0 8px 14px rgba(56, 40, 32, 0.12);
-  padding: 4px 7px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-  transition: transform 220ms var(--ease-bounce), box-shadow 160ms ease, opacity 160ms ease;
-}
-
-.game-card:hover {
-  transform: translateY(-4px) rotate(-1.5deg);
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.55),
-    0 7px 0 var(--ink),
-    0 14px 20px rgba(56, 40, 32, 0.18);
-}
-
-.game-card.is-dragging {
-  z-index: 40;
-  cursor: grabbing;
-  transition: none;
-  box-shadow: 0 14px 22px rgba(56, 40, 32, 0.28);
-}
-
-.game-card.is-flying {
-  visibility: hidden;
-}
-
-.game-card.is-out {
-  border-style: dashed;
-  background: transparent;
-  box-shadow: none;
-  pointer-events: none;
-}
-
-.game-card.is-out > * {
-  opacity: 0;
-}
-
-.game-card.is-out::after {
-  content: '在主機裡 ▲';
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 0.74rem;
-  font-weight: 800;
-  color: var(--ink-soft);
-}
-
-.game-card.is-returning {
-  animation: cardPop 380ms var(--ease-bounce);
-}
-
-@keyframes cardPop {
-  0% { transform: translateY(-14px) scale(0.92); }
-  100% { transform: translateY(0) scale(1); }
-}
-
-.card-ghost {
-  pointer-events: none;
-  transition: transform 460ms cubic-bezier(0.45, 0, 0.25, 1.15);
-}
-
-.card-code {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.66rem;
-  font-weight: 700;
-  color: #fffdf8;
-  height: 14px;
-}
-
-.card-art {
-  width: 100%;
-  aspect-ratio: 8 / 5;
-  border: 2px solid var(--ink);
-  border-radius: 6px;
-  image-rendering: pixelated;
-  display: block;
-  pointer-events: none;
-}
-
-.card-title {
-  font-size: 0.78rem;
-  font-weight: 900;
-  line-height: 1.2;
-}
-
-.card-genre {
-  font-size: 0.66rem;
-  font-weight: 700;
-  color: var(--ink-soft);
-}
-
-.card-record {
-  align-self: flex-start;
-  margin-top: 1px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1.5px solid var(--ink);
-  background: var(--bg-well);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.62rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink);
-}
-
-.card-record.is-played {
-  background: #fff1b8;
-}
 
 /* ---------- Phone portrait: aligned 2.5D Pocket Split Dock + >=44px cozy thumb buttons ---------- */
 @media (max-width: 760px) {
@@ -1391,37 +1149,6 @@
   .dia-sub {
     font-size: 0.46rem;
   }
-
-  .card-case {
-    padding: 10px 10px 13px;
-    gap: 7px;
-    border-radius: 20px;
-  }
-
-  .case-head strong {
-    font-size: 0.86rem;
-  }
-
-  .case-head span {
-    font-size: 0.68rem;
-  }
-
-  .card-row {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    gap: 8px;
-    padding-bottom: 3px;
-  }
-
-  .game-card {
-    flex: 1 0 94px;
-    max-width: 124px;
-    padding: 4px 6px 6px;
-  }
-
-  .card-title {
-    font-size: 0.72rem;
-  }
 }
 
 @media (max-width: 640px) and (orientation: portrait) {
@@ -1621,7 +1348,6 @@
   gap: 0;
 }
 
-.atelier-shell.is-handheld-landscape .card-case,
 .atelier-shell.is-handheld-landscape .cart-slot,
 .atelier-shell.is-handheld-landscape .slot-side,
 .atelier-shell.is-handheld-landscape .top-vol,
