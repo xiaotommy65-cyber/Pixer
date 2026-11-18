@@ -33,7 +33,7 @@
   - `EventBus.ts` & `SeededRng.ts` — Typed `EngineEventBus` and deterministic RNG.
 - `src/core/sim/` — Shared 2D/2.5D simulation primitives:
   - `WorldKernel.ts`, `WorldEntitiesStep.ts`, `WorldHeroPhysics.ts`, `WorldSnapshot.ts`, `WorldInternalTypes.ts`
-  - `CartridgeSchema.ts`, `DataCartridgeRuntime.ts`, `DataRuntimeShmup.ts`, `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`
+  - `CartridgeSchema.ts`, `ProceduralStageCompiler.ts`, `DataCartridgeRuntime.ts`, `DataRuntimeShmup.ts`, `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`
   - `CameraDirector.ts`, `CutsceneSequencer.ts`, `JuiceSystem.ts` (`FEEDBACK_RECIPES`), `BehaviorTree.ts`, `GridPathfinder.ts`, `RuleMatrix.ts`, `Archetypes.ts`
 - `src/core/audio/` — Zero-dependency scale-locked Web Audio synthesizer (`ToySynth.ts`, `AudioBus.ts`, `BgmSequencer.ts`, `SynthPresets.ts`).
 - `src/core/input/` — Input DSP & hardware gamepad (`InputPipeline.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `InputMap.ts`, `WebGamepadSampler.ts`).

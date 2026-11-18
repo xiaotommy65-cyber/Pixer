@@ -8,6 +8,7 @@ import {
   testStructuredLoggingAndErrorRecovery,
   testUpgradedGpuPipelineAndAtlas,
   testM42M43ChunkedWorldsAndMultiLayerDepth,
+  testProceduralDeclarativeCompiler,
 } from './sim/ArchitectureTests.ts';
 import {
   testCloudberryHop,
@@ -58,6 +59,7 @@ async function runAll() {
   await testM3LoadCartridgeAndPngCodec();
   testM41DynamicViewportAndCamera();
   testM42M43ChunkedWorldsAndMultiLayerDepth();
+  testProceduralDeclarativeCompiler();
   console.log('[SIM ALL PASSED] Pixel Atelier Engine 3.0 & All 5 Cartridges (PA-01..PA-05) Passed!');
 }
 

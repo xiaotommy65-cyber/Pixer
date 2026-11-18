@@ -24,9 +24,11 @@ const VALID_SOUND_PRESETS = new Set<SimEvent>([
 
 const VALID_BGM_THEMES = new Set<BgmTheme>(['meadow', 'starlight', 'dungeon', 'boss']);
 const VALID_BEHAVIORS = new Set<string>([
-  'none', 'patrol', 'sine', 'interceptor', 'frigate', 'carrier',
+  'none', 'patrol', 'sine', 'chase_los', 'interceptor', 'frigate', 'carrier',
   'missile', 'meteor', 'cargo', 'boss_shmup', 'boss_stomp', 'orbit',
 ]);
+const VALID_BIOMES = new Set<string>(['meadow', 'alpine', 'cavern', 'sky_islands', 'cyber_ruins']);
+const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const VALID_BUTTONS = new Set<string>(['jump', 'action', 'skillX', 'skillY', 'shoulderL', 'shoulderR']);
 const VALID_COMPARE_OPS = new Set<string>(['==', '!=', '<', '<=', '>', '>=']);
 const VALID_VAR_OPS = new Set<string>(['=', '+=', '-=', 'clamp']);
@@ -40,12 +42,14 @@ export type CartridgeTag =
 
 export interface CartridgeArchetypeBehavior {
   kind:
-    | 'none' | 'patrol' | 'sine' | 'interceptor' | 'frigate' | 'carrier'
+    | 'none' | 'patrol' | 'sine' | 'chase_los' | 'interceptor' | 'frigate' | 'carrier'
     | 'missile' | 'meteor' | 'cargo' | 'boss_shmup' | 'boss_stomp' | 'orbit';
   speedX?: number;
   speedY?: number;
   amplitude?: number;
   freq?: number;
+  sightRange?: number;
+  chaseSpeed?: number;
   fireCooldown?: number;
   spread?: readonly number[];
   orbitRadius?: number;
@@ -154,15 +158,48 @@ export interface CartridgeForegroundTileDef {
   sortY?: number;
 }
 
+export interface CartridgeArtMoodDef {
+  baseHex: string;
+  accentHex?: string;
+  warmth?: number;
+  contrast?: number;
+  autoSky?: boolean;
+  parallaxFog?: number;
+}
+
+export interface CartridgeProceduralStageDef {
+  seed: number;
+  biome?: 'meadow' | 'alpine' | 'cavern' | 'sky_islands' | 'cyber_ruins';
+  surfaceRow?: number;
+  hillAmplitude?: number;
+  frequency?: number;
+  octaves?: number;
+  gapChance?: number;
+  platformDensity?: number;
+  caveCarve?: number;
+  parallaxBands?: number;
+  foregroundCanopy?: boolean;
+  safeMarginCols?: number;
+  autoSpawns?: { stars?: number; enemies?: number; torches?: number };
+}
+
+export interface CartridgeSpringCameraDef {
+  freqHz?: number;
+  dampingRatio?: number;
+}
+
 export interface CartridgeStageDef {
   id: string;
   name: string;
   worldWidth: number;
   worldHeight?: number;
-  skyTop: string;
-  skyBottom: string;
+  skyTop?: string;
+  skyBottom?: string;
   ambientDarkness?: number;
   ambientColor?: string;
+  artMood?: CartridgeArtMoodDef;
+  procedural?: CartridgeProceduralStageDef;
+  springCamera?: CartridgeSpringCameraDef;
   bgmTheme: BgmTheme;
   paletteRow?: number;
   hint: string;
@@ -456,6 +493,13 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
       if (def.behavior !== undefined) {
         if (!isRecord(def.behavior) || !VALID_BEHAVIORS.has(String(def.behavior.kind))) {
           errors.push(`archetypes.${id}.behavior.kind invalid`);
+        } else {
+          if (def.behavior.sightRange !== undefined && (!isFiniteNum(def.behavior.sightRange) || def.behavior.sightRange <= 0 || def.behavior.sightRange > 1024)) {
+            errors.push(`archetypes.${id}.behavior.sightRange must be in (0, 1024]`);
+          }
+          if (def.behavior.chaseSpeed !== undefined && (!isFiniteNum(def.behavior.chaseSpeed) || def.behavior.chaseSpeed <= 0 || def.behavior.chaseSpeed > 400)) {
+            errors.push(`archetypes.${id}.behavior.chaseSpeed must be in (0, 400]`);
+          }
         }
       }
     }
@@ -485,6 +529,54 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
       }
       if (!VALID_BGM_THEMES.has(st.bgmTheme as BgmTheme)) {
         errors.push(`stages[${i}].bgmTheme '${String(st.bgmTheme)}' invalid`);
+      }
+      if (st.skyTop !== undefined && (typeof st.skyTop !== 'string' || !HEX_COLOR_RE.test(st.skyTop))) {
+        errors.push(`stages[${i}].skyTop must be a valid hex color`);
+      }
+      if (st.skyBottom !== undefined && (typeof st.skyBottom !== 'string' || !HEX_COLOR_RE.test(st.skyBottom))) {
+        errors.push(`stages[${i}].skyBottom must be a valid hex color`);
+      }
+      if (st.artMood !== undefined) {
+        if (!isRecord(st.artMood) || typeof st.artMood.baseHex !== 'string' || !HEX_COLOR_RE.test(st.artMood.baseHex)) {
+          errors.push(`stages[${i}].artMood.baseHex must be a valid hex color`);
+        } else {
+          if (st.artMood.accentHex !== undefined && (typeof st.artMood.accentHex !== 'string' || !HEX_COLOR_RE.test(st.artMood.accentHex))) {
+            errors.push(`stages[${i}].artMood.accentHex must be a valid hex color`);
+          }
+          if (st.artMood.parallaxFog !== undefined && (!isFiniteNum(st.artMood.parallaxFog) || st.artMood.parallaxFog < 0 || st.artMood.parallaxFog > 1)) {
+            errors.push(`stages[${i}].artMood.parallaxFog must be in [0, 1]`);
+          }
+        }
+      }
+      if (st.procedural !== undefined) {
+        if (!isRecord(st.procedural) || !isFiniteNum(st.procedural.seed)) {
+          errors.push(`stages[${i}].procedural requires a finite seed`);
+        } else {
+          if (st.procedural.biome !== undefined && !VALID_BIOMES.has(String(st.procedural.biome))) {
+            errors.push(`stages[${i}].procedural.biome '${String(st.procedural.biome)}' invalid`);
+          }
+          if (st.procedural.frequency !== undefined && (!isFiniteNum(st.procedural.frequency) || st.procedural.frequency <= 0 || st.procedural.frequency > 1)) {
+            errors.push(`stages[${i}].procedural.frequency must be in (0, 1]`);
+          }
+          if (st.procedural.octaves !== undefined && (!isFiniteNum(st.procedural.octaves) || st.procedural.octaves < 1 || st.procedural.octaves > 8)) {
+            errors.push(`stages[${i}].procedural.octaves must be in [1, 8]`);
+          }
+          if (st.procedural.gapChance !== undefined && (!isFiniteNum(st.procedural.gapChance) || st.procedural.gapChance < 0 || st.procedural.gapChance > 0.6)) {
+            errors.push(`stages[${i}].procedural.gapChance must be in [0, 0.6]`);
+          }
+          if (st.procedural.parallaxBands !== undefined && (!isFiniteNum(st.procedural.parallaxBands) || st.procedural.parallaxBands < 0 || st.procedural.parallaxBands > 4)) {
+            errors.push(`stages[${i}].procedural.parallaxBands must be in [0, 4]`);
+          }
+        }
+      }
+      if (st.springCamera !== undefined) {
+        if (
+          !isRecord(st.springCamera) ||
+          (st.springCamera.freqHz !== undefined && (!isFiniteNum(st.springCamera.freqHz) || st.springCamera.freqHz <= 0 || st.springCamera.freqHz > 30)) ||
+          (st.springCamera.dampingRatio !== undefined && (!isFiniteNum(st.springCamera.dampingRatio) || st.springCamera.dampingRatio <= 0 || st.springCamera.dampingRatio > 8))
+        ) {
+          errors.push(`stages[${i}].springCamera has out-of-range parameters`);
+        }
       }
       if (st.groundTop !== undefined && !validSprites.has(String(st.groundTop))) {
         errors.push(`stages[${i}].groundTop '${String(st.groundTop)}' unknown`);

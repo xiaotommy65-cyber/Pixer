@@ -1288,3 +1288,238 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
   );
 }
 
+export function testProceduralDeclarativeCompiler(): void {
+  const params = new CartridgeRunner('cloudberry-hop').getParams();
+
+  // 1. Compact declarative JSON (~30 lines style): no manual tileGrid/skyTop/skyBottom
+  const declarativeJson: CartridgeJsonV1 = {
+    version: 1,
+    meta: { id: 'proc-alpine-test', code: 'PA-T1', title: 'Alpine Procedural Test', genre: 'platformer', viewport: 'wide' },
+    player: { controller: 'platformer', sprite: 'hero_a', spriteB: 'hero_b', w: 16, h: 16, maxHearts: 3 },
+    archetypes: {
+      star: { sprite: 'star_a', spriteB: 'star_b', w: 12, h: 12, tags: ['collectible', 'star'] },
+      wisp: { sprite: 'star_b', w: 14, h: 14, tags: ['collectible'], behavior: { kind: 'sine', amplitude: 10, freq: 3.5 } },
+      stalker: {
+        sprite: 'slime_a',
+        spriteB: 'slime_b',
+        w: 16,
+        h: 14,
+        tags: ['enemy', 'stompable', 'gravity'],
+        behavior: { kind: 'chase_los', sightRange: 180, chaseSpeed: 64 },
+      },
+    },
+    stages: [
+      {
+        id: 'alpine-1',
+        name: 'Alpine Ridge',
+        worldWidth: 1024,
+        worldHeight: 288,
+        bgmTheme: 'meadow',
+        hint: 'Declarative math stage',
+        spawn: { x: 32, y: 160 },
+        artMood: { baseHex: '#2f5d8a', accentHex: '#ffb074', warmth: -0.25, contrast: 0.7, parallaxFog: 0.55 },
+        procedural: {
+          seed: 1337,
+          biome: 'alpine',
+          parallaxBands: 3,
+          foregroundCanopy: true,
+          autoSpawns: { stars: 6, enemies: 2 },
+        },
+        springCamera: { freqHz: 4.5, dampingRatio: 1.05 },
+        spawns: [{ archetype: 'wisp', x: 96, y: 132 }],
+      },
+    ],
+  };
+
+  const valOk = validateCartridgeJson(declarativeJson);
+  check(valOk.ok, `Declarative procedural cartridge failed schema validation: ${valOk.ok ? '' : valOk.errors.join('; ')}`);
+
+  const rtA = new DataCartridgeRuntime(declarativeJson);
+  const rtB = new DataCartridgeRuntime(declarativeJson);
+  const snapInit = rtA.snapshot(params);
+  check(
+    snapInit.skyTop !== '#76c7ff' && snapInit.skyBottom !== '#fff3df',
+    `artMood should synthesize Oklab skyTop/skyBottom (got ${snapInit.skyTop} -> ${snapInit.skyBottom})`,
+  );
+  check(
+    snapInit.bgParallaxLayers !== undefined && snapInit.bgParallaxLayers.length === 3,
+    `procedural.parallaxBands=3 should produce 3 Oklab-tinted parallax layers (got ${snapInit.bgParallaxLayers?.length ?? 0})`,
+  );
+  check(snapInit.tiles.length > 0, 'procedural alpine stage must generate ground tiles');
+  check(snapInit.starsTotal >= 5, `procedural.autoSpawns.stars should populate stage starsTotal (got ${snapInit.starsTotal})`);
+
+  // Step right for 60 ticks and verify bit-identical determinism, sine bobbing, and canopy visibility
+  let wispMinY = Infinity;
+  let wispMaxY = -Infinity;
+  let sawFgCanopy = (snapInit.fgTiles?.length ?? 0) > 0;
+  for (let i = 0; i < 60; i++) {
+    const inp = { ...emptyInput(), right: true };
+    rtA.step(1 / 60, inp, params);
+    rtB.step(1 / 60, inp, params);
+    const sA = rtA.snapshot(params);
+    if ((sA.fgTiles?.length ?? 0) > 0) sawFgCanopy = true;
+    check(Number.isFinite(sA.cameraX) && Number.isFinite(sA.cameraY), `springCamera coordinates must remain finite`);
+
+    for (let k = 0; k < rtA.pool.activeCount; k++) {
+      const slot = rtA.pool.activeIndices[k];
+      const aid = rtA.archetypeMetaByIdx[rtA.pool.archetypeIdx[slot]]?.id;
+      if (aid === 'wisp') {
+        wispMinY = Math.min(wispMinY, rtA.pool.y[slot]);
+        wispMaxY = Math.max(wispMaxY, rtA.pool.y[slot]);
+      }
+    }
+  }
+
+  // Dedicated springCamera smooth monotonic tracking check on flat procedural terrain (no enemy shake)
+  const springCartridge: CartridgeJsonV1 = {
+    version: 1,
+    meta: { id: 'spring-cam-test', code: 'PA-SP', title: 'Spring Camera Test', genre: 'platformer', viewport: 'wide' },
+    player: { controller: 'platformer', sprite: 'hero_a', w: 16, h: 16, maxHearts: 3 },
+    archetypes: { star: { sprite: 'star_a', w: 12, h: 12, tags: ['collectible', 'star'] } },
+    stages: [
+      {
+        id: 'sp-1',
+        name: 'Spring Flat',
+        worldWidth: 1024,
+        worldHeight: 240,
+        bgmTheme: 'meadow',
+        hint: 'Spring cam',
+        spawn: { x: 240, y: 160 },
+        artMood: { baseHex: '#3b6ea5' },
+        procedural: { seed: 42, biome: 'meadow', hillAmplitude: 0, gapChance: 0, platformDensity: 0 },
+        springCamera: { freqHz: 4.5, dampingRatio: 1.05 },
+      },
+    ],
+  };
+  const rtSpring = new DataCartridgeRuntime(springCartridge);
+  const springInitCamX = rtSpring.snapshot(params).cameraX;
+  let prevSpringCamX = springInitCamX;
+  for (let i = 0; i < 60; i++) {
+    rtSpring.step(1 / 60, { ...emptyInput(), right: true }, params);
+    const scx = rtSpring.snapshot(params).cameraX;
+    check(
+      Number.isFinite(scx) && scx >= prevSpringCamX - 1e-4,
+      `springCamera must track smoothly without NaN or backward jitter (prev=${prevSpringCamX}, cur=${scx})`,
+    );
+    prevSpringCamX = scx;
+  }
+  check(
+    prevSpringCamX > springInitCamX + 30,
+    `springCamera should scroll cleanly as hero moves right (start=${springInitCamX}, end=${prevSpringCamX})`,
+  );
+  const finalA = rtA.snapshot(params);
+  const finalB = rtB.snapshot(params);
+  check(
+    finalA.cameraX === finalB.cameraX &&
+      finalA.cameraY === finalB.cameraY &&
+      finalA.tiles.length === finalB.tiles.length &&
+      finalA.entities.length === finalB.entities.length,
+    'Declarative procedural stage must be bit-identical across two independent runtimes with identical seed',
+  );
+  check(sawFgCanopy, 'procedural.foregroundCanopy=true should emit foreground tree_canopy tiles');
+  check(wispMaxY - wispMinY > 4, `sine behavior should oscillate vertically (delta=${(wispMaxY - wispMinY).toFixed(2)})`);
+
+  // 2. Verify chase_los line-of-sight wall occlusion vs open corridor
+  const makeLosCartridge = (withWall: boolean): CartridgeJsonV1 => {
+    const cols = 20;
+    const rows = 12;
+    const tiles = new Array<number>(cols * rows).fill(0);
+    const collision = new Array<number>(cols * rows).fill(0);
+    for (let c = 0; c < cols; c++) {
+      tiles[10 * cols + c] = 1;
+      collision[10 * cols + c] = COLLISION_SOLID;
+      tiles[11 * cols + c] = 2;
+      collision[11 * cols + c] = COLLISION_SOLID;
+    }
+    if (withWall) {
+      for (let r = 6; r <= 9; r++) {
+        tiles[r * cols + 8] = 6;
+        collision[r * cols + 8] = COLLISION_SOLID;
+      }
+    }
+    return {
+      version: 1,
+      meta: { id: withWall ? 'los-wall' : 'los-open', code: 'LOS', title: 'LOS Test', genre: 'platformer' },
+      player: { controller: 'platformer', sprite: 'hero_a', w: 16, h: 16, maxHearts: 3 },
+      archetypes: {
+        hunter: {
+          sprite: 'slime_a',
+          w: 16,
+          h: 16,
+          tags: ['enemy', 'stompable'],
+          behavior: { kind: 'chase_los', sightRange: 220, chaseSpeed: 64 },
+        },
+      },
+      stages: [
+        {
+          id: 'los-1',
+          name: 'LOS Arena',
+          worldWidth: cols * 16,
+          worldHeight: rows * 16,
+          skyTop: '#24305e',
+          skyBottom: '#6c8ebf',
+          bgmTheme: 'dungeon',
+          hint: 'LOS check',
+          spawn: { x: 48, y: 144 },
+          tileGrid: { cols, rows, tiles, collision, spriteMap: { '1': 'grass', '2': 'dirt', '6': 'stone' } },
+          spawns: [{ archetype: 'hunter', x: 176, y: 144 }],
+        },
+      ],
+    };
+  };
+
+  const rtBlocked = new DataCartridgeRuntime(makeLosCartridge(true));
+  const rtClear = new DataCartridgeRuntime(makeLosCartridge(false));
+  for (let i = 0; i < 20; i++) {
+    rtBlocked.step(1 / 60, emptyInput(), params);
+    rtClear.step(1 / 60, emptyInput(), params);
+  }
+  const findHunterSlot = (rt: DataCartridgeRuntime): number => {
+    for (let i = 0; i < rt.pool.activeCount; i++) {
+      const s = rt.pool.activeIndices[i];
+      if (rt.archetypeMetaByIdx[rt.pool.archetypeIdx[s]]?.id === 'hunter') return s;
+    }
+    return -1;
+  };
+  const bSlot = findHunterSlot(rtBlocked);
+  const cSlot = findHunterSlot(rtClear);
+  check(bSlot >= 0 && cSlot >= 0, 'Both LOS test runtimes must spawn hunter entity');
+  check(
+    rtBlocked.pool.aiState[bSlot] === 0 && Math.abs(rtBlocked.pool.x[bSlot] - 176) < 0.01,
+    `chase_los must stay idle behind solid wall (aiState=${rtBlocked.pool.aiState[bSlot]}, x=${rtBlocked.pool.x[bSlot]})`,
+  );
+  check(
+    rtClear.pool.aiState[cSlot] === 1 && rtClear.pool.x[cSlot] < 170,
+    `chase_los must detect player and chase in open corridor (aiState=${rtClear.pool.aiState[cSlot]}, x=${rtClear.pool.x[cSlot]})`,
+  );
+
+  // 3. Zero-GC snapshot bank reuse check on procedural runtime
+  for (let i = 0; i < 120; i++) rtA.snapshot(params);
+  const p0 = rtA.snapshot(params);
+  const p1 = rtA.snapshot(params);
+  const p2 = rtA.snapshot(params);
+  check(p0 === p2 && p0 !== p1 && p0.tiles === p2.tiles, 'Procedural DataCartridgeRuntime must reuse ping-pong snapshot banks');
+
+  // 4. Schema negative tests for new declarative fields
+  const badBiome = structuredClone(declarativeJson) as unknown as { stages: { procedural: { biome: string } }[] };
+  badBiome.stages[0].procedural.biome = 'lava_moon';
+  check(!validateCartridgeJson(badBiome).ok, 'validateCartridgeJson must reject unknown procedural.biome');
+
+  const badHex = structuredClone(declarativeJson) as unknown as { stages: { artMood: { baseHex: string } }[] };
+  badHex.stages[0].artMood.baseHex = 'not-a-color';
+  check(!validateCartridgeJson(badHex).ok, 'validateCartridgeJson must reject malformed artMood.baseHex');
+
+  const badSight = structuredClone(declarativeJson) as unknown as { archetypes: { stalker: { behavior: { sightRange: number } } } };
+  badSight.archetypes.stalker.behavior.sightRange = -10;
+  check(!validateCartridgeJson(badSight).ok, 'validateCartridgeJson must reject non-positive behavior.sightRange');
+
+  const badSpring = structuredClone(declarativeJson) as unknown as { stages: { springCamera: { freqHz: number } }[] };
+  badSpring.stages[0].springCamera.freqHz = 99;
+  check(!validateCartridgeJson(badSpring).ok, 'validateCartridgeJson must reject out-of-range springCamera.freqHz');
+
+  console.log(
+    `[SIM OK] Declarative Procedural Compiler -> Oklab sky=${snapInit.skyTop}->${snapInit.skyBottom}, parallax=${snapInit.bgParallaxLayers.length}, chase_los(blocked=idle, clear=chase x=${rtClear.pool.x[cSlot].toFixed(1)}), springCamera+sine=verified`,
+  );
+}
+
+

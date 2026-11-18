@@ -2,6 +2,8 @@ import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import { GAME_H, GAME_W, resolveLogicalViewport, type LogicalViewport } from '../gpu/GpuTypes.ts';
 import { InputMap } from '../input/InputMap.ts';
 import { SpatialHash } from '../math/SpatialHash.ts';
+import { stepSpringInto } from '../math/SpringDynamics.ts';
+import { hasGridLineOfSight } from '../math/Visibility2D.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type { ShmupFighterSummary } from '../types/HudTypes.ts';
 import {
@@ -50,10 +52,17 @@ import {
 } from './EventActionVm.ts';
 import { JuiceSystem, stepSquashSpring } from './JuiceSystem.ts';
 import {
+  applyOklabParallaxFog,
+  compileProceduralStage,
+  resolveStageArtMood,
+} from './ProceduralStageCompiler.ts';
+import {
+  BM_CHASE,
   BM_MOVING_PLATFORM,
   BM_ORBIT,
   BM_PATROL,
   BM_PLATFORMER_CTRL,
+  BM_SIN_FLOAT,
   BM_TOPDOWN_MOVE,
   EF_ADDITIVE,
   EF_ALIVE,
@@ -290,8 +299,19 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   public debugHitboxes = false;
 
   // Platformer state
+  private stageSkyTop = '#76c7ff';
+  private stageSkyBottom = '#fff3df';
+  private stageAmbientColor = '#120e24';
   private cameraX = 0;
   private cameraY = 0;
+  private camVelX = 0;
+  private camVelY = 0;
+  private prevCamTargetX = 0;
+  private prevCamTargetY = 0;
+  private springCamFreq = 0;
+  private springCamDamping = 1;
+  private readonly camSpringOut = new Float64Array(2);
+  private readonly isTileOpaque = (tx: number, ty: number): boolean => this.tilemap.getCollision(tx, ty) === COLLISION_SOLID;
   private cameraZoom = 1.0;
   private stageViewport: LogicalViewport = { width: GAME_W, height: GAME_H };
   private scoutMode = false;
@@ -415,6 +435,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       const idx = this.archetypes.length;
       let bm = 0;
       if (def.behavior?.kind === 'patrol') bm |= BM_PATROL;
+      else if (def.behavior?.kind === 'sine') bm |= BM_SIN_FLOAT;
+      else if (def.behavior?.kind === 'chase_los') bm |= BM_CHASE;
       else if (def.behavior?.kind === 'orbit') bm |= BM_ORBIT;
       this.archetypes.push({
         id,
@@ -432,6 +454,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.bestStarsByStage = this.def.stages.map((st) => {
       let c = 0;
       for (const sp of st.spawns ?? []) if (sp.archetype === 'star') c++;
+      if (st.procedural?.autoSpawns?.stars && this.archetypeIdxById.has('star')) {
+        c += Math.min(32, Math.round(st.procedural.autoSpawns.stars));
+      }
       totalStars += c;
       return 0;
     });
@@ -557,6 +582,15 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.stageWorldW = st.worldWidth;
     this.stageWorldH = worldH;
 
+    const mood = resolveStageArtMood(st);
+    this.stageSkyTop = mood.skyTop;
+    this.stageSkyBottom = mood.skyBottom;
+    this.stageAmbientColor = mood.ambientColor;
+    this.springCamFreq = st.springCamera?.freqHz ?? 0;
+    this.springCamDamping = st.springCamera?.dampingRatio ?? 1;
+    this.camVelX = 0;
+    this.camVelY = 0;
+
     this.pool.reset();
     this.lastHitGroupByTarget.fill(0);
     this.juice.reset();
@@ -668,6 +702,27 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
           }
         }
       }
+    } else if (st.procedural) {
+      compileProceduralStage({
+        stage: st,
+        worldW: st.worldWidth,
+        worldH,
+        tilemap: this.tilemap,
+        fgExtraTiles: this.fgExtraTiles,
+        bgParallaxLayers: this.bgParallaxLayers,
+        mood,
+        hasArchetype: (id) => this.archetypeIdxById.has(id),
+        pickEnemyArchetype: () => {
+          for (let i = 0; i < this.archetypes.length; i++) {
+            if ((this.archetypes[i].flags & EF_ENEMY) !== 0) return this.archetypes[i].id;
+          }
+          return null;
+        },
+        spawnArchetype: (aid, ax, ay) => this.spawnArchetype(aid, ax, ay),
+        onStarSpawned: () => {
+          this.stageStarsTotal++;
+        },
+      });
     } else if (!st.tileChunks) {
       for (const isl of st.islands ?? []) {
         const topRow = clamp(Math.round(isl.topY / TILE_SIZE), 0, rows - 1);
@@ -755,6 +810,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     for (const ly of st.bgParallaxLayers ?? []) {
       this.bgParallaxLayers.push({ ...ly });
     }
+    if (mood.parallaxFog > 0 && this.bgParallaxLayers.length > 0) {
+      applyOklabParallaxFog(this.bgParallaxLayers, this.stageSkyBottom, mood.parallaxFog);
+    }
 
     this.tilemap.recomputeAutoMask();
     if (this.hasFgTilemapTiles) {
@@ -782,6 +840,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const maxCamY = Math.max(0, worldH - this.stageViewport.height);
     this.cameraX = clamp(st.spawn.x - this.stageViewport.width * 0.42, 0, maxCamX);
     this.cameraY = clamp(st.spawn.y - this.stageViewport.height * 0.55, 0, maxCamY);
+    this.prevCamTargetX = this.cameraX;
+    this.prevCamTargetY = this.cameraY;
 
     for (const sp of st.spawns ?? []) {
       const s = this.spawnArchetype(sp.archetype, sp.x, sp.y, sp.vx ?? 0, sp.vy ?? 0);
@@ -798,6 +858,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       }
     }
     if (!this.stageHasKey && !st.boss) this.gateUnlocked = true;
+    if (this.def.stages.length === 1) {
+      this.totalCampaignStars = this.stageStarsTotal;
+    }
 
     this.bgClouds = st.bgClouds
       ? [...st.bgClouds]
@@ -847,7 +910,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.pool.vx[slot] = vx !== 0 ? vx : arch.def.behavior?.speedX ?? 0;
     this.pool.vy[slot] = vy !== 0 ? vy : arch.def.behavior?.speedY ?? 0;
     this.pool.parentSlot[slot] = parentSlot;
-    this.pool.paramA[slot] = x * 0.1; // phase seed
+    this.pool.paramA[slot] = (arch.behaviorMask & BM_CHASE) !== 0 ? 0 : x * 0.1; // phase seed or minX default
+    this.pool.paramB[slot] = (arch.behaviorMask & BM_SIN_FLOAT) !== 0 ? y : 0;
     this.pool.pivotX[slot] = 0.5;
     this.pool.pivotY[slot] = arch.def.castShadow ? 1.0 : 0.5;
     if (arch.def.paletteRow !== undefined) this.pool.paletteRow[slot] = arch.def.paletteRow;
@@ -1109,6 +1173,71 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         else if (pool.x[s] > pool.paramB[s]) { pool.x[s] = pool.paramB[s]; pool.vx[s] = -Math.abs(pool.vx[s]); }
         if (pool.vx[s] < 0) pool.flags[s] |= EF_FLIP_X;
         else pool.flags[s] &= ~EF_FLIP_X;
+      } else if ((pool.behaviorMask[s] & BM_SIN_FLOAT) !== 0) {
+        const archIdx = pool.archetypeIdx[s];
+        const beh = archIdx >= 0 ? this.archetypes[archIdx].def.behavior : undefined;
+        const amp = beh?.amplitude ?? 12;
+        const freq = beh?.freq ?? 2.6;
+        const speedX = beh?.speedX ?? 0;
+        if (speedX !== 0) {
+          pool.x[s] += speedX * dt;
+          if (pool.x[s] < 0) pool.x[s] = 0;
+          else if (pool.x[s] > this.stageWorldW - pool.w[s]) pool.x[s] = this.stageWorldW - pool.w[s];
+        }
+        pool.timerA[s] += dt * freq;
+        pool.y[s] = pool.paramB[s] + Math.sin(pool.timerA[s] + pool.paramA[s]) * amp;
+      } else if ((pool.behaviorMask[s] & BM_CHASE) !== 0) {
+        const archIdx = pool.archetypeIdx[s];
+        const beh = archIdx >= 0 ? this.archetypes[archIdx].def.behavior : undefined;
+        const sightRange = beh?.sightRange ?? 160;
+        const chaseSpeed = beh?.chaseSpeed ?? Math.max(24, Math.abs(beh?.speedX ?? 44));
+        const ecx = pool.x[s] + pool.w[s] * 0.5;
+        const ecy = pool.y[s] + pool.h[s] * 0.5;
+        const pcx = pool.x[p] + pool.w[p] * 0.5;
+        const pcy = pool.y[p] + pool.h[p] * 0.5;
+        const dx = pcx - ecx;
+        const dy = pcy - ecy;
+        const seesPlayer =
+          dx * dx + dy * dy <= sightRange * sightRange &&
+          hasGridLineOfSight(
+            Math.floor(ecx / TILE_SIZE),
+            Math.floor(ecy / TILE_SIZE),
+            Math.floor(pcx / TILE_SIZE),
+            Math.floor(pcy / TILE_SIZE),
+            this.isTileOpaque,
+          );
+        pool.aiState[s] = seesPlayer ? 1 : 0;
+        if (seesPlayer) {
+          const dirX = dx > 2 ? 1 : dx < -2 ? -1 : 0;
+          pool.vx[s] = dirX * chaseSpeed;
+          if ((pool.flags[s] & EF_GRAVITY) === 0) {
+            const dirY = dy > 2 ? 1 : dy < -2 ? -1 : 0;
+            pool.vy[s] = dirY * (chaseSpeed * 0.65);
+          }
+        } else if (pool.paramB[s] > pool.paramA[s]) {
+          if (Math.abs(pool.vx[s]) < 1) pool.vx[s] = beh?.speedX ?? 24;
+          if (pool.x[s] < pool.paramA[s]) { pool.x[s] = pool.paramA[s]; pool.vx[s] = Math.abs(pool.vx[s]); }
+          else if (pool.x[s] > pool.paramB[s]) { pool.x[s] = pool.paramB[s]; pool.vx[s] = -Math.abs(pool.vx[s]); }
+        } else {
+          pool.vx[s] = 0;
+          if ((pool.flags[s] & EF_GRAVITY) === 0) pool.vy[s] = 0;
+        }
+        const nextEx = pool.x[s] + pool.vx[s] * dt;
+        const probeCol = Math.floor((nextEx + (pool.vx[s] >= 0 ? pool.w[s] - 1 : 1)) / TILE_SIZE);
+        const probeRow = Math.floor((pool.y[s] + pool.h[s] * 0.5) / TILE_SIZE);
+        if (this.tilemap.getCollision(probeCol, probeRow) !== COLLISION_SOLID) {
+          pool.x[s] = clamp(nextEx, 0, Math.max(0, this.stageWorldW - pool.w[s]));
+        }
+        if ((pool.flags[s] & EF_GRAVITY) === 0) {
+          const nextEy = pool.y[s] + pool.vy[s] * dt;
+          const vProbeRow = Math.floor((nextEy + (pool.vy[s] >= 0 ? pool.h[s] - 1 : 1)) / TILE_SIZE);
+          const vProbeCol = Math.floor((pool.x[s] + pool.w[s] * 0.5) / TILE_SIZE);
+          if (this.tilemap.getCollision(vProbeCol, vProbeRow) !== COLLISION_SOLID) {
+            pool.y[s] = clamp(nextEy, 0, Math.max(0, this.stageWorldH - pool.h[s]));
+          }
+        }
+        if (pool.vx[s] < -1) pool.flags[s] |= EF_FLIP_X;
+        else if (pool.vx[s] > 1) pool.flags[s] &= ~EF_FLIP_X;
       } else if ((pool.flags[s] & EF_BULLET) !== 0) {
         pool.x[s] += pool.vx[s] * dt;
         pool.y[s] += pool.vy[s] * dt;
@@ -1265,9 +1394,42 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const maxCamY = Math.max(0, this.stageWorldH - viewH);
     const desiredCamX = clamp(pool.x[p] - viewW * 0.42, 0, maxCamX);
     const desiredCamY = clamp(pool.y[p] - viewH * 0.55, 0, maxCamY);
-    const camAlpha = Math.min(1, dt * 8);
-    this.cameraX += (desiredCamX - this.cameraX) * camAlpha;
-    this.cameraY += (desiredCamY - this.cameraY) * camAlpha;
+    if (this.springCamFreq > 0) {
+      stepSpringInto(
+        this.cameraX,
+        this.camVelX,
+        desiredCamX,
+        this.prevCamTargetX,
+        this.springCamFreq,
+        this.springCamDamping,
+        0,
+        dt,
+        this.camSpringOut,
+        0,
+      );
+      this.cameraX = clamp(this.camSpringOut[0], 0, maxCamX);
+      this.camVelX = this.camSpringOut[1];
+      stepSpringInto(
+        this.cameraY,
+        this.camVelY,
+        desiredCamY,
+        this.prevCamTargetY,
+        this.springCamFreq,
+        this.springCamDamping,
+        0,
+        dt,
+        this.camSpringOut,
+        0,
+      );
+      this.cameraY = clamp(this.camSpringOut[0], 0, maxCamY);
+      this.camVelY = this.camSpringOut[1];
+      this.prevCamTargetX = desiredCamX;
+      this.prevCamTargetY = desiredCamY;
+    } else {
+      const camAlpha = Math.min(1, dt * 8);
+      this.cameraX += (desiredCamX - this.cameraX) * camAlpha;
+      this.cameraY += (desiredCamY - this.cameraY) * camAlpha;
+    }
   }
 
   public serializeSave(): unknown {
@@ -1697,8 +1859,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
 
     const snap = bank.snapshot;
     snap.cartridgeId = this.def.meta.id;
-    snap.skyTop = st.skyTop;
-    snap.skyBottom = st.skyBottom;
+    snap.skyTop = this.stageSkyTop;
+    snap.skyBottom = this.stageSkyBottom;
     snap.cozyFilter = params.cozyFilter > 0;
     snap.glowIntensity = glow;
     snap.paletteRow = st.paletteRow ?? this.def.meta.paletteRow ?? 0;
@@ -1719,7 +1881,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     snap.cameraZoom = camZoom;
     snap.viewport = bank.viewport;
     snap.ambientDarkness = st.ambientDarkness ?? 0;
-    snap.ambientColor = st.ambientColor ?? '#120e24';
+    snap.ambientColor = this.stageAmbientColor;
     snap.screenFlashAlpha = this.juice.flashAlpha;
     snap.screenFlashColor = this.juice.flashColor;
     snap.bgStars = this.bgStars;
