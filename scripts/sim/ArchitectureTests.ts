@@ -239,6 +239,13 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     check(!pubFile.endsWith('.md'), `Public hygiene: ${path.relative(rootDir, pubFile)} markdown must not be published in public/`);
   }
 
+  const agentsPath = path.join(rootDir, 'AGENTS.md');
+  const agentsLineCount = fs.readFileSync(agentsPath, 'utf8').trimEnd().split('\n').length;
+  check(
+    agentsLineCount <= 120,
+    `AGENTS.md line budget exceeded: ${agentsLineCount} lines (max 120); merge or trim before adding`,
+  );
+
   // 4. EngineHost facade, Lobby OS APIs, pause simulation freeze, screen filters & destroy lifecycle
   const runner = new CartridgeRunner('astral-chronicles');
   const saveSvc = new SaveService();

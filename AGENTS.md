@@ -72,5 +72,10 @@
   - `src/` MUST NOT use `eval()` or `new Function()`.
 - **Tooling**: If `codegraph_explore` MCP is available locally, use it before broad `grep`; in cloud sandboxes, jump directly via the File Guide Map above.
 
-## 4. Verification
+## 4. Verification & End-of-Task Micro-Iteration
 - After edits, run `npm run lint && npm run sim` (plus `npm run build` for shader/UI/build changes) before finishing.
+- **Micro-Iteration Gate (strictly <= 3 checks, skip if none apply)**:
+  1. Added/moved/deleted a module -> update 1 line in Section 2 File Map.
+  2. Hit a preventable bug or invariant -> add 1 assertion in `scripts/sim/ArchitectureTests.ts`.
+  3. Found a non-obvious, untestable pitfall -> add 1 line to `.agents/rules/` or `AGENTS.md` (if `AGENTS.md` nears 120 lines, merge/delete stale lines first).
+
