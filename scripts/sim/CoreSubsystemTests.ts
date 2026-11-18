@@ -1435,8 +1435,8 @@ function runModule3HotBenchmark(): {
   const outA = new Int32Array(16384);
   const outB = new Int32Array(16384);
   for (let i = 0; i < n; i++) {
-    bx[i] = ((i * 73) % 512) - 64;
-    by[i] = ((i * 41) % 384) - 48;
+    bx[i] = ((i * 73) % 2048) - 64;
+    by[i] = ((i * 41) % 1024) - 48;
   }
 
   const gw = 48;
