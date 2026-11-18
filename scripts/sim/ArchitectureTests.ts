@@ -92,8 +92,9 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     check(
       !/from\s+['"][^'"]*\/ui\//.test(src) &&
         !/from\s+['"][^'"]*\/game\//.test(src) &&
+        !/from\s+['"]@capacitor\//.test(src) &&
         !/virtual:pwa-register/.test(src),
-      `Layer boundary violation: ${rel} must not import UI, Game instances, or Vite PWA modules`,
+      `Layer boundary violation: ${rel} must not import UI, Game instances, Capacitor, or Vite PWA modules`,
     );
   }
 
@@ -110,8 +111,10 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     const src = fs.readFileSync(file, 'utf8');
     const rel = path.relative(rootDir, file);
     check(
-      !/from\s+['"][^'"]*\/ui\//.test(src) && !/virtual:pwa-register/.test(src),
-      `Layer boundary violation: ${rel} must not import UI or Vite PWA modules`,
+      !/from\s+['"][^'"]*\/ui\//.test(src) &&
+        !/from\s+['"]@capacitor\//.test(src) &&
+        !/virtual:pwa-register/.test(src),
+      `Layer boundary violation: ${rel} must not import UI, Capacitor, or Vite PWA modules`,
     );
     check(
       !/\bdocument\./.test(src) && !/\bwindow\.addEventListener\b/.test(src),

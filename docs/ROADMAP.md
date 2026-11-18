@@ -3,6 +3,12 @@
 ## Strategic Principle
 Build `@pixer/core` aesthetics, game-feel, and data-driven cartridge architecture FIRST inside the Arcade workspace. Do NOT build backend AI APIs, billing, or embed SDKs until Milestones 1–3 are rock-solid.
 
+## Edition Separation Strategy (Core vs. Arcade vs. Edu)
+Keep a clean boundary during M1–M3 so future splitting requires zero core rewrites:
+- **Core (`src/core/` + `src/assets/` + `src/game/`)**: Pure Canvas/WebGPU surface + Cartridge Runtime + Audio/Sim. Zero DOM/UI/`@capacitor` imports; communicates outward only via typed state snapshots & events.
+- **Arcade Shell (`src/ui/` — Current Default)**: Full Switch Joy-Con shell, Momo mascot, geek telemetry (FPS/draw calls), uncapped CRT/shader toggles, Capacitor mobile hooks.
+- **Edu Shell (Future Wrapper / Build Target)**: Minimal embeddable viewport + curated/throttled editor tabs controlled by `EditionConfig` flags (e.g., `hideTelemetry`, `lockPalette`, `buggyChallengeMode`, `postMessage` bridge).
+
 ---
 
 ## Milestone 1 — Visual & Game-Feel Leap (CURRENT PRIORITY)
