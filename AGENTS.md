@@ -13,7 +13,7 @@
 - `src/AppShellHelpers.ts` — OS utility bar, landscape orientation controller, PNG card capture/share, global error handlers, 3-step `recoverFromFrameError` ladder.
 - `vite.config.ts` — Vite + `VitePWA` (`base: './'`, relative PWA manifest paths, Rolldown `codeSplitting`).
 - `capacitor.config.ts` — Native iOS/Android Capacitor shell (`com.pixelatelier.console`).
-- `tsconfig.json` — Strict TypeScript (`ES2023`, `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly`).
+- `tsconfig.json` — Strict TypeScript (`ES2023`, `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly`, `resolveJsonModule`).
 
 ### `src/core/` — Pure Engine Core (MUST stay DOM-free except `gpu/`, never import `ui/` or `game/`)
 - `src/core/gpu/` — Multi-backend instanced 2D/2.5D renderer:
@@ -33,7 +33,8 @@
   - `EventBus.ts` & `SeededRng.ts` — Typed `EngineEventBus` and deterministic RNG.
 - `src/core/sim/` — Shared 2D/2.5D simulation primitives:
   - `WorldKernel.ts`, `WorldEntitiesStep.ts`, `WorldHeroPhysics.ts`, `WorldSnapshot.ts`, `WorldInternalTypes.ts`
-  - `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`, `CameraDirector.ts`, `CutsceneSequencer.ts`, `JuiceSystem.ts` (`FEEDBACK_RECIPES`), `BehaviorTree.ts`, `GridPathfinder.ts`, `RuleMatrix.ts`, `Archetypes.ts`
+  - `CartridgeSchema.ts`, `DataCartridgeRuntime.ts`, `DataRuntimeShmup.ts`, `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`
+  - `CameraDirector.ts`, `CutsceneSequencer.ts`, `JuiceSystem.ts` (`FEEDBACK_RECIPES`), `BehaviorTree.ts`, `GridPathfinder.ts`, `RuleMatrix.ts`, `Archetypes.ts`
 - `src/core/audio/` — Zero-dependency scale-locked Web Audio synthesizer (`ToySynth.ts`, `AudioBus.ts`, `BgmSequencer.ts`, `SynthPresets.ts`).
 - `src/core/input/` — Input DSP & hardware gamepad (`InputPipeline.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `InputMap.ts`, `WebGamepadSampler.ts`).
 - `src/core/hal/` — Hardware Abstraction Layer (`SystemHal.ts`, `HapticEngine.ts` stereo dual-rumble & acoustic fallback).
@@ -46,7 +47,7 @@
 
 ### `src/game/` — Playable Cartridges (DOM-free, never import `ui/`)
 - `BuiltinCartridges.ts` — Registers all 5 cartridges (`PA-01`..`PA-05`) and D&D campaign generator via `registerBuiltinCartridges()`.
-- `cloudberry/` (`PA-01` Cloudberry Hop) · `sugarStarlight/` (`PA-02` Sugar Starlight) · `sandbox/` (`PA-03` Sandbox Toybox + safe DSL) · `emberkeep/` (`PA-04` Emberkeep D&D) · `astralChronicles/` (`PA-05` Astral Chronicles).
+- `cloudberry/cloudberry.cartridge.json` (`PA-01`) · `sugarStarlight/sugarStarlight.cartridge.json` (`PA-02`) · `sandbox/` (`PA-03`) · `emberkeep/` (`PA-04`) · `astralChronicles/` (`PA-05`).
 
 ### `src/ui/` & `src/styles/` — Handheld OS Shell & Editors
 - Shell & Routing: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`.

@@ -1,0 +1,433 @@
+{
+  "version": 1,
+  "meta": {
+    "id": "sugar-starlight",
+    "code": "PA-02",
+    "title": "糖霜流星號",
+    "subtitle": "雙模選機 × 三色彈幕戰役",
+    "genre": "shmup",
+    "paletteRow": 2,
+    "glowIntensity": 1.15
+  },
+  "player": {
+    "controller": "shmup",
+    "sprite": "ship_a",
+    "spriteB": "ship_b",
+    "w": 16,
+    "h": 16,
+    "maxHearts": 3,
+    "bootInHangar": true,
+    "loadouts": [
+      {
+        "id": "starfalcon",
+        "code": "SF-01",
+        "name": "藍星隼號",
+        "tagline": "高機動均衡機體・交叉廣域磁軌炮",
+        "speedScale": 1.24,
+        "maxHearts": 3,
+        "fireCooldownScale": 0.86,
+        "defaultWeapon": "crimson",
+        "initialBombs": 2,
+        "initialFunnels": 0,
+        "speedStat": 5,
+        "armorStat": 3,
+        "fireStat": 4,
+        "ultKind": "crossfire",
+        "ultLabel": "V 字交叉殲滅砲",
+        "accentHex": "#5ec2f7",
+        "spriteA": "ship_a",
+        "spriteB": "ship_b"
+      },
+      {
+        "id": "coral_titan",
+        "code": "CT-02",
+        "name": "珊瑚重砲號",
+        "tagline": "厚實四心裝甲・R-Type 巨型波動砲",
+        "speedScale": 0.94,
+        "maxHearts": 4,
+        "fireCooldownScale": 1.05,
+        "defaultWeapon": "azure",
+        "initialBombs": 3,
+        "initialFunnels": 0,
+        "speedStat": 2,
+        "armorStat": 5,
+        "fireStat": 5,
+        "ultKind": "giga_wave",
+        "ultLabel": "超極巨貫穿波動砲",
+        "accentHex": "#ff708d",
+        "spriteA": "ship_titan",
+        "spriteB": "ship_titan"
+      },
+      {
+        "id": "violet_prism",
+        "code": "VP-03",
+        "name": "紫晶浮游號",
+        "tagline": "出擊自帶浮游子機・四機連攜齊射",
+        "speedScale": 1.08,
+        "maxHearts": 3,
+        "fireCooldownScale": 0.94,
+        "defaultWeapon": "violet",
+        "initialBombs": 2,
+        "initialFunnels": 2,
+        "speedStat": 4,
+        "armorStat": 3,
+        "fireStat": 4,
+        "ultKind": "funnel_salvo",
+        "ultLabel": "浮游矩陣自律齊射",
+        "accentHex": "#e0aaff",
+        "spriteA": "ship_prism",
+        "spriteB": "ship_prism"
+      }
+    ],
+    "weapons": {
+      "crimson": {
+        "kind": "crimson",
+        "name": "赤紅星霰砲",
+        "shortLabel": "紅 · 散射",
+        "color": "#ff708d",
+        "glowColor": "#ffd447",
+        "pattern": "spread"
+      },
+      "azure": {
+        "kind": "azure",
+        "name": "天青貫穿雷射",
+        "shortLabel": "藍 · 貫穿",
+        "color": "#5ec2f7",
+        "glowColor": "#8ce8ff",
+        "pattern": "pierce"
+      },
+      "violet": {
+        "kind": "violet",
+        "name": "紫電追蹤電漿",
+        "shortLabel": "紫 · 追蹤",
+        "color": "#e0aaff",
+        "glowColor": "#ff8ec6",
+        "pattern": "homing"
+      }
+    },
+    "charge": {
+      "tier1Sec": 0.48,
+      "tier2Sec": 1.05,
+      "vfxStartSec": 0.08
+    },
+    "bomb": {
+      "maxBombs": 4,
+      "invulnSec": 1.8
+    },
+    "graze": {
+      "hitRadius": 5.5,
+      "enemyHitRadius": 10.0,
+      "grazeRadius": 22.0,
+      "overdriveCost": 100,
+      "overdriveSec": 2.6
+    }
+  },
+  "archetypes": {
+    "jelly": {
+      "sprite": "jelly_ufo",
+      "w": 16,
+      "h": 16,
+      "tags": ["enemy"],
+      "behavior": { "kind": "sine", "speedX": -46, "amplitude": 40, "freq": 3.5 },
+      "hp": 1,
+      "scoreValue": 75,
+      "light": { "radius": 22, "color": "#e0aaff", "intensity": 0.28 }
+    },
+    "interceptor": {
+      "sprite": "enemy_interceptor",
+      "w": 16,
+      "h": 16,
+      "tags": ["enemy"],
+      "behavior": { "kind": "interceptor", "speedX": -76 },
+      "hp": 2,
+      "scoreValue": 115,
+      "light": { "radius": 22, "color": "#ff708d", "intensity": 0.28 }
+    },
+    "frigate": {
+      "sprite": "enemy_frigate",
+      "w": 20,
+      "h": 18,
+      "tags": ["enemy"],
+      "behavior": { "kind": "frigate", "speedX": -34 },
+      "hp": 5,
+      "scoreValue": 210,
+      "dropTable": { "onDestroyKind": "funnel" },
+      "light": { "radius": 22, "color": "#ff9048", "intensity": 0.3 }
+    },
+    "carrier": {
+      "sprite": "enemy_carrier",
+      "w": 18,
+      "h": 16,
+      "tags": ["enemy"],
+      "behavior": { "kind": "carrier", "speedX": -38 },
+      "hp": 4,
+      "scoreValue": 175,
+      "light": { "radius": 22, "color": "#e0aaff", "intensity": 0.28 }
+    },
+    "missile": {
+      "sprite": "missile_pod",
+      "w": 13,
+      "h": 10,
+      "tags": ["enemy"],
+      "behavior": { "kind": "missile", "speedX": -95 },
+      "hp": 1,
+      "scoreValue": 55
+    },
+    "meteor": {
+      "sprite": "meteor",
+      "w": 16,
+      "h": 16,
+      "tags": ["enemy"],
+      "behavior": { "kind": "meteor", "speedX": -56 },
+      "hp": 3,
+      "scoreValue": 95
+    },
+    "cargo": {
+      "sprite": "pickup_crystal",
+      "w": 16,
+      "h": 16,
+      "tags": ["enemy"],
+      "behavior": { "kind": "cargo", "speedX": -40 },
+      "hp": 2,
+      "scoreValue": 120,
+      "emissive": 0.65,
+      "dropTable": { "onDestroyKind": "cargo_cycle" },
+      "light": { "radius": 22, "color": "#ffd447", "intensity": 0.32 }
+    },
+    "boss_ufo": {
+      "sprite": "boss_ufo",
+      "w": 32,
+      "h": 16,
+      "tags": ["enemy", "boss"],
+      "behavior": { "kind": "boss_shmup" },
+      "hp": 22,
+      "scoreValue": 650,
+      "emissive": 0.28,
+      "light": { "radius": 48, "color": "#ffd447", "intensity": 0.6 }
+    },
+    "boss_wing": {
+      "sprite": "boss_wing",
+      "w": 16,
+      "h": 12,
+      "tags": ["enemy", "weak_point"],
+      "hp": 7,
+      "scoreValue": 220,
+      "emissive": 0.55,
+      "tint": "#ffd447"
+    },
+    "funnel": {
+      "sprite": "option_orb",
+      "w": 11,
+      "h": 11,
+      "tags": ["funnel"],
+      "behavior": { "kind": "orbit" },
+      "emissive": 0.72,
+      "light": { "radius": 18, "color": "#5ec2f7", "intensity": 0.24 }
+    },
+    "player_bolt": {
+      "sprite": "bolt",
+      "w": 12,
+      "h": 12,
+      "tags": ["bullet"],
+      "emissive": 0.88,
+      "light": { "radius": 16, "color": "#ffd447", "intensity": 0.28 }
+    },
+    "player_beam": {
+      "sprite": "laser_beam",
+      "w": 22,
+      "h": 10,
+      "tags": ["bullet"],
+      "emissive": 1.1,
+      "light": { "radius": 18, "color": "#5ec2f7", "intensity": 0.3 }
+    },
+    "enemy_bullet": {
+      "sprite": "sparkle",
+      "w": 10,
+      "h": 10,
+      "tags": ["enemy_bullet"],
+      "emissive": 0.9,
+      "light": { "radius": 14, "color": "#ff708d", "intensity": 0.26 }
+    },
+    "pickup_crimson": {
+      "sprite": "pickup_crystal",
+      "w": 14,
+      "h": 14,
+      "tags": ["pickup"],
+      "tint": "#ff708d",
+      "emissive": 0.78,
+      "light": { "radius": 22, "color": "#ff708d", "intensity": 0.42 }
+    },
+    "pickup_azure": {
+      "sprite": "pickup_crystal",
+      "w": 14,
+      "h": 14,
+      "tags": ["pickup"],
+      "tint": "#5ec2f7",
+      "emissive": 0.78,
+      "light": { "radius": 22, "color": "#5ec2f7", "intensity": 0.42 }
+    },
+    "pickup_violet": {
+      "sprite": "pickup_crystal",
+      "w": 14,
+      "h": 14,
+      "tags": ["pickup"],
+      "tint": "#e0aaff",
+      "emissive": 0.78,
+      "light": { "radius": 22, "color": "#e0aaff", "intensity": 0.42 }
+    },
+    "pickup_bomb": {
+      "sprite": "pickup_bomb",
+      "w": 14,
+      "h": 14,
+      "tags": ["pickup"],
+      "emissive": 0.78,
+      "light": { "radius": 22, "color": "#ffd447", "intensity": 0.42 }
+    },
+    "pickup_funnel": {
+      "sprite": "option_orb",
+      "w": 14,
+      "h": 14,
+      "tags": ["pickup"],
+      "emissive": 0.78,
+      "light": { "radius": 22, "color": "#5ec2f7", "intensity": 0.42 }
+    },
+    "pickup_heal": {
+      "sprite": "heart_full",
+      "w": 14,
+      "h": 14,
+      "tags": ["pickup"],
+      "emissive": 0.78,
+      "light": { "radius": 22, "color": "#ff708d", "intensity": 0.42 }
+    }
+  },
+  "stages": [
+    {
+      "id": "s1",
+      "name": "S1 · 糖霜星雲",
+      "worldWidth": 320,
+      "skyTop": "#243c70",
+      "skyBottom": "#f7adc4",
+      "bgmTheme": "starlight",
+      "paletteRow": 2,
+      "spawn": { "x": 34, "y": 84 },
+      "bgStarsCount": 48,
+      "waves": {
+        "count": 4,
+        "intervalSec": 4.2,
+        "enemySpeedScale": 1.0,
+        "pool": ["jelly", "interceptor", "meteor", "carrier", "cargo"],
+        "cargoEveryOdd": true
+      },
+      "boss": {
+        "archetype": "boss_ufo",
+        "name": "棉花糖先鋒艦",
+        "x": 340,
+        "y": 78,
+        "hp": 22,
+        "weakPointArchetype": "boss_wing",
+        "weakPointHp": 7,
+        "weakPoints": [
+          { "id": "wp-top", "offsetX": 4, "offsetY": -13 },
+          { "id": "wp-bot", "offsetX": 4, "offsetY": 16 }
+        ]
+      },
+      "hint": "S1 · 糖霜星雲：B/R 連射 · 長按 A 蓄力必殺 · X 換色 · Y 核爆"
+    },
+    {
+      "id": "s2",
+      "name": "S2 · 碎星隕石帶",
+      "worldWidth": 320,
+      "skyTop": "#1f2859",
+      "skyBottom": "#ffab8c",
+      "bgmTheme": "starlight",
+      "paletteRow": 1,
+      "spawn": { "x": 34, "y": 84 },
+      "bgStarsCount": 48,
+      "waves": {
+        "count": 4,
+        "intervalSec": 4.0,
+        "enemySpeedScale": 1.14,
+        "pool": ["jelly", "interceptor", "frigate", "meteor", "carrier", "cargo"],
+        "cargoEveryOdd": true
+      },
+      "boss": {
+        "archetype": "boss_ufo",
+        "name": "焦糖隕石要塞",
+        "x": 340,
+        "y": 78,
+        "hp": 32,
+        "weakPointArchetype": "boss_wing",
+        "weakPointHp": 10,
+        "weakPoints": [
+          { "id": "wp-top", "offsetX": 4, "offsetY": -13 },
+          { "id": "wp-bot", "offsetX": 4, "offsetY": 16 }
+        ]
+      },
+      "hint": "S2 · 碎星隕石帶：擊破重裝護衛艦取浮游子機！"
+    },
+    {
+      "id": "s3",
+      "name": "S3 · 極光雷射陣",
+      "worldWidth": 320,
+      "skyTop": "#122147",
+      "skyBottom": "#6fd9cf",
+      "bgmTheme": "starlight",
+      "paletteRow": 6,
+      "spawn": { "x": 34, "y": 84 },
+      "bgStarsCount": 48,
+      "waves": {
+        "count": 4,
+        "intervalSec": 3.8,
+        "enemySpeedScale": 1.26,
+        "pool": ["jelly", "interceptor", "frigate", "meteor", "carrier", "cargo"],
+        "cargoEveryOdd": true
+      },
+      "boss": {
+        "archetype": "boss_ufo",
+        "name": "極光指揮母艦",
+        "x": 340,
+        "y": 78,
+        "hp": 42,
+        "weakPointArchetype": "boss_wing",
+        "weakPointHp": 13,
+        "weakPoints": [
+          { "id": "wp-top", "offsetX": 4, "offsetY": -13 },
+          { "id": "wp-bot", "offsetX": 4, "offsetY": 16 }
+        ]
+      },
+      "hint": "S3 · 極光雷射陣：擦彈儲能量啟動護盾反擊！"
+    },
+    {
+      "id": "s4",
+      "name": "S4 · 星核終極殿堂",
+      "worldWidth": 320,
+      "skyTop": "#1a0d38",
+      "skyBottom": "#f06ea0",
+      "bgmTheme": "boss",
+      "paletteRow": 2,
+      "spawn": { "x": 34, "y": 84 },
+      "bgStarsCount": 48,
+      "waves": {
+        "count": 4,
+        "intervalSec": 3.6,
+        "enemySpeedScale": 1.38,
+        "pool": ["jelly", "interceptor", "frigate", "meteor", "carrier", "cargo"],
+        "cargoEveryOdd": true
+      },
+      "boss": {
+        "archetype": "boss_ufo",
+        "name": "糖霜星皇母艦 BOSS",
+        "x": 340,
+        "y": 78,
+        "hp": 56,
+        "weakPointArchetype": "boss_wing",
+        "weakPointHp": 16,
+        "weakPoints": [
+          { "id": "wp-top", "offsetX": 4, "offsetY": -13 },
+          { "id": "wp-bot", "offsetX": 4, "offsetY": 16 }
+        ]
+      },
+      "hint": "S4 · 星核終極殿堂：解放雙段蓄力奧義決戰星皇母艦！"
+    }
+  ]
+}

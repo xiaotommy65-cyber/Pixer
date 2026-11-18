@@ -1,26 +1,27 @@
 import { createAgentBridge } from '../../src/core/ai/AgentBridge.ts';
 import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
+import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
 import { AstralChroniclesGame } from '../../src/game/astralChronicles/AstralChroniclesGame.ts';
-import { CloudberryHopGame } from '../../src/game/cloudberry/CloudberryHopGame.ts';
+import cloudberryJson from '../../src/game/cloudberry/cloudberry.cartridge.json' with { type: 'json' };
 import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
-import { SugarStarlightGame } from '../../src/game/sugarStarlight/SugarStarlightGame.ts';
+import sugarStarlightJson from '../../src/game/sugarStarlight/sugarStarlight.cartridge.json' with { type: 'json' };
 import { check, emptyInput } from './SimTestHarness.ts';
 
 export function testSramSaveHydrateRoundtrips(): void {
-  const cb1 = new CloudberryHopGame(3);
+  const cb1 = new DataCartridgeRuntime(cloudberryJson, { initialStage: 3 });
   const params = new CartridgeRunner('cloudberry-hop').getParams();
   cb1.step(STEP_DT, { ...emptyInput(), right: true }, params);
   const cbSave = cb1.serializeSave();
-  const cb2 = new CloudberryHopGame(0);
+  const cb2 = new DataCartridgeRuntime(cloudberryJson, { initialStage: 0 });
   check(cb2.hydrateSave(cbSave), 'PA-01 hydrateSave should succeed');
   check(cb2.getStageIndex() === 3, `PA-01 should resume at stageIdx 3 (got ${cb2.getStageIndex()})`);
   cb2.retryStage();
   check(cb2.getStageIndex() === 3, 'PA-01 retryStage stays on current stage');
 
-  const ss1 = new SugarStarlightGame();
+  const ss1 = new DataCartridgeRuntime(sugarStarlightJson);
   ss1.enterSector(2);
   const ssSave = ss1.serializeSave();
-  const ss2 = new SugarStarlightGame();
+  const ss2 = new DataCartridgeRuntime(sugarStarlightJson);
   check(ss2.hydrateSave(ssSave), 'PA-02 hydrateSave should succeed');
   check(ss2.getSectorIndex() === 2, `PA-02 should resume at sector 2 (got ${ss2.getSectorIndex()})`);
 

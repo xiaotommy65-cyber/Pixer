@@ -11,7 +11,7 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 
 ---
 
-## Milestone 1 — Visual & Game-Feel Leap (CURRENT PRIORITY)
+## Milestone 1 — Visual & Game-Feel Leap (DONE)
 **Goal**: Elevate rendering polish and tactile feel on existing cartridges (`PA-01`, `PA-02`) before refactoring into generic JSON.
 
 ### Specs
@@ -31,12 +31,12 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 - Do NOT build backend APIs or embed wrappers.
 
 ### Done Criteria (M1)
-- [ ] `PA-01` & `PA-02` run smoothly at 60fps on both WebGPU & WebGL2 with Palette LUT swapping, shadows, emissive bloom, hitstop, and squash-and-stretch.
-- [ ] Zero per-frame GC allocations; `npm run lint && npm run sim && npm run build` pass.
+- [x] `PA-01` & `PA-02` run smoothly at 60fps on WebGL2 (SwiftShader verified; WGSL WebGPU shader parity implemented, hardware WebGPU untested in headless VM) with Palette LUT swapping, shadows, emissive bloom, hitstop, and squash-and-stretch.
+- [x] Zero per-frame GC allocations; `npm run lint && npm run sim && npm run build` pass.
 
 ---
 
-## Milestone 2 — Unified Data-Driven Cartridge Engine
+## Milestone 2 — Unified Data-Driven Cartridge Engine (DONE)
 **Goal**: Replace hardcoded cartridge TypeScript logic with a single Cartridge JSON Schema + deterministic VM.
 
 ### Specs
@@ -46,12 +46,12 @@ Keep a clean boundary during M1–M3 so future splitting requires zero core rewr
 4. **Deterministic Event-Action VM**: `When` (`OnStart`, `OnEvery`, `OnCollide`, `OnButton`, `OnVar`) -> `Do` (`Spawn`, `Destroy`, `Impulse`, `SetVar`, `PlaySfx`, `Juice`, `EndGame`).
 
 ### Done Criteria (M2)
-- [ ] Both `PA-01` and `PA-02` run as pure Cartridge JSON files on the exact same runtime with zero cartridge-specific TS hacks.
-- [ ] `npm run sim` deterministically validates and dry-runs any Cartridge JSON.
+- [x] Both `PA-01` and `PA-02` run as pure Cartridge JSON files on the exact same runtime with zero cartridge-specific TS hacks.
+- [x] `npm run sim` deterministically validates and dry-runs any Cartridge JSON.
 
 ---
 
-## Milestone 3 — Creative Loop & Polaroid PNG Cartridges
+## Milestone 3 — Creative Loop & Polaroid PNG Cartridges (CURRENT PRIORITY)
 **Goal**: Connect visual editors and social/classroom cartridge sharing to the M2 schema.
 
 ### Specs

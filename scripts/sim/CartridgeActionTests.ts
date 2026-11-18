@@ -1,11 +1,60 @@
 import { WORKSHOP_RECIPES } from '../../src/assets/WorkshopRecipes.ts';
 import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
-import { CloudberryHopGame } from '../../src/game/cloudberry/CloudberryHopGame.ts';
+import { validateCartridgeJson } from '../../src/core/sim/CartridgeSchema.ts';
+import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
+import cloudberryJson from '../../src/game/cloudberry/cloudberry.cartridge.json' with { type: 'json' };
 import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
-import { SugarStarlightGame } from '../../src/game/sugarStarlight/SugarStarlightGame.ts';
+import sugarStarlightJson from '../../src/game/sugarStarlight/sugarStarlight.cartridge.json' with { type: 'json' };
 import { check, emptyInput } from './SimTestHarness.ts';
 
 export function testCloudberryHop(): void {
+  check(validateCartridgeJson(cloudberryJson).ok, 'cloudberry.cartridge.json must pass schema validation');
+  check(validateCartridgeJson(sugarStarlightJson).ok, 'sugarStarlight.cartridge.json must pass schema validation');
+  check(!validateCartridgeJson({ version: 2 }).ok, 'Validator must reject unsupported schema version');
+  check(
+    !validateCartridgeJson({
+      ...cloudberryJson,
+      stages: [{ ...cloudberryJson.stages[0], worldWidth: 257 * 16 }],
+    }).ok,
+    'Validator must reject oversized tilemap width > 256 cols',
+  );
+  check(
+    !validateCartridgeJson({
+      ...cloudberryJson,
+      stages: [{ ...cloudberryJson.stages[0], spawns: [{ archetype: 'nonexistent', x: 0, y: 0 }] }],
+    }).ok,
+    'Validator must reject unknown spawn archetype reference',
+  );
+  check(
+    !validateCartridgeJson({
+      ...cloudberryJson,
+      meta: { ...cloudberryJson.meta, subtitle: 'eval(window.x)' },
+    }).ok,
+    'Validator must reject eval/Function strings in cartridge JSON',
+  );
+
+  // Determinism across 30 / 60 / 120 fps via fixed-step accumulator
+  const runAtFps = (fps: number): { camX: number; score: number; stageIdx: number } => {
+    const r = new CartridgeRunner('cloudberry-hop');
+    const dt = 1 / fps;
+    const totalTicks = fps * 3;
+    for (let f = 0; f < totalTicks; f++) {
+      const inp = emptyInput();
+      inp.right = true;
+      inp.jump = (f * 60) / fps % 28 < 10;
+      r.update(dt, inp);
+    }
+    const s = r.getSnapshot();
+    return { camX: s.cameraX, score: s.score, stageIdx: s.stage?.index ?? 0 };
+  };
+  const d30 = runAtFps(30);
+  const d60 = runAtFps(60);
+  const d120 = runAtFps(120);
+  check(
+    Math.abs(d30.camX - d60.camX) < 1e-4 && Math.abs(d60.camX - d120.camX) < 1e-4 && d30.score === d60.score && d60.score === d120.score,
+    `Fixed-timestep accumulator determinism across 30/60/120fps failed (30:${d30.camX.toFixed(2)}/${d30.score}, 60:${d60.camX.toFixed(2)}/${d60.score}, 120:${d120.camX.toFixed(2)}/${d120.score})`,
+  );
+
   const runner = new CartridgeRunner('cloudberry-hop');
   let reachedRight = false;
   let scoreGained = 0;
@@ -26,7 +75,7 @@ export function testCloudberryHop(): void {
   check(finalSnap.stage?.total === 8 && finalSnap.stage?.index === 1, 'PA-01 should report 1/8 stage progress');
   check(finalSnap.starsTotal === 24, `PA-01 campaign should have 24 total stars (got ${finalSnap.starsTotal})`);
 
-  const cb = new CloudberryHopGame(2);
+  const cb = new DataCartridgeRuntime(cloudberryJson, { initialStage: 2 });
   const params = runner.getParams();
   let gotFeatherOrMoved = false;
   for (let f = 0; f < 180; f++) {
@@ -47,7 +96,7 @@ export function testCloudberryHop(): void {
   check(cb.getStageIndex() === 7, 'PA-01 L bumper should retry current stage cleanly');
 
   console.log(
-    `[SIM OK] cloudberry-hop (8 stages / 24 stars + X scout + L retry) -> score=${finalSnap.score}, stars=${finalSnap.starsCollected}/${finalSnap.starsTotal}, bossHp=${bossSnap.bossMaxHp}`,
+    `[SIM OK] cloudberry-hop JSON (8 stages / 24 stars + 30/60/120fps determinism + schema guard) -> score=${finalSnap.score}, stars=${finalSnap.starsCollected}/${finalSnap.starsTotal}, bossHp=${bossSnap.bossMaxHp}`,
   );
 }
 
@@ -70,7 +119,7 @@ export function testSugarStarlight(): void {
   check(snap.stage?.total === 4, 'PA-02 should expose 4-sector campaign progress');
   check(snap.shmupHud !== undefined, 'PA-02 should expose structured shmupHud snapshot');
 
-  const ssHangar = new SugarStarlightGame();
+  const ssHangar = new DataCartridgeRuntime(sugarStarlightJson);
   const params = runner.getParams();
   check(ssHangar.snapshot(params).shmupHud?.phase === 'hangar', 'PA-02 should boot cleanly into Hangar phase');
   ssHangar.dispatchCommand('select_fighter:coral_titan');
@@ -105,17 +154,17 @@ export function testSugarStarlight(): void {
   check(bombEvs.includes('explode'), 'Starlight Bomb should emit explode cue');
   check(ssHangar.getBombCount() === bombsBefore - 1, 'Starlight Bomb should decrement bomb inventory');
 
-  const ssSaveSrc = new SugarStarlightGame('violet_prism', true);
+  const ssSaveSrc = new DataCartridgeRuntime(sugarStarlightJson, { initialFighter: 'violet_prism', skipHangar: true });
   ssSaveSrc.enterSector(3);
   ssSaveSrc.dispatchCommand('weapon:azure');
   const savedV3 = ssSaveSrc.serializeSave();
-  const ssHydrated = new SugarStarlightGame();
+  const ssHydrated = new DataCartridgeRuntime(sugarStarlightJson);
   check(ssHydrated.hydrateSave(savedV3), 'PA-02 v3 hydrateSave should succeed');
   check(ssHydrated.getFighterId() === 'violet_prism', 'PA-02 v3 SRAM should preserve fighterId');
   check(ssHydrated.getWeaponKind() === 'azure', 'PA-02 v3 SRAM should preserve weaponKind');
   check(ssHydrated.getSectorIndex() === 3, 'PA-02 v3 SRAM should preserve sector index');
 
-  const ss = new SugarStarlightGame();
+  const ss = new DataCartridgeRuntime(sugarStarlightJson);
   let sawConvergingParticles = false;
   let sawTier1ChargeEvent = false;
   let sawTier1Rail = false;
@@ -143,7 +192,7 @@ export function testSugarStarlight(): void {
   check(sawTier2Funnels, 'PA-02 Tier-2 charge should deploy orbiting Floating Funnels');
   check(sawTier2MultiBeam, 'PA-02 Tier-2 release should unleash multi-beam Floating Funnel Salvo');
 
-  const ssCtrl = new SugarStarlightGame('starfalcon', true);
+  const ssCtrl = new DataCartridgeRuntime(sugarStarlightJson, { initialFighter: 'starfalcon', skipHangar: true });
   const preWeapon = ssCtrl.getWeaponKind();
   ssCtrl.step(STEP_DT, { ...emptyInput(), skillX: true }, params);
   check(ssCtrl.getWeaponKind() !== preWeapon, 'PA-02 X button should cycle fighter weapon during sortie');
@@ -153,8 +202,17 @@ export function testSugarStarlight(): void {
   ssCtrl.step(STEP_DT, { ...emptyInput(), skillY: true }, params);
   check(ssCtrl.getBombCount() === preBomb - 1, 'PA-02 Y button should detonate Starlight Bomb');
 
+  // 2,048-entity pool capacity stress test inside DataCartridgeRuntime
+  const stressRt = new DataCartridgeRuntime(sugarStarlightJson, { skipHangar: true });
+  for (let i = 0; i < 2048; i++) {
+    stressRt.spawnArchetype('player_bolt', 20 + (i % 200), 20 + (i % 120), 0, 0);
+  }
+  stressRt.step(STEP_DT, emptyInput(), params);
+  const stressSnap = stressRt.snapshot(params);
+  check(stressSnap.entities.length >= 1800 && stressRt.pool.activeCount <= 2048, `2048-entity runtime stress check (got ${stressSnap.entities.length})`);
+
   console.log(
-    `[SIM OK] sugar-starlight (3 fighters + 3 weapons + X/Y/R physical controls) -> score=${snap.score}, stage=${snap.stage?.index}/${snap.stage?.total}, bgm=${snap.bgmTheme}`,
+    `[SIM OK] sugar-starlight JSON (3 fighters + 3 weapons + X/Y/R + 2048 stress) -> score=${snap.score}, stage=${snap.stage?.index}/${snap.stage?.total}, bgm=${snap.bgmTheme}`,
   );
 }
 

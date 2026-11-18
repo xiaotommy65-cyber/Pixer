@@ -4,12 +4,13 @@ import {
   registerCartridgePlugin,
   type CartridgePluginDefinition,
 } from '../core/runtime/CartridgeRegistry.ts';
+import { DataCartridgeRuntime } from '../core/sim/DataCartridgeRuntime.ts';
 import { AstralChroniclesGame } from './astralChronicles/AstralChroniclesGame.ts';
-import { CloudberryHopGame } from './cloudberry/CloudberryHopGame.ts';
+import cloudberryJson from './cloudberry/cloudberry.cartridge.json' with { type: 'json' };
 import { generateEmberkeepCampaign, verifyModuleSolvability } from './emberkeep/DungeonGenerator.ts';
 import { DEFAULT_DND_MODULE_JSON, EmberkeepDndGame } from './emberkeep/EmberkeepDndGame.ts';
 import { SandboxToyboxGame } from './sandbox/SandboxToyboxGame.ts';
-import { SugarStarlightGame } from './sugarStarlight/SugarStarlightGame.ts';
+import sugarStarlightJson from './sugarStarlight/sugarStarlight.cartridge.json' with { type: 'json' };
 
 export const DND_DEFAULT_MODULE_JSON = DEFAULT_DND_MODULE_JSON;
 
@@ -28,7 +29,7 @@ export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
       defaultScript: SANDBOX_DEFAULT_SCRIPT,
     },
     aiCapabilities: ['tactical-advisor'],
-    factory: () => new CloudberryHopGame(),
+    factory: () => new DataCartridgeRuntime(cloudberryJson),
     resolveControlProfile: () => ({
       a: '火花/衝',
       b: '跳躍',
@@ -55,7 +56,7 @@ export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
       preserveActionHold: true,
     },
     aiCapabilities: ['tactical-advisor'],
-    factory: () => new SugarStarlightGame(),
+    factory: () => new DataCartridgeRuntime(sugarStarlightJson),
     resolveControlProfile: (snap) => {
       if (snap?.shmupHud?.phase === 'hangar') {
         return {

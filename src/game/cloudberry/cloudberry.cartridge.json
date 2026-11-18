@@ -1,0 +1,487 @@
+{
+  "version": 1,
+  "meta": {
+    "id": "cloudberry-hop",
+    "code": "PA-01",
+    "title": "草莓雲海跳跳",
+    "subtitle": "4 大世界 8 關卡冒險",
+    "genre": "platformer",
+    "paletteRow": 0
+  },
+  "player": {
+    "controller": "platformer",
+    "sprite": "hero_a",
+    "spriteB": "hero_b",
+    "w": 16,
+    "h": 16,
+    "maxHearts": 3,
+    "scoutZoom": 0.78
+  },
+  "archetypes": {
+    "star": {
+      "sprite": "star_a",
+      "spriteB": "star_b",
+      "animFps": 5,
+      "w": 16,
+      "h": 16,
+      "tags": ["collectible", "star"],
+      "scoreValue": 100,
+      "emissive": 0.72,
+      "light": { "radius": 24, "color": "#ffd447", "intensity": 0.42 }
+    },
+    "coin": {
+      "sprite": "coin",
+      "w": 16,
+      "h": 16,
+      "tags": ["collectible", "coin"],
+      "scoreValue": 50,
+      "emissive": 0.72,
+      "light": { "radius": 16, "color": "#ffd447", "intensity": 0.25 }
+    },
+    "key": {
+      "sprite": "key",
+      "w": 16,
+      "h": 16,
+      "tags": ["collectible", "key"],
+      "scoreValue": 200,
+      "emissive": 0.72,
+      "light": { "radius": 28, "color": "#ffd447", "intensity": 0.48 }
+    },
+    "gate": {
+      "sprite": "gate_closed",
+      "w": 16,
+      "h": 16,
+      "tags": ["gate"]
+    },
+    "slime": {
+      "sprite": "slime_a",
+      "spriteB": "slime_b",
+      "animFps": 4,
+      "w": 16,
+      "h": 16,
+      "tags": ["enemy", "stompable", "hazard", "gravity"],
+      "behavior": { "kind": "patrol", "speedX": 28 },
+      "hp": 1,
+      "scoreValue": 120,
+      "castShadow": true
+    },
+    "slime_king": {
+      "sprite": "slime_king",
+      "w": 32,
+      "h": 16,
+      "tags": ["enemy", "stompable", "hazard", "boss", "gravity"],
+      "behavior": { "kind": "patrol", "speedX": 44 },
+      "hp": 5,
+      "scoreValue": 500,
+      "castShadow": true,
+      "light": { "radius": 40, "color": "#ff708d", "intensity": 0.45 }
+    },
+    "spring": {
+      "sprite": "spring",
+      "w": 16,
+      "h": 16,
+      "tags": ["bouncy"],
+      "bounceVy": 315,
+      "light": { "radius": 16, "color": "#ff708d", "intensity": 0.22 }
+    },
+    "torch": {
+      "sprite": "torch",
+      "w": 16,
+      "h": 16,
+      "tags": ["torch"],
+      "emissive": 0.95,
+      "light": { "radius": 58, "color": "#ffae42", "intensity": 0.72, "flicker": true }
+    },
+    "feather": {
+      "sprite": "relic_feather",
+      "w": 16,
+      "h": 16,
+      "tags": ["collectible", "relic"],
+      "relicGrant": "doubleJump",
+      "scoreValue": 250,
+      "emissive": 0.72,
+      "light": { "radius": 30, "color": "#5ec2f7", "intensity": 0.52 }
+    },
+    "dash_badge": {
+      "sprite": "relic_dash",
+      "w": 16,
+      "h": 16,
+      "tags": ["collectible", "relic"],
+      "relicGrant": "airDash",
+      "scoreValue": 250,
+      "emissive": 0.72,
+      "light": { "radius": 30, "color": "#ff708d", "intensity": 0.52 }
+    },
+    "checkpoint_flag": {
+      "sprite": "flag_off",
+      "w": 16,
+      "h": 16,
+      "tags": ["checkpoint"],
+      "light": { "radius": 20, "color": "#56d39c", "intensity": 0.25 }
+    },
+    "moving_plat": {
+      "sprite": "moving_plat",
+      "w": 48,
+      "h": 10,
+      "tags": ["moving_plat", "oneway"]
+    },
+    "spark": {
+      "sprite": "sparkle",
+      "w": 8,
+      "h": 8,
+      "tags": ["bullet"],
+      "emissive": 0.9
+    }
+  },
+  "stages": [
+    {
+      "id": "w1-1",
+      "name": "W1-1 · 晴空草坪",
+      "worldWidth": 736,
+      "skyTop": "#76c7ff",
+      "skyBottom": "#fff3df",
+      "ambientDarkness": 0,
+      "groundTop": "grass",
+      "groundFill": "dirt",
+      "bgmTheme": "meadow",
+      "spawn": { "x": 26, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 9, "topY": 144 },
+        { "startTile": 15, "countTiles": 7, "topY": 128 },
+        { "startTile": 26, "countTiles": 8, "topY": 144 },
+        { "startTile": 39, "countTiles": 7, "topY": 128 }
+      ],
+      "clouds": [
+        { "x": 160, "y": 128, "tilesWide": 4 },
+        { "x": 368, "y": 112, "tilesWide": 4 },
+        { "x": 448, "y": 80, "tilesWide": 4 },
+        { "x": 560, "y": 112, "tilesWide": 3 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 100, "y": 128, "minX": 74, "maxX": 128, "vx": 26 },
+        { "archetype": "slime", "x": 274, "y": 112, "minX": 244, "maxX": 334, "vx": -30 },
+        { "archetype": "slime", "x": 454, "y": 128, "minX": 422, "maxX": 526, "vx": 32 },
+        { "archetype": "spring", "x": 426, "y": 128 },
+        { "archetype": "checkpoint_flag", "x": 264, "y": 112 },
+        { "archetype": "star", "x": 184, "y": 104 },
+        { "archetype": "star", "x": 390, "y": 88 },
+        { "archetype": "star", "x": 576, "y": 88 },
+        { "archetype": "coin", "x": 286, "y": 104 },
+        { "archetype": "coin", "x": 500, "y": 120 },
+        { "archetype": "key", "x": 466, "y": 56 },
+        { "archetype": "gate", "x": 676, "y": 112 }
+      ],
+      "hint": "W1-1：踩扁史萊姆、彈簧飛躍拾取金鑰匙打開大門！"
+    },
+    {
+      "id": "w1-2",
+      "name": "W1-2 · 彩虹高塔",
+      "worldWidth": 768,
+      "skyTop": "#6abcf7",
+      "skyBottom": "#ffe6d8",
+      "ambientDarkness": 0,
+      "groundTop": "grass",
+      "groundFill": "dirt",
+      "bgmTheme": "meadow",
+      "spawn": { "x": 24, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 8, "topY": 144 },
+        { "startTile": 12, "countTiles": 6, "topY": 128 },
+        { "startTile": 22, "countTiles": 7, "topY": 144 },
+        { "startTile": 33, "countTiles": 6, "topY": 128 },
+        { "startTile": 42, "countTiles": 6, "topY": 128 }
+      ],
+      "clouds": [
+        { "x": 144, "y": 112, "tilesWide": 3 },
+        { "x": 288, "y": 96, "tilesWide": 4 },
+        { "x": 384, "y": 80, "tilesWide": 3 },
+        { "x": 624, "y": 96, "tilesWide": 3 }
+      ],
+      "movingPlatforms": [
+        { "x": 470, "y": 116, "tilesWide": 3, "minX": 462, "maxX": 526, "vx": 38 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 220, "y": 112, "minX": 196, "maxX": 272, "vx": 30 },
+        { "archetype": "slime", "x": 392, "y": 128, "minX": 356, "maxX": 446, "vx": -34 },
+        { "archetype": "slime", "x": 560, "y": 112, "minX": 530, "maxX": 604, "vx": 32 },
+        { "archetype": "spring", "x": 104, "y": 128 },
+        { "archetype": "spring", "x": 356, "y": 128 },
+        { "archetype": "checkpoint_flag", "x": 372, "y": 128 },
+        { "archetype": "star", "x": 156, "y": 88 },
+        { "archetype": "star", "x": 398, "y": 56 },
+        { "archetype": "star", "x": 634, "y": 72 },
+        { "archetype": "coin", "x": 318, "y": 72 },
+        { "archetype": "coin", "x": 500, "y": 92 },
+        { "archetype": "key", "x": 400, "y": 56 },
+        { "archetype": "gate", "x": 716, "y": 112 }
+      ],
+      "hint": "W1-2：搭乘移動浮雲踏板，攀上彩虹塔頂拿鑰匙！"
+    },
+    {
+      "id": "w2-1",
+      "name": "W2-1 · 風車雲海",
+      "worldWidth": 800,
+      "skyTop": "#5cb2f2",
+      "skyBottom": "#fff0d6",
+      "ambientDarkness": 0,
+      "groundTop": "crate",
+      "groundFill": "stone",
+      "bgmTheme": "meadow",
+      "spawn": { "x": 24, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 9, "topY": 144 },
+        { "startTile": 13, "countTiles": 6, "topY": 144 },
+        { "startTile": 24, "countTiles": 7, "topY": 144 },
+        { "startTile": 36, "countTiles": 6, "topY": 144 },
+        { "startTile": 44, "countTiles": 6, "topY": 128 }
+      ],
+      "clouds": [
+        { "x": 160, "y": 112, "tilesWide": 3 },
+        { "x": 304, "y": 112, "tilesWide": 3 },
+        { "x": 416, "y": 80, "tilesWide": 4 },
+        { "x": 528, "y": 112, "tilesWide": 3 }
+      ],
+      "movingPlatforms": [
+        { "x": 620, "y": 122, "tilesWide": 3, "minY": 96, "maxY": 132, "vy": -30 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 244, "y": 128, "minX": 212, "maxX": 288, "vx": 34 },
+        { "archetype": "slime", "x": 416, "y": 128, "minX": 388, "maxX": 482, "vx": -36 },
+        { "archetype": "slime", "x": 604, "y": 128, "minX": 578, "maxX": 654, "vx": 34 },
+        { "archetype": "spring", "x": 118, "y": 128 },
+        { "archetype": "feather", "x": 170, "y": 88 },
+        { "archetype": "checkpoint_flag", "x": 396, "y": 128 },
+        { "archetype": "star", "x": 320, "y": 88 },
+        { "archetype": "star", "x": 446, "y": 56 },
+        { "archetype": "star", "x": 634, "y": 72 },
+        { "archetype": "coin", "x": 236, "y": 120 },
+        { "archetype": "coin", "x": 540, "y": 88 },
+        { "archetype": "key", "x": 454, "y": 56 },
+        { "archetype": "gate", "x": 748, "y": 112 }
+      ],
+      "hint": "W2-1：拾取「雲海羽毛」解鎖【二段跳】飛越高空！"
+    },
+    {
+      "id": "w2-2",
+      "name": "W2-2 · 羽毛試煉",
+      "worldWidth": 832,
+      "skyTop": "#5694e8",
+      "skyBottom": "#ffd6e6",
+      "ambientDarkness": 0,
+      "groundTop": "crate",
+      "groundFill": "stone",
+      "bgmTheme": "meadow",
+      "spawn": { "x": 24, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 7, "topY": 144 },
+        { "startTile": 12, "countTiles": 5, "topY": 128 },
+        { "startTile": 22, "countTiles": 6, "topY": 144 },
+        { "startTile": 33, "countTiles": 5, "topY": 128 },
+        { "startTile": 45, "countTiles": 7, "topY": 128 }
+      ],
+      "clouds": [
+        { "x": 128, "y": 112, "tilesWide": 3 },
+        { "x": 288, "y": 96, "tilesWide": 3 },
+        { "x": 464, "y": 96, "tilesWide": 3 },
+        { "x": 624, "y": 96, "tilesWide": 4 }
+      ],
+      "movingPlatforms": [
+        { "x": 382, "y": 124, "tilesWide": 3, "minX": 368, "maxX": 432, "vx": 42 },
+        { "x": 556, "y": 118, "tilesWide": 3, "minX": 546, "maxX": 604, "vx": -40 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 220, "y": 112, "minX": 194, "maxX": 256, "vx": 34 },
+        { "archetype": "slime", "x": 386, "y": 128, "minX": 356, "maxX": 432, "vx": -36 },
+        { "archetype": "slime", "x": 544, "y": 112, "minX": 530, "maxX": 592, "vx": 38 },
+        { "archetype": "slime", "x": 754, "y": 112, "minX": 724, "maxX": 800, "vx": -36 },
+        { "archetype": "checkpoint_flag", "x": 368, "y": 128 },
+        { "archetype": "star", "x": 140, "y": 88 },
+        { "archetype": "star", "x": 478, "y": 72 },
+        { "archetype": "star", "x": 656, "y": 72 },
+        { "archetype": "coin", "x": 296, "y": 72 },
+        { "archetype": "coin", "x": 570, "y": 94 },
+        { "archetype": "key", "x": 656, "y": 72 },
+        { "archetype": "gate", "x": 788, "y": 112 }
+      ],
+      "hint": "W2-2：善用空中二段跳跨越斷崖與移動浮台！"
+    },
+    {
+      "id": "w3-1",
+      "name": "W3-1 · 星光暗洞",
+      "worldWidth": 800,
+      "skyTop": "#16112b",
+      "skyBottom": "#2d2152",
+      "ambientDarkness": 0.68,
+      "groundTop": "stone",
+      "groundFill": "stone",
+      "bgmTheme": "dungeon",
+      "spawn": { "x": 24, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 9, "topY": 144 },
+        { "startTile": 13, "countTiles": 7, "topY": 144 },
+        { "startTile": 24, "countTiles": 8, "topY": 144 },
+        { "startTile": 36, "countTiles": 7, "topY": 128 },
+        { "startTile": 45, "countTiles": 5, "topY": 144 }
+      ],
+      "clouds": [
+        { "x": 160, "y": 112, "tilesWide": 3 },
+        { "x": 336, "y": 112, "tilesWide": 3 },
+        { "x": 512, "y": 96, "tilesWide": 3 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 240, "y": 128, "minX": 212, "maxX": 304, "vx": 36 },
+        { "archetype": "slime", "x": 420, "y": 128, "minX": 388, "maxX": 492, "vx": -38 },
+        { "archetype": "slime", "x": 608, "y": 112, "minX": 580, "maxX": 668, "vx": 38 },
+        { "archetype": "torch", "x": 58, "y": 128 },
+        { "archetype": "torch", "x": 256, "y": 128 },
+        { "archetype": "torch", "x": 432, "y": 128 },
+        { "archetype": "torch", "x": 624, "y": 112 },
+        { "archetype": "torch", "x": 742, "y": 128 },
+        { "archetype": "dash_badge", "x": 170, "y": 88 },
+        { "archetype": "checkpoint_flag", "x": 404, "y": 128 },
+        { "archetype": "star", "x": 344, "y": 88 },
+        { "archetype": "star", "x": 526, "y": 72 },
+        { "archetype": "star", "x": 626, "y": 108 },
+        { "archetype": "coin", "x": 274, "y": 120 },
+        { "archetype": "coin", "x": 690, "y": 112 },
+        { "archetype": "key", "x": 526, "y": 72 },
+        { "archetype": "gate", "x": 752, "y": 128 }
+      ],
+      "hint": "W3-1：取得「流星徽章」！空中按 A 施展【空中衝刺】！"
+    },
+    {
+      "id": "w3-2",
+      "name": "W3-2 · 幽影秘道",
+      "worldWidth": 832,
+      "skyTop": "#120d26",
+      "skyBottom": "#2b1847",
+      "ambientDarkness": 0.72,
+      "groundTop": "stone",
+      "groundFill": "stone",
+      "bgmTheme": "dungeon",
+      "spawn": { "x": 24, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 7, "topY": 144 },
+        { "startTile": 12, "countTiles": 6, "topY": 128 },
+        { "startTile": 22, "countTiles": 6, "topY": 144 },
+        { "startTile": 33, "countTiles": 6, "topY": 128 },
+        { "startTile": 44, "countTiles": 8, "topY": 128 }
+      ],
+      "clouds": [
+        { "x": 128, "y": 112, "tilesWide": 3 },
+        { "x": 304, "y": 96, "tilesWide": 3 },
+        { "x": 464, "y": 96, "tilesWide": 3 }
+      ],
+      "movingPlatforms": [
+        { "x": 628, "y": 118, "tilesWide": 3, "minX": 616, "maxX": 680, "vx": 44 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 220, "y": 112, "minX": 194, "maxX": 272, "vx": 38 },
+        { "archetype": "slime", "x": 390, "y": 128, "minX": 356, "maxX": 432, "vx": -40 },
+        { "archetype": "slime", "x": 560, "y": 112, "minX": 530, "maxX": 608, "vx": 40 },
+        { "archetype": "slime", "x": 740, "y": 112, "minX": 708, "maxX": 800, "vx": -40 },
+        { "archetype": "torch", "x": 54, "y": 128 },
+        { "archetype": "torch", "x": 230, "y": 112 },
+        { "archetype": "torch", "x": 386, "y": 128 },
+        { "archetype": "torch", "x": 564, "y": 112 },
+        { "archetype": "torch", "x": 760, "y": 112 },
+        { "archetype": "checkpoint_flag", "x": 368, "y": 128 },
+        { "archetype": "star", "x": 140, "y": 88 },
+        { "archetype": "star", "x": 314, "y": 72 },
+        { "archetype": "star", "x": 484, "y": 72 },
+        { "archetype": "coin", "x": 650, "y": 94 },
+        { "archetype": "coin", "x": 726, "y": 112 },
+        { "archetype": "key", "x": 484, "y": 72 },
+        { "archetype": "gate", "x": 792, "y": 112 }
+      ],
+      "hint": "W3-2：結合二段跳與空中衝刺突破黑暗峽谷！"
+    },
+    {
+      "id": "w4-1",
+      "name": "W4-1 · 天空浮城",
+      "worldWidth": 864,
+      "skyTop": "#ff96b8",
+      "skyBottom": "#fff0d8",
+      "ambientDarkness": 0,
+      "groundTop": "grass",
+      "groundFill": "stone",
+      "bgmTheme": "meadow",
+      "spawn": { "x": 24, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 7, "topY": 144 },
+        { "startTile": 12, "countTiles": 5, "topY": 128 },
+        { "startTile": 22, "countTiles": 5, "topY": 144 },
+        { "startTile": 32, "countTiles": 6, "topY": 128 },
+        { "startTile": 46, "countTiles": 8, "topY": 128 }
+      ],
+      "clouds": [
+        { "x": 128, "y": 112, "tilesWide": 3 },
+        { "x": 288, "y": 96, "tilesWide": 3 },
+        { "x": 448, "y": 96, "tilesWide": 3 }
+      ],
+      "movingPlatforms": [
+        { "x": 620, "y": 122, "tilesWide": 3, "minX": 608, "maxX": 694, "vx": 50 },
+        { "x": 696, "y": 98, "tilesWide": 3, "minY": 82, "maxY": 120, "vy": 34 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 214, "y": 112, "minX": 194, "maxX": 254, "vx": 42 },
+        { "archetype": "slime", "x": 380, "y": 128, "minX": 354, "maxX": 416, "vx": -42 },
+        { "archetype": "slime", "x": 542, "y": 112, "minX": 514, "maxX": 590, "vx": 44 },
+        { "archetype": "slime", "x": 760, "y": 112, "minX": 738, "maxX": 828, "vx": -42 },
+        { "archetype": "spring", "x": 400, "y": 128 },
+        { "archetype": "checkpoint_flag", "x": 526, "y": 112 },
+        { "archetype": "star", "x": 146, "y": 88 },
+        { "archetype": "star", "x": 304, "y": 72 },
+        { "archetype": "star", "x": 660, "y": 72 },
+        { "archetype": "coin", "x": 468, "y": 72 },
+        { "archetype": "coin", "x": 768, "y": 112 },
+        { "archetype": "key", "x": 468, "y": 72 },
+        { "archetype": "gate", "x": 826, "y": 112 }
+      ],
+      "hint": "W4-1：彩虹浮城終盤挑戰，準備迎接王座殿堂！"
+    },
+    {
+      "id": "w4-2",
+      "name": "W4-2 · 史萊姆王殿",
+      "worldWidth": 640,
+      "skyTop": "#4a2b69",
+      "skyBottom": "#ff96b8",
+      "ambientDarkness": 0.16,
+      "groundTop": "stone",
+      "groundFill": "stone",
+      "bgmTheme": "boss",
+      "spawn": { "x": 28, "y": 120 },
+      "islands": [
+        { "startTile": 0, "countTiles": 10, "topY": 144 },
+        { "startTile": 11, "countTiles": 29, "topY": 144 }
+      ],
+      "clouds": [
+        { "x": 224, "y": 112, "tilesWide": 3 },
+        { "x": 352, "y": 96, "tilesWide": 4 },
+        { "x": 480, "y": 112, "tilesWide": 3 }
+      ],
+      "spawns": [
+        { "archetype": "slime", "x": 180, "y": 128, "minX": 164, "maxX": 256, "vx": 40 },
+        { "archetype": "slime", "x": 510, "y": 128, "minX": 460, "maxX": 556, "vx": -40 },
+        { "archetype": "spring", "x": 188, "y": 128 },
+        { "archetype": "spring", "x": 544, "y": 128 },
+        { "archetype": "checkpoint_flag", "x": 120, "y": 128 },
+        { "archetype": "star", "x": 240, "y": 88 },
+        { "archetype": "star", "x": 382, "y": 72 },
+        { "archetype": "star", "x": 500, "y": 88 },
+        { "archetype": "slime_king", "x": 380, "y": 128, "minX": 240, "maxX": 520, "hp": 5 },
+        { "archetype": "gate", "x": 596, "y": 128 }
+      ],
+      "boss": {
+        "archetype": "slime_king",
+        "name": "巨大史萊姆王",
+        "x": 380,
+        "y": 128,
+        "hp": 5,
+        "minX": 240,
+        "maxX": 520
+      },
+      "hint": "W4-2 Boss 戰：連續踩踏「巨大史萊姆王」5 次奪取勝利！"
+    }
+  ]
+}
