@@ -208,6 +208,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'TransitionMascot.ts',
     'ConsoleShellRouter.ts',
     'SystemLogPanelView.ts',
+    'WindowDioramaView.ts',
   ];
   for (const viewFile of newUiViews) {
     const viewSrc = fs.readFileSync(path.join(rootDir, 'src/ui', viewFile), 'utf8');

@@ -18,9 +18,14 @@ import { DeskWorldView } from './DeskWorldView.ts';
 import { RpgOverlayView } from './RpgOverlayView.ts';
 import { ShmupOverlayView } from './ShmupOverlayView.ts';
 import { VirtualGamepadInput } from './VirtualGamepadInput.ts';
+import {
+  WindowDioramaView,
+  type DioramaPerspective,
+  type DioramaTimeMode,
+} from './WindowDioramaView.ts';
 import { el, pulseTransientClass } from './dom.ts';
 
-export type { ConsolePhase, ShellPhase };
+export type { ConsolePhase, DioramaPerspective, DioramaTimeMode, ShellPhase };
 
 export interface ConsoleViewOptions {
   onGamepadChange?: (connected: boolean, label: string | null) => void;
@@ -32,6 +37,7 @@ export interface ConsoleViewOptions {
   onEscapeExternal?: () => boolean;
   onThemeGlowChange?: (hex: string) => void;
   onFilterChange?: (mode: ScreenFilterMode) => void;
+  onPerspectiveChange?: (perspective: DioramaPerspective) => void;
 }
 
 /**
@@ -54,6 +60,8 @@ export class ConsoleView {
   private readonly screenFrame: HTMLElement;
   private readonly glassSheenEl: HTMLElement;
   private readonly deskWorld: DeskWorldView;
+  private readonly diorama: WindowDioramaView;
+  private readonly onPerspectiveChange?: (perspective: DioramaPerspective) => void;
   private readonly ac = new AbortController();
   private readonly activeTimers = new Set<number>();
   private readonly recoilTimers = new WeakMap<HTMLElement, number>();
@@ -68,6 +76,7 @@ export class ConsoleView {
   private hwGamepadConnected = false;
   private hwGamepadLabel: string | null = null;
   private debugHitboxesOn = false;
+  private perspective: DioramaPerspective = 'focus';
   private lastParallaxMs = 0;
   private spatialTrackWidth = 0;
   private activeDeskPage: 0 | 1 | 2 = 1;
@@ -76,7 +85,9 @@ export class ConsoleView {
 
   constructor(host: EngineHost, atlas: TextureAtlas, onExitLandscape: (() => void) | undefined, opts: ConsoleViewOptions) {
     this.host = host;
+    this.onPerspectiveChange = opts.onPerspectiveChange;
     this.element = el('section', 'switch-stage');
+    this.element.dataset.perspective = this.perspective;
     this.consoleEl = el('div', 'switch-console');
 
     this.gamepad = new VirtualGamepadInput({
@@ -169,14 +180,32 @@ export class ConsoleView {
       onScrollToPage: (pageIdx) => this.scrollToDeskPage(pageIdx, true),
     });
 
+    this.diorama = new WindowDioramaView(host, atlas, {
+      onRequestWindowFocus: () => {
+        if (this.router.getShellPhase() === 'HOME_LOBBY' && this.router.getBootStage() === 'awake') {
+          this.setPerspective('window');
+        }
+      },
+    });
+
     this.spatialTrackEl = el('div', 'desk-spatial-track');
     const consoleSlot = el('div', 'desk-console-slot');
     consoleSlot.append(this.consoleEl, this.deskWorld.handsOverlayEl);
     this.spatialTrackEl.append(this.deskWorld.notebookPropEl, consoleSlot, this.deskWorld.trayPropEl);
-    this.element.append(this.deskWorld.deskBgEl, this.spatialTrackEl, this.deskWorld.portraitPagerEl);
+    this.element.append(
+      this.diorama.backdropEl,
+      this.deskWorld.deskBgEl,
+      this.spatialTrackEl,
+      this.deskWorld.portraitPagerEl,
+      this.diorama.surfaceBtn,
+    );
 
     const syncTrackWidth = () => {
-      this.spatialTrackWidth = this.spatialTrackEl.clientWidth;
+      const w = this.spatialTrackEl.clientWidth;
+      if (w > 0 && w !== this.spatialTrackWidth) {
+        this.spatialTrackWidth = w;
+        this.scrollToDeskPage(this.activeDeskPage, false);
+      }
     };
     if (typeof ResizeObserver !== 'undefined') {
       this.trackResizeObserver = new ResizeObserver(syncTrackWidth);
@@ -266,13 +295,16 @@ export class ConsoleView {
       onFilterChange: opts.onFilterChange,
       onBootStageChange: (stage) => {
         this.element.dataset.bootStage = stage;
+        this.diorama.setShellState(this.router?.getShellPhase?.() ?? 'BOOT_BLINK', stage);
       },
       onShellPhaseChange: (phase) => {
         this.element.dataset.shellPhase = phase;
+        this.diorama.setShellState(phase, this.router?.getBootStage?.() ?? 'awake');
         this.bodyEl.classList.toggle('is-lobby-clean', phase !== 'IN_GAME');
         this.screenFrame.scrollLeft = 0;
         this.screenFrame.scrollTop = 0;
         if (phase === 'IN_GAME' || phase === 'BOOT_BLINK') {
+          if (this.perspective !== 'focus') this.setPerspective('focus');
           this.scrollToDeskPage(1, false);
           this.setParallax(0, 0);
         }
@@ -284,9 +316,12 @@ export class ConsoleView {
 
     this.consoleEl.addEventListener(
       'click',
-      () => {
+      (e) => {
         if (this.element.dataset.bootStage === 'standby') {
           this.router.wakeFromStandby();
+        } else if (this.perspective === 'window') {
+          e.stopPropagation();
+          this.setPerspective('focus');
         }
       },
       { signal: this.ac.signal },
@@ -371,11 +406,13 @@ export class ConsoleView {
         invalidateCardArtCache();
         this.router.refreshCards();
         this.deskWorld.rebuildTray();
+        this.diorama.rebuildVisitors();
       }),
       this.host.events.on('sprite:registered', () => {
         invalidateCardArtCache();
         this.router.refreshCardArt();
         this.deskWorld.rebuildTray();
+        this.diorama.rebuildVisitors();
       }),
     );
   }
@@ -383,6 +420,8 @@ export class ConsoleView {
   private setParallax(nx: number, ny: number): void {
     const px = nx.toFixed(3);
     const py = ny.toFixed(3);
+    this.diorama.backdropEl.style.setProperty('--px', px);
+    this.diorama.backdropEl.style.setProperty('--py', py);
     this.deskWorld.deskBgEl.style.setProperty('--px', px);
     this.deskWorld.deskBgEl.style.setProperty('--py', py);
     this.glassSheenEl.style.setProperty('--px', px);
@@ -456,9 +495,47 @@ export class ConsoleView {
     this.auxRailEl.setAttribute('aria-hidden', mode === 'both' ? 'true' : 'false');
   }
 
+  public getPerspective(): DioramaPerspective {
+    return this.perspective;
+  }
+
+  public setPerspective(next: DioramaPerspective): void {
+    if (this.perspective === next) return;
+    if (next === 'window' && this.router.getShellPhase() === 'IN_GAME') return;
+    this.perspective = next;
+    this.element.dataset.perspective = next;
+    this.diorama.setPerspective(next);
+    this.host.playStereoTick(next === 'window' ? 760 : 580, 0, 0.14);
+    this.onPerspectiveChange?.(next);
+  }
+
+  public togglePerspective(): DioramaPerspective {
+    if (this.router.getShellPhase() === 'IN_GAME') {
+      this.showCaptureToast('🪟 遊玩中專注畫面 · 按 Home 回大廳即可看窗外');
+      return this.perspective;
+    }
+    if (this.router.getShellPhase() === 'BOOT_BLINK' && this.router.getBootStage() === 'standby') {
+      this.router.wakeFromStandby();
+    }
+    const next: DioramaPerspective = this.perspective === 'focus' ? 'window' : 'focus';
+    this.setPerspective(next);
+    return this.perspective;
+  }
+
+  public cycleTimeMode(): { mode: DioramaTimeMode; label: string } {
+    const mode = this.diorama.cycleTimeMode();
+    this.host.playStereoTick(840, 0.15, 0.14);
+    return { mode, label: this.diorama.getTimeMoodLabel() };
+  }
+
+  public getTimeMoodLabel(): string {
+    return this.diorama.getTimeMoodLabel();
+  }
+
   public tick(dt: number): void {
     this.gamepad.pollGamepad();
     this.slots.tick(dt);
+    this.diorama.tick(dt);
     this.router.pollLobbyInput(() => this.gamepad.getInput(true));
   }
 
@@ -486,6 +563,7 @@ export class ConsoleView {
     this.trackResizeObserver?.disconnect();
     for (const off of this.busUnsubs) off();
     this.busUnsubs.length = 0;
+    this.diorama.destroy();
     this.deskWorld.destroy();
     this.router.destroy();
     this.slots.destroy();
@@ -550,6 +628,7 @@ export class ConsoleView {
   public refreshCardArt(): void {
     this.router.refreshCardArt();
     this.deskWorld.rebuildTray();
+    this.diorama.rebuildVisitors();
   }
 
   public insertCartridge(id: CartridgeId, instant = false, skipSplash = false): void {

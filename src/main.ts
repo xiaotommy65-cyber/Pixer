@@ -33,6 +33,7 @@ import { initCapacitorNativeBridge } from './ui/CapacitorNativeBridge.ts';
 import { ConsoleView } from './ui/ConsoleView.ts';
 import { installGlobalTactileFeedback, registerDomHapticSink } from './ui/dom.ts';
 import { IrisWipeTransition } from './ui/IrisWipeTransition.ts';
+import { setElementIconLabel } from './ui/PixelIcons.ts';
 import { SpriteAtelierView } from './ui/SpriteAtelierView.ts';
 import { StudioWorkbenchView } from './ui/StudioWorkbenchView.ts';
 import {
@@ -91,7 +92,7 @@ export function createApp(): AppHandle | null {
   let stickDynamicOrigin = save.getStickDynamicOrigin(true);
   let rafId = 0;
 
-  const { utilityBar, landscapeBtn, settingsBtn } = createOsUtilityBar();
+  const { utilityBar, viewBtn, timeBtn, landscapeBtn, settingsBtn } = createOsUtilityBar();
 
   const host = new EngineHost(runner, synth, save);
   const disposeHapticSink = registerDomHapticSink((profile, side, skipAcoustic) =>
@@ -181,6 +182,11 @@ export function createApp(): AppHandle | null {
 
   let gpuEngine: GpuEngine | null = null;
 
+  const syncViewPill = (p: 'focus' | 'window') => {
+    viewBtn.classList.toggle('is-active', p === 'window');
+    setElementIconLabel(viewBtn, p === 'window' ? 'home' : 'screen', p === 'window' ? '回掌機' : '看窗外');
+  };
+
   consoleView = new ConsoleView(host, atlas, () => orientationCtrl.setLandscape(false), {
     onGamepadChange: (connected, label) => syncGamepadHeaderBadge(connected, label),
     onOpenEditor: (originEl) => enterEditorWithIris(originEl),
@@ -198,6 +204,10 @@ export function createApp(): AppHandle | null {
         drawerView.close();
         return true;
       }
+      if (consoleView.getPerspective() === 'window') {
+        consoleView.setPerspective('focus');
+        return true;
+      }
       return false;
     },
     onThemeGlowChange: (hex) => {
@@ -206,7 +216,27 @@ export function createApp(): AppHandle | null {
     onFilterChange: (mode) => {
       gpuEngine?.setFilterModeCode(mode === 'crt' ? 2 : mode === 'lcd' ? 1 : 0);
     },
+    onPerspectiveChange: (p) => syncViewPill(p),
   });
+
+  setElementIconLabel(timeBtn, 'sparkle', consoleView.getTimeMoodLabel());
+  viewBtn.addEventListener(
+    'click',
+    () => {
+      host.unlockAudio();
+      consoleView.togglePerspective();
+    },
+    { signal },
+  );
+  timeBtn.addEventListener(
+    'click',
+    () => {
+      host.unlockAudio();
+      const { label } = consoleView.cycleTimeMode();
+      setElementIconLabel(timeBtn, 'sparkle', label);
+    },
+    { signal },
+  );
 
   consoleView.setTouchAutofire(autofireOn);
   consoleView.setDpadDeadzoneMode(deadzoneMode);

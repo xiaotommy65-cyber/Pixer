@@ -28,11 +28,25 @@ export function applyPerformanceProfileAttr(profile: RenderPerformanceProfile): 
 
 export function createOsUtilityBar(): {
   utilityBar: HTMLElement;
+  viewBtn: HTMLButtonElement;
+  timeBtn: HTMLButtonElement;
   landscapeBtn: HTMLButtonElement;
   settingsBtn: HTMLButtonElement;
 } {
   const utilityBar = document.createElement('div');
   utilityBar.className = 'console-os-utility-bar';
+
+  const viewBtn = document.createElement('button');
+  viewBtn.type = 'button';
+  viewBtn.className = 'console-os-pill-btn diorama-view-btn';
+  viewBtn.title = '切換視角：低頭看掌機 ↔ 抬頭看窗外生態';
+  setElementIconLabel(viewBtn, 'screen', '看窗外');
+
+  const timeBtn = document.createElement('button');
+  timeBtn.type = 'button';
+  timeBtn.className = 'console-os-pill-btn diorama-time-btn';
+  timeBtn.title = '切換窗外時辰（自動真實時間 / 清晨 / 午後 / 黃昏 / 深夜）';
+  setElementIconLabel(timeBtn, 'sparkle', '自動 · 日夜');
 
   const landscapeBtn = document.createElement('button');
   landscapeBtn.type = 'button';
@@ -55,8 +69,8 @@ export function createOsUtilityBar(): {
   setElementIconLabel(settingsText, 'gear', '進階設定');
   settingsBtn.append(settingsGpDot, settingsText);
 
-  utilityBar.append(landscapeBtn, settingsBtn);
-  return { utilityBar, landscapeBtn, settingsBtn };
+  utilityBar.append(viewBtn, timeBtn, landscapeBtn, settingsBtn);
+  return { utilityBar, viewBtn, timeBtn, landscapeBtn, settingsBtn };
 }
 
 export function createHandheldOrientationController(params: {

@@ -58,7 +58,11 @@ body {
 
 .atelier-shell.is-os-locked .switch-console {
   width: 100%;
-  margin-top: clamp(46px, 6.5vh, 64px);
+  margin-top: clamp(72px, 12vh, 122px);
+}
+
+.atelier-shell.is-os-locked .switch-stage[data-shell-phase='IN_GAME'] .switch-console {
+  margin-top: clamp(38px, 5.5vh, 52px);
 }
 
 .console-os-utility-bar {
@@ -1062,6 +1066,330 @@ body[data-perf='eco'] .lobby-lower-dock {
   display: none;
 }
 
+/* ---------- Living Window & Bedside Diorama (Oklab Sky + Campfire + Cameos) ---------- */
+.diorama-room-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    var(--diorama-wall-top, #e9dcc6) 0%,
+    var(--diorama-wall-bot, #d6c3a5) 68%,
+    #b79f82 100%
+  );
+  transition: filter 420ms ease, opacity 420ms ease, background 680ms ease;
+}
+
+.diorama-wall-wash {
+  position: absolute;
+  inset: 0;
+  background-image: var(--tex-wall, none);
+  background-size: 64px 64px;
+  background-repeat: repeat;
+  image-rendering: pixelated;
+  opacity: 0.92;
+}
+
+.diorama-lamp-glow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse 56% 40% at 50% 22%,
+      color-mix(in srgb, var(--diorama-warm-glow, #ffd88a) 22%, transparent) 0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      circle at 82% 76%,
+      rgba(255, 210, 146, 0.16) 0%,
+      transparent 44%
+    );
+  transition: background 600ms ease;
+}
+
+.diorama-light-shaft {
+  position: absolute;
+  top: clamp(72px, 14vh, 130px);
+  left: 50%;
+  width: min(860px, 98vw);
+  height: clamp(220px, 44vh, 420px);
+  transform: translate3d(
+    calc(-50% + var(--px, 0) * -5px),
+    calc(var(--py, 0) * -3px),
+    0
+  );
+  background-image: var(--tex-beam, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: opacity 420ms ease;
+}
+
+.diorama-window-frame {
+  position: absolute;
+  top: clamp(32px, 5.2vh, 52px);
+  left: 50%;
+  width: min(640px, 78vw);
+  aspect-ratio: 320 / 148;
+  transform: translate3d(
+    calc(-50% + var(--px, 0) * -9px),
+    calc(var(--py, 0) * -5px),
+    0
+  ) scale(1);
+  border: 4.5px solid var(--ink);
+  border-radius: 16px;
+  background-color: #a66f45;
+  background-image: var(--tex-wood, none);
+  background-size: 128px 64px;
+  background-repeat: repeat;
+  image-rendering: pixelated;
+  padding: 7px 7px 13px;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 236, 210, 0.44),
+    0 10px 26px rgba(20, 14, 24, 0.22),
+    0 4px 0 var(--ink);
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 1;
+  transition:
+    top 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 420ms ease,
+    filter 420ms ease;
+}
+
+.diorama-window-frame:hover {
+  box-shadow:
+    inset 0 2px 0 rgba(255, 236, 210, 0.54),
+    0 14px 32px rgba(20, 14, 24, 0.28),
+    0 4px 0 var(--ink);
+}
+
+.diorama-window-glass {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border: 2.5px solid #2b1b12;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #141c38;
+}
+
+.window-diorama-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.window-mullion-v,
+.window-mullion-h {
+  position: absolute;
+  pointer-events: none;
+  background: #4e3322;
+  box-shadow: 0 0 0 1px rgba(255, 228, 194, 0.22);
+}
+
+.window-mullion-v {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 5px;
+  transform: translateX(-50%);
+}
+
+.window-mullion-h {
+  left: 0;
+  right: 0;
+  top: 48%;
+  height: 4px;
+}
+
+.window-wood-sill {
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  bottom: -8px;
+  height: 14px;
+  border-radius: 8px;
+  border: 2.5px solid var(--ink);
+  background-color: #a66f45;
+  background-image: var(--tex-wood, none);
+  background-size: 128px 64px;
+  image-rendering: pixelated;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 238, 214, 0.5),
+    0 3px 0 var(--ink);
+  pointer-events: none;
+}
+
+.window-sill-plant {
+  position: absolute;
+  left: 18px;
+  bottom: 9px;
+  width: 14px;
+  height: 12px;
+  background: #c86d44;
+  border: 2px solid var(--ink);
+  border-radius: 2px 2px 5px 5px;
+}
+
+.window-sill-plant::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  bottom: 9px;
+  width: 9px;
+  height: 8px;
+  border-radius: 50% 50% 2px 2px;
+  background: #56d39c;
+  border: 2px solid var(--ink);
+}
+
+.window-sill-mug {
+  position: absolute;
+  right: 24px;
+  bottom: 9px;
+  width: 12px;
+  height: 10px;
+  background: #fff8ea;
+  border: 2px solid var(--ink);
+  border-radius: 2px 2px 4px 4px;
+}
+
+.window-status-chip {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(56, 40, 32, 0.55);
+  background: rgba(255, 250, 240, 0.88);
+  color: var(--ink);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+
+.switch-stage[data-perspective='window'] .window-status-chip,
+.diorama-window-frame:hover .window-status-chip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Foreground pixel surface: Cozy Gingham Quilt / Honey-Oak Desk / Pixel Cutting Mat */
+.diorama-bed-ledge {
+  position: absolute;
+  left: -1%;
+  right: -1%;
+  bottom: 0;
+  height: clamp(134px, 24vh, 214px);
+  border-top: 3px solid var(--ink);
+  border-radius: 24px 24px 0 0;
+  background-color: #f5e8d4;
+  background-image:
+    linear-gradient(180deg, rgba(255, 252, 246, 0.28) 0%, rgba(56, 40, 32, 0.04) 100%),
+    var(--tex-fg, none);
+  background-size: 100% 100%, 128px 128px;
+  background-repeat: no-repeat, repeat;
+  image-rendering: pixelated;
+  box-shadow:
+    inset 0 6px 0 rgba(255, 252, 246, 0.52),
+    0 -4px 18px rgba(42, 28, 18, 0.08);
+  transition: border-radius 280ms ease, background-color 420ms ease, box-shadow 280ms ease;
+}
+
+.diorama-bed-ledge[data-surface='oak'] {
+  border-radius: 14px 14px 0 0;
+  background-color: #e2be92;
+  background-size: 100% 100%, 192px 96px;
+  box-shadow:
+    inset 0 5px 0 rgba(255, 240, 216, 0.5),
+    0 -4px 18px rgba(56, 36, 18, 0.1);
+}
+
+.diorama-bed-ledge[data-surface='mat'] {
+  border-radius: 16px 16px 0 0;
+  border-top: 3px solid #2b423b;
+  background-color: #5d8579;
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(16, 26, 23, 0.14) 100%),
+    var(--tex-fg, none);
+  background-size: 100% 100%, 128px 128px;
+  box-shadow:
+    inset 0 4px 0 rgba(212, 244, 234, 0.34),
+    0 -5px 0 #d4ab7c,
+    0 -8px 0 var(--ink);
+}
+
+.desk-surface-btn {
+  position: fixed;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 6;
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 0.68rem;
+  opacity: 0.94;
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .desk-surface-btn,
+.switch-stage[data-shell-phase='BOOT_BLINK'] .desk-surface-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Perspective Mode: Window View ("抬頭看窗外") */
+.switch-stage[data-perspective='window'] .diorama-window-frame {
+  top: 46%;
+  transform: translate3d(-50%, -56%, 0) scale(1.16);
+  z-index: 6;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 224, 188, 0.5),
+    0 24px 48px rgba(14, 10, 20, 0.42),
+    0 6px 0 var(--ink);
+}
+
+.switch-stage[data-perspective='window'] .desk-spatial-track {
+  transform: translateY(52%) scale(0.8);
+  opacity: 0.94;
+}
+
+.switch-stage[data-perspective='window'] .switch-console {
+  cursor: pointer;
+}
+
+.switch-stage[data-perspective='window'] .desk-prop {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(18px) scale(0.92);
+}
+
+/* In-Game Guard: dim/blur room backdrop so gameplay canvas retains 100% contrast */
+.switch-stage[data-shell-phase='IN_GAME'] .diorama-room-backdrop {
+  opacity: 0.52;
+  filter: blur(2.5px) brightness(0.72) saturate(0.8);
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .diorama-light-shaft {
+  opacity: 0.35;
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .diorama-window-frame {
+  pointer-events: none;
+}
+
+.console-os-pill-btn.is-active {
+  background: linear-gradient(180deg, #ffe270 0%, #f7c12d 100%);
+}
+
 /* ---------- Desk Grid World & Warm Lamp Glow (Parallax Layer -14px) ---------- */
 .desk-world-bg {
   position: fixed;
@@ -1069,29 +1397,22 @@ body[data-perf='eco'] .lobby-lower-dock {
   z-index: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(56, 40, 32, 0.065) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(56, 40, 32, 0.065) 1px, transparent 1px);
-  background-size: 28px 28px;
+    radial-gradient(rgba(56, 40, 32, 0.035) 1px, transparent 0);
+  background-size: 24px 24px;
   transform: translate3d(calc(var(--px, 0) * -14px), calc(var(--py, 0) * -10px), 0);
-  transition: opacity 320ms ease, background-color 420ms ease;
+  transition: opacity 320ms ease;
 }
 
 .desk-lamp-glow {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at 50% 34%, rgba(255, 226, 170, 0.34), transparent 64%);
+  display: none;
 }
 
-.switch-stage[data-boot-stage='standby'] .desk-world-bg {
-  background-color: rgba(18, 14, 24, 0.62);
-}
-
-.switch-stage[data-boot-stage='holding'] .desk-world-bg {
-  opacity: 0.72;
+.switch-stage[data-boot-stage='standby'] .diorama-room-backdrop {
+  filter: brightness(0.68) saturate(0.85);
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .desk-world-bg {
-  opacity: 0.42;
+  opacity: 0.25;
 }
 
 /* ---------- 3-Step Boot Pickup (Standby Tilt -> SVG Hands -> Upright Awake) ---------- */
@@ -1129,17 +1450,17 @@ body[data-perf='eco'] .lobby-lower-dock {
 }
 
 @media (min-width: 761px) and (hover: hover) {
-  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .desk-console-slot {
+  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'][data-perspective='focus'] .desk-console-slot {
     perspective: 1100px;
   }
 
-  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .switch-console {
+  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'][data-perspective='focus'] .switch-console {
     transform-style: preserve-3d;
     transform: rotateX(calc(var(--py, 0) * -4deg)) rotateY(calc(var(--px, 0) * 5deg)) scale(1);
     transition: transform 160ms ease-out, filter 320ms ease;
   }
 
-  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .cart-slot {
+  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'][data-perspective='focus'] .cart-slot {
     transform: translate3d(calc(var(--px, 0) * 6px), calc(var(--py, 0) * 4px), 0);
   }
 }
@@ -1211,40 +1532,61 @@ body[data-perf='eco'] .lobby-lower-dock {
 /* ---------- Spatial Track: Desktop Desk Props + Mobile Portrait 3-Page Scroll-Snap ---------- */
 .desk-spatial-track {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 100%;
   display: grid;
-  grid-template-columns: 204px minmax(0, 880px) 204px;
-  align-items: center;
+  grid-template-columns: 168px minmax(0, 860px) 168px;
+  align-items: end;
   justify-content: center;
-  gap: 16px;
+  gap: 14px;
   overscroll-behavior-x: contain;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease;
 }
 
 .desk-prop {
   position: relative;
-  background: rgba(255, 253, 248, 0.92);
+  background-color: #fffdf8;
   border: 2.5px solid var(--ink);
-  border-radius: 18px;
-  padding: 12px;
+  border-radius: 16px;
+  padding: 9px 10px;
   box-shadow:
-    inset 0 2px 0 rgba(255, 255, 255, 0.85),
-    0 6px 0 var(--ink);
+    inset 0 2px 0 rgba(255, 255, 255, 0.84),
+    0 5px 0 var(--ink);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  transition: opacity 260ms ease, transform 240ms var(--ease-bounce);
+  gap: 7px;
+  transition: opacity 260ms ease, transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.desk-prop-notebook {
+  background-image: var(--tex-paper, none);
+  background-size: 48px 48px;
+  background-repeat: repeat;
+}
+
+.desk-prop-tray {
+  background-color: #f6ecda;
+  background-image: var(--tex-tray-felt, none);
+  background-size: 32px 32px;
+  background-repeat: repeat;
+}
+
+.desk-snap-btn {
+  padding: 4px 8px;
+  min-height: 28px;
+  font-size: 0.68rem;
 }
 
 .switch-stage[data-boot-stage='standby'] .desk-prop {
-  opacity: 0.52;
+  opacity: 0.45;
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .desk-prop {
-  opacity: 0.28;
+  opacity: 0.16;
+  transform: translateY(10px) scale(0.95);
   pointer-events: none;
 }
 
@@ -1405,8 +1747,9 @@ body[data-perf='eco'] .lobby-lower-dock {
     overflow-x: hidden;
   }
 
-  .switch-stage[data-shell-phase='IN_GAME'] .desk-prop {
-    visibility: hidden;
+  .switch-stage[data-shell-phase='IN_GAME'] .desk-prop,
+  .switch-stage[data-shell-phase='BOOT_BLINK'] .desk-prop {
+    display: none;
   }
 
   .desk-console-slot {
@@ -1486,6 +1829,15 @@ body[data-perf='eco'] .lobby-lower-dock {
   .portrait-pager-btn.is-active {
     background: linear-gradient(180deg, #ffe270 0%, #f7c12d 100%);
   }
+
+  .diorama-window-frame {
+    width: min(640px, 86vw);
+  }
+
+  .switch-stage[data-perspective='window'] .portrait-desk-pager {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 /* Mobile / Coarse Pointer GPU Performance Guard: skip expensive real-time backdrop blur */
@@ -1541,14 +1893,17 @@ body[data-perf='eco'] .lobby-lower-dock {
   width: 100%;
 }
 
-.atelier-shell.is-os-locked.is-handheld-landscape .switch-console {
+.atelier-shell.is-os-locked.is-handheld-landscape .switch-console,
+.atelier-shell.is-os-locked.is-handheld-landscape .switch-stage[data-shell-phase='IN_GAME'] .switch-console {
   margin-top: 0;
   height: 100%;
 }
 
 .atelier-shell.is-handheld-landscape .desk-prop,
 .atelier-shell.is-handheld-landscape .portrait-desk-pager,
-.atelier-shell.is-handheld-landscape .desk-world-bg {
+.atelier-shell.is-handheld-landscape .desk-world-bg,
+.atelier-shell.is-handheld-landscape .diorama-room-backdrop,
+.atelier-shell.is-handheld-landscape .desk-surface-btn {
   display: none !important;
 }
 
@@ -1567,7 +1922,9 @@ body[data-perf='eco'] .lobby-lower-dock {
   (orientation: landscape) and (pointer: coarse) and (max-width: 960px) {
   .desk-prop,
   .portrait-desk-pager,
-  .desk-world-bg {
+  .desk-world-bg,
+  .diorama-room-backdrop,
+  .desk-surface-btn {
     display: none !important;
   }
 
@@ -1575,15 +1932,27 @@ body[data-perf='eco'] .lobby-lower-dock {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .atelier-shell.is-os-locked:not(.is-handheld-landscape) .switch-console {
+  .atelier-shell.is-os-locked:not(.is-handheld-landscape) .switch-console,
+  .atelier-shell.is-os-locked:not(.is-handheld-landscape) .switch-stage[data-shell-phase='IN_GAME'] .switch-console {
     margin-top: 34px;
   }
 }
 
 body[data-perf='eco'] .glass-sheen,
-body[data-perf='eco'] .desk-world-bg {
+body[data-perf='eco'] .desk-world-bg,
+body[data-perf='eco'] .diorama-room-backdrop,
+body[data-perf='eco'] .diorama-light-shaft,
+body[data-perf='eco'] .diorama-window-frame,
+body[data-perf='eco'] .diorama-bed-ledge,
+body[data-perf='eco'] .desk-spatial-track,
+body[data-perf='eco'] .desk-prop {
   transition: none !important;
   transform: none !important;
+  filter: none !important;
+}
+
+body[data-perf='eco'] .switch-stage[data-shell-phase='IN_GAME'] .diorama-room-backdrop {
+  opacity: 0.35;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1591,6 +1960,12 @@ body[data-perf='eco'] .desk-world-bg {
   .boot-pickup-hands,
   .glass-sheen,
   .desk-world-bg,
+  .diorama-room-backdrop,
+  .diorama-light-shaft,
+  .diorama-window-frame,
+  .diorama-bed-ledge,
+  .desk-spatial-track,
+  .desk-prop,
   .boot-wake-prompt {
     transition-duration: 1ms !important;
     animation: none !important;
