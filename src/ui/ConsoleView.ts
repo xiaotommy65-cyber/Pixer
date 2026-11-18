@@ -28,6 +28,7 @@ export interface ConsoleViewOptions {
   isExternalModalOpen: () => boolean;
   onEscapeExternal?: () => boolean;
   onThemeGlowChange?: (hex: string) => void;
+  onFilterChange?: (mode: ScreenFilterMode) => void;
 }
 
 /**
@@ -227,6 +228,7 @@ export class ConsoleView {
       onEscapeExternal: opts.onEscapeExternal,
       onSyncHudIdle: () => this.hud.updateControlLabels(null),
       onToast: (msg) => this.showCaptureToast(msg),
+      onFilterChange: opts.onFilterChange,
     });
 
     this.applyGripMode(this.host.hal.getGripMode());

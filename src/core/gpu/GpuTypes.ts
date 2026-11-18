@@ -1,6 +1,6 @@
 export const GAME_W = 320;
 export const GAME_H = 180;
-export const FLOATS_PER_INSTANCE = 16;
+export const FLOATS_PER_INSTANCE = 20;
 export const MAX_INSTANCES_PER_PASS = 8192;
 
 export type GpuBackendKind = 'webgpu' | 'webgl2' | 'canvas2d' | 'initializing';
@@ -37,7 +37,11 @@ export interface BatchDrawItem {
   rot: number;
   mode: number; // 0 = sprite, 1 = radial light/star glint, 2 = solid/rounded quad, 3 = elliptical shadow, 4 = beveled wall material, 5 = smooth gradient/vignette
   flash?: number; // 0..1 white hit-flash
-  param?: number; // extra per-mode shader parameter
+  param?: number; // extra per-mode shader parameter (Mode 0: emissive boost)
+  pivotX?: number;
+  pivotY?: number;
+  skewX?: number;
+  paletteRow?: number;
   additive: boolean;
 }
 
@@ -45,6 +49,8 @@ export interface SkyGradient {
   top: [number, number, number];
   bottom: [number, number, number];
   cozyFilter: boolean;
+  glowIntensity: number;
+  filterMode: number; // 0 = clean, 1 = lcd, 2 = crt
 }
 
 export interface GpuFrameStats {
@@ -57,7 +63,14 @@ export interface GpuFrameStats {
 
 export interface IGpuBackend {
   readonly kind: Exclude<GpuBackendKind, 'initializing'>;
-  uploadAtlas(width: number, height: number, pixels: Uint8Array): void;
+  uploadAtlas(
+    width: number,
+    height: number,
+    pixels: Uint8Array,
+    indexPixels?: Uint8Array,
+    paletteLut?: Uint8Array,
+    paletteRows?: number,
+  ): void;
   renderFrame(
     sky: SkyGradient,
     alphaItems: Float32Array,

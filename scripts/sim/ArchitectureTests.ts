@@ -332,6 +332,19 @@ export function testArchitectureBoundariesAndLifecycle(): void {
 export function testUpgradedGpuPipelineAndAtlas(): void {
   const atlas = new TextureAtlas();
   check(atlas.width === 512 && atlas.height === 512, `TextureAtlas should be 512x512 (got ${atlas.width}x${atlas.height})`);
+  check(FLOATS_PER_INSTANCE === 20, `FLOATS_PER_INSTANCE should be 20 for M1 deform/LUT packing (got ${FLOATS_PER_INSTANCE})`);
+  check(
+    atlas.indexPixels.length === ATLAS_SIZE * ATLAS_SIZE &&
+      atlas.paletteLut.length === 16 * atlas.paletteRows * 4 &&
+      atlas.paletteRows === 8,
+    'TextureAtlas must expose 512x512 indexPixels and 16x8 RGBA8 paletteLut',
+  );
+  // Row 0 (classic) keeps indices 14/15 non-emissive for clouds; themed row 1 enables emissive weights
+  check(
+    atlas.paletteLut[14 * 4 + 3] === 0 && atlas.paletteLut[(1 * 16 + 14) * 4 + 3] > 0,
+    'Palette LUT must keep classic row non-emissive on 14/15 and enable emissive on themed rows',
+  );
+
   const momoActionSprites = ['momo_run_a', 'momo_run_b', 'momo_jump', 'momo_slide', 'momo_wave_a', 'momo_wave_b'] as const;
   for (const sid of momoActionSprites) {
     check(atlas.hasSprite(sid), `TextureAtlas must register Momo transition sprite '${sid}'`);
@@ -346,26 +359,46 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
     dynRect.v0 >= 128 / ATLAS_SIZE && dynRect.u1 <= 1 && dynRect.w === 16 && dynRect.h === 16,
     'Dynamic sprite UV must allocate cleanly inside the >=128px dynamic atlas region',
   );
+  const dynX = Math.floor(dynRect.u0 * ATLAS_SIZE);
+  const dynY = Math.floor(dynRect.v0 * ATLAS_SIZE);
+  check(
+    atlas.indexPixels[dynY * ATLAS_SIZE + dynX] === 255,
+    'Dynamic RGBA sprite texels must write index 255 for 32-bit passthrough in LUT shader',
+  );
 
   const capturedModesAlpha: number[] = [];
   const capturedModesAdd: number[] = [];
   const capturedParamsAdd: number[] = [];
+  const capturedPivotsY: number[] = [];
+  const capturedSkewsX: number[] = [];
+  const capturedPaletteRows: number[] = [];
+  let capturedGlow = -1;
+  let capturedFilterMode = -1;
   let uploadCalls = 0;
+  let uploadedLut = false;
 
   const mockBackend: IGpuBackend = {
     kind: 'webgpu',
-    uploadAtlas: () => {
+    uploadAtlas: (_w, _h, _px, idxPx, lut, rows) => {
       uploadCalls++;
+      if (idxPx && lut && rows === 8) uploadedLut = true;
     },
-    renderFrame: (_sky, alphaItems, alphaCount, additiveItems, additiveCount) => {
+    renderFrame: (sky, alphaItems, alphaCount, additiveItems, additiveCount) => {
+      capturedGlow = sky.glowIntensity;
+      capturedFilterMode = sky.filterMode;
       for (let i = 0; i < alphaCount; i++) {
-        capturedModesAlpha.push(alphaItems[i * FLOATS_PER_INSTANCE + 13]);
+        const base = i * FLOATS_PER_INSTANCE;
+        capturedModesAlpha.push(alphaItems[base + 13]);
+        capturedPivotsY.push(alphaItems[base + 17]);
+        capturedSkewsX.push(alphaItems[base + 18]);
+        capturedPaletteRows.push(alphaItems[base + 19]);
       }
       for (let i = 0; i < additiveCount; i++) {
-        capturedModesAdd.push(additiveItems[i * FLOATS_PER_INSTANCE + 13]);
-        capturedParamsAdd.push(additiveItems[i * FLOATS_PER_INSTANCE + 15]);
+        const base = i * FLOATS_PER_INSTANCE;
+        capturedModesAdd.push(additiveItems[base + 13]);
+        capturedParamsAdd.push(additiveItems[base + 15]);
       }
-      return 3;
+      return 7;
     },
     resize: () => {},
     dispose: () => {},
@@ -374,6 +407,7 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   const dummyCanvas = { width: 320, height: 180 } as unknown as HTMLCanvasElement;
   const gpu = new GpuEngine(dummyCanvas, undefined, atlas);
   (gpu as unknown as { backend: IGpuBackend }).backend = mockBackend;
+  gpu.setFilterModeCode(2);
 
   const bridge = new SceneGpuBridge();
   const ac = new AstralChroniclesGame(0);
@@ -382,7 +416,8 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   snap.bgStars = [{ x: 40, y: 24, size: 2, phase: 0.4, color: '#fffaf0' }];
   bridge.render(gpu, snap, null);
 
-  check(uploadCalls === 1, 'GpuEngine.flush should auto-upload dirty dynamic atlas before rendering');
+  check(uploadCalls === 1 && uploadedLut, 'GpuEngine.flush should upload dirty dynamic atlas + indexPixels + paletteLut');
+  check(capturedGlow === params.glowIntensity && capturedFilterMode === 2, 'SceneGpuBridge/GpuEngine must forward glowIntensity and filterMode');
   check(capturedModesAlpha.includes(3), 'SceneGpuBridge must emit Mode 3 analytical soft elliptical shadows');
   check(capturedModesAlpha.includes(4), 'SceneGpuBridge must emit Mode 4 normal-lit beveled masonry/earth/astral walls');
   check(capturedModesAlpha.includes(5), 'SceneGpuBridge must emit Mode 5 smooth atmospheric haze/vignette gradients');
@@ -391,7 +426,46 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
     'SceneGpuBridge must emit Mode 1 (>=10) 4-point star glints for bgStars',
   );
 
-  console.log('[SIM OK] Upgraded GPU Art Pipeline (512x512 RGBA Atlas + Shader Modes 1/3/4/5) verified');
+  // Verify PA-01 sprint skewX & anchorY=1 pivot projection
+  const cbRunner = new CartridgeRunner('cloudberry-hop');
+  for (let i = 0; i < 8; i++) cbRunner.stepFixed(1 / 60, { ...emptyInput(), right: true });
+  capturedPivotsY.length = 0;
+  capturedSkewsX.length = 0;
+  bridge.render(gpu, cbRunner.getSnapshot(), null);
+  check(
+    capturedPivotsY.includes(1) && capturedSkewsX.some((s) => s > 0.01),
+    'PA-01 moving hero must emit anchorY=1 pivot and positive sprint skewX',
+  );
+
+  // Verify PA-02 emissive bullets & sector paletteRow
+  const shmupRunner = new CartridgeRunner('sugar-starlight');
+  shmupRunner.dispatchCommand('launch_sortie');
+  for (let i = 0; i < 4; i++) shmupRunner.stepFixed(1 / 60, { ...emptyInput(), action: true });
+  const shmupSnap = shmupRunner.getSnapshot();
+  check(
+    shmupSnap.entities.some((e) => (e.emissive ?? 0) > 0.5),
+    'PA-02 must emit emissive bloom weights on projectiles/pickups',
+  );
+  capturedPaletteRows.length = 0;
+  shmupSnap.paletteRow = 2;
+  bridge.render(gpu, shmupSnap, null);
+  check(capturedPaletteRows.includes(2), 'SceneGpuBridge must propagate snapshot.paletteRow to GPU instances');
+
+  // Verify WGSL / GLSL ES 3.00 shader parity markers
+  const rootDir = process.cwd();
+  const wgslSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGpuShaders.ts'), 'utf8');
+  const glslSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGl2Shaders.ts'), 'utf8');
+  check(
+    wgslSrc.includes('uIndexAtlas') &&
+      wgslSrc.includes('uPaletteLut') &&
+      wgslSrc.includes('fsComposite') &&
+      glslSrc.includes('uIndexAtlas') &&
+      glslSrc.includes('uPaletteLut') &&
+      glslSrc.includes('COMPOSITE_FS'),
+    'WebGpuShaders and WebGl2Shaders must maintain LUT + Bloom + Composite parity',
+  );
+
+  console.log('[SIM OK] Upgraded GPU Art Pipeline (20-float LUT/Skew + 3-Pass Bloom/Post + Shader Modes) verified');
 }
 
 export async function testStructuredLoggingAndErrorRecovery(): Promise<void> {

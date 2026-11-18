@@ -1,4 +1,4 @@
-// Curated Cozy Toybox 16-Color Master Palette (0 = transparent)
+// Curated Cozy Toybox 16-Color Master Palette (0 = transparent, 1..13 = standard, 14..15 = emissive candidates)
 export const TOYBOX_PALETTE: readonly string[] = [
   'transparent', // 0: Empty
   '#382820', // 1: Espresso outline
@@ -14,9 +14,127 @@ export const TOYBOX_PALETTE: readonly string[] = [
   '#2a7cd4', // 11: Ocean azure
   '#e0aaff', // 12: Pastel lilac
   '#9e73d4', // 13: Plum soft
-  '#c7d4e6', // 14: Cloud mist
-  '#8c9ab5', // 15: Cool slate
+  '#c7d4e6', // 14: Cloud mist (emissive in themed rows)
+  '#8c9ab5', // 15: Cool slate (emissive in themed rows)
 ];
+
+export interface PaletteThemeSpec {
+  id: string;
+  label: string;
+  colors: readonly string[];
+  /** Emissive intensity (0..1) on indices 14 and 15 in LUT alpha channel */
+  emissive14: number;
+  emissive15: number;
+}
+
+export const PALETTE_THEMES: readonly PaletteThemeSpec[] = [
+  { id: 'classic', label: '草莓玩具箱', colors: TOYBOX_PALETTE, emissive14: 0, emissive15: 0 },
+  {
+    id: 'strawberry_dusk',
+    label: '草莓暮光',
+    colors: [
+      'transparent', '#2e1d2b', '#fff5eb', '#ffd0b8', '#ff6b97', '#c92a5b',
+      '#72ddb0', '#2b9370', '#ffe066', '#f28444', '#70c8ff', '#3168c4',
+      '#ecb8ff', '#9c5fc7', '#fff3b0', '#ff85b3',
+    ],
+    emissive14: 0.9,
+    emissive15: 0.75,
+  },
+  {
+    id: 'starlight_neon',
+    label: '星光霓虹',
+    colors: [
+      'transparent', '#1a1630', '#f7faff', '#ffd1c7', '#ff4d8d', '#b8255f',
+      '#4df2b2', '#179b73', '#ffe66d', '#ff9233', '#5ce1e6', '#2667ff',
+      '#d499ff', '#7d4cdb', '#fff799', '#5ce1e6',
+    ],
+    emissive14: 1.0,
+    emissive15: 0.9,
+  },
+  {
+    id: 'emberkeep_torch',
+    label: '餘燼火炬',
+    colors: [
+      'transparent', '#241718', '#fff4e0', '#f2c19c', '#e85d5d', '#9e2b36',
+      '#68b684', '#2d6e53', '#ffd166', '#ef7b35', '#76a5d9', '#39558c',
+      '#d4a1e6', '#7e4e94', '#ffd166', '#ff7b54',
+    ],
+    emissive14: 0.95,
+    emissive15: 0.85,
+  },
+  {
+    id: 'astral_twilight',
+    label: '星穹暮色',
+    colors: [
+      'transparent', '#18182e', '#f4f7ff', '#e8c4c4', '#ff7597', '#b53a6b',
+      '#5eead4', '#1d8a85', '#ffd447', '#f08c42', '#70b7ff', '#2c59b8',
+      '#d8b4fe', '#7c4dcc', '#ffd447', '#72efdd',
+    ],
+    emissive14: 1.0,
+    emissive15: 0.9,
+  },
+  {
+    id: 'mint_handheld',
+    label: '薄荷掌機',
+    colors: [
+      'transparent', '#1b2e26', '#f2fff5', '#c8f0d8', '#7ae582', '#3ca370',
+      '#56d39c', '#267355', '#e9ffdb', '#a7d97e', '#6cd4c6', '#2e8a80',
+      '#b5e8d5', '#529c83', '#e9ffdb', '#7ae582',
+    ],
+    emissive14: 0.85,
+    emissive15: 0.7,
+  },
+  {
+    id: 'frost_crystal',
+    label: '霜晶極光',
+    colors: [
+      'transparent', '#1d243b', '#f5fbff', '#dbeafe', '#ff85b3', '#b84b82',
+      '#64dfdf', '#2b8a99', '#ffe8a3', '#f4a261', '#72efdd', '#3a86ff',
+      '#e0aaff', '#8338ec', '#e0fbfc', '#c77dff',
+    ],
+    emissive14: 0.95,
+    emissive15: 0.85,
+  },
+  {
+    id: 'sunset_amber',
+    label: '琥珀晚霞',
+    colors: [
+      'transparent', '#36201f', '#fff8eb', '#ffd5b3', '#ff6b78', '#c4314b',
+      '#78d6a3', '#2e8c67', '#ffe066', '#ff8833', '#75b8ff', '#3566b8',
+      '#f2b5d4', '#a15a8a', '#fff1a8', '#ff8fab',
+    ],
+    emissive14: 0.95,
+    emissive15: 0.8,
+  },
+];
+
+export const PALETTE_THEME_COUNT = PALETTE_THEMES.length;
+
+/** Builds a 16 x N RGBA8 Palette LUT texture (alpha byte encodes emissive weight 0..255). */
+export function buildPaletteLutRgba(): Uint8Array {
+  const lut = new Uint8Array(16 * PALETTE_THEME_COUNT * 4);
+  for (let row = 0; row < PALETTE_THEME_COUNT; row++) {
+    const theme = PALETTE_THEMES[row];
+    for (let col = 0; col < 16; col++) {
+      const dst = (row * 16 + col) * 4;
+      if (col === 0) {
+        lut[dst] = 0;
+        lut[dst + 1] = 0;
+        lut[dst + 2] = 0;
+        lut[dst + 3] = 0;
+        continue;
+      }
+      const hex = theme.colors[col] ?? TOYBOX_PALETTE[col] ?? '#ffffff';
+      const n = parseInt(hex.slice(1), 16);
+      lut[dst] = (n >> 16) & 255;
+      lut[dst + 1] = (n >> 8) & 255;
+      lut[dst + 2] = n & 255;
+      const em = col === 14 ? theme.emissive14 : col === 15 ? theme.emissive15 : 0;
+      lut[dst + 3] = Math.round(Math.max(0, Math.min(1, em)) * 255);
+    }
+  }
+  return lut;
+}
 
 export type BuiltinSpriteId =
   | 'solid'

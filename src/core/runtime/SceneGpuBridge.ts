@@ -119,6 +119,7 @@ export class SceneGpuBridge {
   private camCenterY = GAME_H * 0.5;
   private perspSkew = 0;
   private cullPad = 56;
+  private defaultPaletteRow = 0;
 
   private perspScaleAtWorldY(wy: number): number {
     if (this.perspSkew <= 0) return 1;
@@ -179,20 +180,26 @@ export class SceneGpuBridge {
     }
 
     const capY = sy - elevZ * this.zoom * ps;
-    gpu.drawSprite(t.sprite, sx, capY, { w: dw, h: dh, tint: t.tint });
+    gpu.drawSprite(t.sprite, sx, capY, {
+      w: dw,
+      h: dh,
+      tint: t.tint,
+      paletteRow: this.defaultPaletteRow,
+    });
   }
 
   private drawEntity(gpu: GpuEngine, e: EntityDesc): void {
     const anchorY = e.anchorY ?? 0.5;
-    const worldCenterX = e.x + e.w * 0.5;
-    const worldCenterY = e.y + e.h * anchorY + e.h * (e.scaleY ?? 1) * (0.5 - anchorY);
-    const ps = this.perspScaleAtWorldY(worldCenterY);
-    const sx = GAME_W * 0.5 + (worldCenterX - this.camCenterX) * this.zoom * ps;
-    const syBase = GAME_H * 0.5 + (worldCenterY - this.camCenterY) * this.zoom * ps;
+    const worldAnchorX = e.x + e.w * 0.5;
+    const worldAnchorY = e.y + e.h * anchorY;
+    const worldMidY = e.y + e.h * 0.5;
+    const ps = this.perspScaleAtWorldY(worldMidY);
+    const sx = GAME_W * 0.5 + (worldAnchorX - this.camCenterX) * this.zoom * ps;
+    const syBase = GAME_H * 0.5 + (worldAnchorY - this.camCenterY) * this.zoom * ps;
     const sw = e.w * (e.scaleX ?? 1) * this.zoom * ps;
     const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
     const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
-    if (sx < -this.cullPad || sx > GAME_W + this.cullPad || sy < -this.cullPad || sy > GAME_H + this.cullPad) return;
+    if (sx < -this.cullPad || sx > GAME_W + this.cullPad || sy < -this.cullPad || sy - sh > GAME_H + this.cullPad) return;
     gpu.drawSprite(e.sprite, sx, sy, {
       w: sw,
       h: sh,
@@ -202,6 +209,11 @@ export class SceneGpuBridge {
       alpha: e.alpha,
       flash: e.flash,
       additive: e.additive,
+      pivotX: 0.5,
+      pivotY: anchorY,
+      skewX: e.skewX ?? 0,
+      emissive: e.emissive ?? (e.additive ? 0.85 : 0),
+      paletteRow: e.paletteRow ?? this.defaultPaletteRow,
     });
   }
 
@@ -295,8 +307,9 @@ export class SceneGpuBridge {
     snap: RenderSceneSnapshot,
     benchmarkSprites: readonly BenchmarkSprite[] | null,
   ): GpuFrameStats {
-    gpu.beginFrame(snap.skyTop, snap.skyBottom, snap.cozyFilter);
+    gpu.beginFrame(snap.skyTop, snap.skyBottom, snap.cozyFilter, snap.glowIntensity ?? 1.0);
 
+    this.defaultPaletteRow = snap.paletteRow ?? 0;
     this.zoom = snap.cameraZoom ?? 1;
     this.camCenterX = snap.cameraX + GAME_W * 0.5;
     this.camCenterY = snap.cameraY + GAME_H * 0.5;
@@ -390,13 +403,15 @@ export class SceneGpuBridge {
       const pSize = p.size * this.zoom * ps;
       const alpha = Math.max(0, 1 - p.life / p.maxLife);
       if (p.sprite) {
+        const add = p.additive ?? true;
         gpu.drawSprite(p.sprite, px, py, {
           w: pSize,
           h: pSize,
           rot: p.rot,
           tint: p.color,
           alpha,
-          additive: p.additive ?? true,
+          additive: add,
+          emissive: add ? 0.9 : 0,
         });
       } else if (p.additive) {
         gpu.drawLight(px, py, Math.max(1.8, pSize * 0.85), p.color, alpha * 0.95, 1.8);

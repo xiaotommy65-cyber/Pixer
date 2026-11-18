@@ -49,7 +49,10 @@ export class GpuEngine {
     top: hexToRgb01('#8ed4ff'),
     bottom: hexToRgb01('#fff2df'),
     cozyFilter: true,
+    glowIntensity: 1.0,
+    filterMode: 0,
   };
+  private screenFilterCode = 0;
   private onBackendChange?: (kind: GpuBackendKind, canvas?: HTMLCanvasElement) => void;
   private lastStats: GpuFrameStats = {
     backend: 'initializing',
@@ -69,6 +72,10 @@ export class GpuEngine {
     this.atlas = atlas;
   }
 
+  public setFilterModeCode(mode: number): void {
+    this.screenFilterCode = Math.max(0, Math.min(2, Math.round(mode)));
+  }
+
   private replaceCanvasNode(): void {
     try {
       const doc = this.canvas.ownerDocument;
@@ -82,6 +89,17 @@ export class GpuEngine {
     } catch (err) {
       appLogger.error('gpu', 'gpu.replaceCanvas', '替換 Canvas 節點失敗', err);
     }
+  }
+
+  private uploadFullAtlasToBackend(): void {
+    this.backend?.uploadAtlas(
+      this.atlas.width,
+      this.atlas.height,
+      this.atlas.pixels,
+      this.atlas.indexPixels,
+      this.atlas.paletteLut,
+      this.atlas.paletteRows,
+    );
   }
 
   private activateCanvas2D(replaceCanvas: boolean, reason = 'fallback'): GpuBackendKind {
@@ -101,6 +119,7 @@ export class GpuEngine {
       return 'initializing';
     }
     this.backend = c2d;
+    this.uploadFullAtlasToBackend();
     this.lastStats.backend = 'canvas2d';
     this.onBackendChange?.('canvas2d', this.canvas);
     appLogger.warn('gpu', 'gpu.activateCanvas2D', '已啟用 Canvas 2D 軟體保底渲染管線', undefined, {
@@ -124,6 +143,9 @@ export class GpuEngine {
         appLogger.warn('gpu', 'gpu.webglContextLost', '偵測到 WebGL2 Context 遺失，切換至 Canvas 2D 保底');
         this.activateCanvas2D(true, 'webglcontextlost');
       },
+      this.atlas.indexPixels,
+      this.atlas.paletteLut,
+      this.atlas.paletteRows,
     );
     if (!gl2) {
       return this.activateCanvas2D(true, 'webgl2_unavailable');
@@ -154,6 +176,9 @@ export class GpuEngine {
         appLogger.warn('gpu', 'gpu.webgpuLost', 'WebGPU Device 遺失，自動切換至 WebGL2 / Canvas 2D');
         this.activateWebGl2(true, 'webgpu_lost');
       },
+      this.atlas.indexPixels,
+      this.atlas.paletteLut,
+      this.atlas.paletteRows,
     );
 
     if (gpu) {
@@ -175,7 +200,7 @@ export class GpuEngine {
   public syncAtlasToGpu(): void {
     try {
       this.atlas.syncHeroSlots();
-      this.backend?.uploadAtlas(this.atlas.width, this.atlas.height, this.atlas.pixels);
+      this.uploadFullAtlasToBackend();
       this.atlas.clearDirty();
     } catch (err) {
       appLogger.error('gpu', 'gpu.syncAtlas', '上傳紋理圖集至 GPU 失敗', err, {
@@ -187,7 +212,7 @@ export class GpuEngine {
   public syncAtlasIfDirty(): void {
     if (!this.atlas.isDirty()) return;
     try {
-      this.backend?.uploadAtlas(this.atlas.width, this.atlas.height, this.atlas.pixels);
+      this.uploadFullAtlasToBackend();
       this.atlas.clearDirty();
     } catch (err) {
       appLogger.error('gpu', 'gpu.syncAtlasDirty', '動態更新紋理圖集至 GPU 失敗', err, {
@@ -206,7 +231,13 @@ export class GpuEngine {
     }
   }
 
-  public beginFrame(topHex: string, bottomHex: string, cozyFilter = true): void {
+  public beginFrame(
+    topHex: string,
+    bottomHex: string,
+    cozyFilter = true,
+    glowIntensity = 1.0,
+    filterMode = this.screenFilterCode,
+  ): void {
     const topPacked = packHexRgb(topHex);
     this.currentSky.top[0] = ((topPacked >> 16) & 255) * INV_255;
     this.currentSky.top[1] = ((topPacked >> 8) & 255) * INV_255;
@@ -218,6 +249,8 @@ export class GpuEngine {
     this.currentSky.bottom[2] = (botPacked & 255) * INV_255;
 
     this.currentSky.cozyFilter = cozyFilter;
+    this.currentSky.glowIntensity = Math.max(0, Math.min(2.0, glowIntensity));
+    this.currentSky.filterMode = filterMode;
     this.alphaCount = 0;
     this.addCount = 0;
     this.spriteTotal = 0;
@@ -242,6 +275,10 @@ export class GpuEngine {
     mode: number,
     flash = 0,
     param = 0,
+    pivotX = 0.5,
+    pivotY = 0.5,
+    skewX = 0,
+    paletteRow = 0,
   ): void {
     const arr = additive ? this.addItems : this.alphaItems;
     const count = additive ? this.addCount : this.alphaCount;
@@ -264,6 +301,10 @@ export class GpuEngine {
     arr[base + 13] = mode;
     arr[base + 14] = flash;
     arr[base + 15] = param;
+    arr[base + 16] = pivotX;
+    arr[base + 17] = pivotY;
+    arr[base + 18] = skewX;
+    arr[base + 19] = paletteRow;
 
     if (additive) this.addCount++;
     else this.alphaCount++;
@@ -285,6 +326,10 @@ export class GpuEngine {
     mode: number,
     flash = 0,
     param = 0,
+    pivotX = 0.5,
+    pivotY = 0.5,
+    skewX = 0,
+    paletteRow = 0,
   ): void {
     if (colorHex) {
       const n = packHexRgb(colorHex);
@@ -306,10 +351,36 @@ export class GpuEngine {
         mode,
         flash,
         param,
+        pivotX,
+        pivotY,
+        skewX,
+        paletteRow,
       );
       return;
     }
-    this.pushInstance(additive, x, y, w, h, u0, v0, u1, v1, 1, 1, 1, a, rot, mode, flash, param);
+    this.pushInstance(
+      additive,
+      x,
+      y,
+      w,
+      h,
+      u0,
+      v0,
+      u1,
+      v1,
+      1,
+      1,
+      1,
+      a,
+      rot,
+      mode,
+      flash,
+      param,
+      pivotX,
+      pivotY,
+      skewX,
+      paletteRow,
+    );
   }
 
   public drawSprite(
@@ -325,6 +396,11 @@ export class GpuEngine {
       alpha?: number;
       flash?: number;
       additive?: boolean;
+      pivotX?: number;
+      pivotY?: number;
+      skewX?: number;
+      paletteRow?: number;
+      emissive?: number;
     },
   ): void {
     const rect = this.atlas.getRect(id);
@@ -348,7 +424,11 @@ export class GpuEngine {
       opts?.rot ?? 0,
       0,
       opts?.flash ?? 0,
-      0,
+      opts?.emissive ?? 0,
+      opts?.pivotX ?? 0.5,
+      opts?.pivotY ?? 0.5,
+      opts?.skewX ?? 0,
+      opts?.paletteRow ?? 0,
     );
   }
 

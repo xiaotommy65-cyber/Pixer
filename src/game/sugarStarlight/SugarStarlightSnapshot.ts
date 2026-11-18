@@ -54,7 +54,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
           : p.kind === 'weapon_violet'
             ? '#e0aaff'
             : undefined;
-    entities.push({ id: `pk-${i}`, sprite, tint, x: p.x, y: p.y, w: 14, h: 14 });
+    entities.push({ id: `pk-${i}`, sprite, tint, x: p.x, y: p.y, w: 14, h: 14, emissive: 0.78 });
     if (glow > 0.05) {
       lights.push({ x: p.x + 7, y: p.y + 7, radius: 22, color: tint ?? '#ffd447', intensity: 0.42 * glow });
     }
@@ -95,6 +95,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       h,
       rot: e.rot,
       flash: Math.min(1, e.flashTimer * 5),
+      emissive: e.kind === 'cargo' ? 0.65 : undefined,
     });
     if (e.kind !== 'meteor' && glow > 0.05) {
       lights.push({
@@ -127,6 +128,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       w: 32,
       h: 16,
       flash: Math.min(1, state.boss.flash * 6),
+      emissive: state.boss.phase === 2 ? 0.5 : 0.22,
     });
     for (const wp of state.boss.weakPoints) {
       if (wp.hp <= 0) continue;
@@ -139,6 +141,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
         w: 16,
         h: 12,
         flash: Math.min(1, wp.flash * 6),
+        emissive: 0.55,
       });
     }
     if (glow > 0.05) {
@@ -166,6 +169,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       rot: (b.piercing || b.homing) && (b.vy !== 0 || b.vx < 0) ? Math.atan2(b.vy, b.vx) : undefined,
       tint: b.color,
       additive: b.fromEnemy,
+      emissive: b.piercing ? 1.1 : 0.88,
     });
     if (glow > 0.05) {
       lights.push({
@@ -190,6 +194,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       h: 11,
       rot: f.rot,
       tint: over ? (i % 2 === 0 ? '#ffd447' : '#ff8ec6') : undefined,
+      emissive: over ? 0.9 : 0.48,
     });
     if (glow > 0.05) {
       lights.push({
@@ -212,6 +217,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       w: 16,
       h: 16,
       rot: state.ship.rot,
+      skewX: clamp(state.ship.rot * 0.65, -0.22, 0.22),
       scaleX: state.ship.squash.scaleX,
       scaleY: state.ship.squash.scaleY,
       flash: Math.min(1, state.ship.flash * 4),
@@ -230,6 +236,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       tint: '#ffd447',
       alpha: 0.42,
       additive: true,
+      emissive: 1.0,
     });
   }
 
@@ -246,6 +253,7 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
       rot: t * 8,
       tint: chargeTier === 2 ? '#ffd447' : chargeTier === 1 ? '#5ec2f7' : '#fffaf0',
       additive: true,
+      emissive: 1.15,
     });
   }
 
@@ -343,6 +351,8 @@ export function buildShmupSnapshot(state: ShmupSnapshotSource, params: RuntimePa
     skyTop: sector.skyTop,
     skyBottom: sector.skyBottom,
     cozyFilter: params.cozyFilter > 0.5,
+    glowIntensity: params.glowIntensity,
+    paletteRow: state.sectorIdx === 1 ? 1 : state.sectorIdx === 2 ? 2 : 0,
     timeSec: t,
     elapsedSec: state.elapsedSec,
     status: state.getStatus(),

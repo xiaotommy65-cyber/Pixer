@@ -92,6 +92,26 @@ export function testCoreSubsystems(): void {
     'JuiceSystem.applyPreset(charge_shot) should apply hitstop, trauma, flash, and directional kick',
   );
 
+  // Zero-GC JuiceSystem pre-allocated ring pool cap & stale-field cleanup
+  j2.reset();
+  j2.spawnConverge(100, 80, ['#5ec2f7'], 8, 1.0, { radiusMin: 18, radiusMax: 24, maxLife: 0.4 });
+  const convergedRef = j2.particles[0];
+  check(convergedRef.targetX === 100, 'spawnConverge should set targetX');
+  j2.reset();
+  j2.spawnBurst(50, 50, ['#ffd447'], 1, 1.0);
+  check(
+    j2.particles.every((p) => p.targetX === undefined && p.targetY === undefined),
+    'Recycled burst particles must clear stale targetX/targetY from prior converge particles',
+  );
+  j2.reset();
+  for (let b = 0; b < 35; b++) {
+    j2.spawnBurst(40, 40, ['#ff708d', '#ffd447'], 10, 1.0);
+  }
+  check(
+    j2.particles.length === 256,
+    `JuiceSystem ring pool must cap active particles at 256 without unbounded growth (got ${j2.particles.length})`,
+  );
+
   // 6. ToySynth DSP AudioPatterns, Stereo Panning, Lookahead Multi-Track Arrangements & Charge Ramp
   check(computeSidePan('left') < -0.3 && computeSidePan('right') > 0.3 && computeSidePan('both') === 0, 'computeSidePan must pan L/R symmetrically');
   const swEven = computeSwungStepDuration(0, 0.16, 0.06);

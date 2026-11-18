@@ -334,6 +334,7 @@ export function buildSceneSnapshot(
     skyTop: '#0d0918',
     skyBottom: '#1a122e',
     cozyFilter: params.cozyFilter > 0.5,
+    glowIntensity: params.glowIntensity,
     timeSec: t,
     elapsedSec: t,
     status,

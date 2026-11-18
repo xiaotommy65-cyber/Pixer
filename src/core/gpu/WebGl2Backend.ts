@@ -5,7 +5,18 @@ import {
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
-import { SKY_FS, SKY_VS, SPRITE_FS, SPRITE_VS } from './WebGl2Shaders.ts';
+import {
+  BLOOM_BLUR_FS,
+  BLOOM_DOWN_FS,
+  COMPOSITE_FS,
+  POST_VS,
+  SKY_FS,
+  SKY_VS,
+  SPRITE_FS,
+  SPRITE_VS,
+} from './WebGl2Shaders.ts';
+
+const DEFAULT_PALETTE_ROWS = 8;
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const sh = gl.createShader(type);
@@ -38,20 +49,65 @@ function linkProgram(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): 
   return prog;
 }
 
+function createRenderTexture(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  filter: number,
+): WebGLTexture {
+  const tex = gl.createTexture()!;
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  return tex;
+}
+
+interface GlRenderTargets {
+  w: number;
+  h: number;
+  bloomW: number;
+  bloomH: number;
+  mrtFbo: WebGLFramebuffer;
+  sceneTex: WebGLTexture;
+  emissiveTex: WebGLTexture;
+  bloomFboA: WebGLFramebuffer;
+  bloomFboB: WebGLFramebuffer;
+  bloomTexA: WebGLTexture;
+  bloomTexB: WebGLTexture;
+}
+
 export class WebGl2Backend implements IGpuBackend {
   public readonly kind = 'webgl2' as const;
 
   private gl: WebGL2RenderingContext;
   private skyProg: WebGLProgram;
   private spriteProg: WebGLProgram;
+  private bloomDownProg: WebGLProgram;
+  private bloomBlurProg: WebGLProgram;
+  private compositeProg: WebGLProgram;
   private skyVao: WebGLVertexArrayObject;
   private spriteVao: WebGLVertexArrayObject;
   private instanceBuffer: WebGLBuffer;
   private atlasTexture: WebGLTexture;
+  private indexAtlasTexture: WebGLTexture;
+  private paletteLutTexture: WebGLTexture;
+  private paletteRows = DEFAULT_PALETTE_ROWS;
+  private targets: GlRenderTargets | null = null;
+
   private uTopLoc: WebGLUniformLocation | null;
   private uBottomLoc: WebGLUniformLocation | null;
   private uCozyLoc: WebGLUniformLocation | null;
   private uTimeLoc: WebGLUniformLocation | null;
+  private uPaletteRowsLoc: WebGLUniformLocation | null;
+  private uDownOffsetLoc: WebGLUniformLocation | null;
+  private uBlurStepLoc: WebGLUniformLocation | null;
+  private uCompGlowLoc: WebGLUniformLocation | null;
+  private uCompFilterLoc: WebGLUniformLocation | null;
+  private uCompCozyLoc: WebGLUniformLocation | null;
+
   private onLostListener?: (e: Event) => void;
   private canvasEl: HTMLCanvasElement;
 
@@ -62,11 +118,18 @@ export class WebGl2Backend implements IGpuBackend {
     atlasHeight: number,
     initialPixels: Uint8Array,
     onLost?: () => void,
+    initialIndexPixels?: Uint8Array,
+    initialPaletteLut?: Uint8Array,
+    initialPaletteRows = DEFAULT_PALETTE_ROWS,
   ) {
     this.canvasEl = canvas;
     this.gl = gl;
+    this.paletteRows = Math.max(1, initialPaletteRows);
     this.skyProg = linkProgram(gl, SKY_VS, SKY_FS);
     this.spriteProg = linkProgram(gl, SPRITE_VS, SPRITE_FS);
+    this.bloomDownProg = linkProgram(gl, POST_VS, BLOOM_DOWN_FS);
+    this.bloomBlurProg = linkProgram(gl, POST_VS, BLOOM_BLUR_FS);
+    this.compositeProg = linkProgram(gl, POST_VS, COMPOSITE_FS);
 
     this.uTopLoc = gl.getUniformLocation(this.skyProg, 'uTopColor');
     this.uBottomLoc = gl.getUniformLocation(this.skyProg, 'uBottomColor');
@@ -75,31 +138,73 @@ export class WebGl2Backend implements IGpuBackend {
 
     gl.useProgram(this.spriteProg);
     const uAtlasLoc = gl.getUniformLocation(this.spriteProg, 'uAtlas');
+    const uIdxLoc = gl.getUniformLocation(this.spriteProg, 'uIndexAtlas');
+    const uLutLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteLut');
+    this.uPaletteRowsLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteRows');
     if (uAtlasLoc) gl.uniform1i(uAtlasLoc, 0);
+    if (uIdxLoc) gl.uniform1i(uIdxLoc, 1);
+    if (uLutLoc) gl.uniform1i(uLutLoc, 2);
+
+    gl.useProgram(this.bloomDownProg);
+    const uDownTexLoc = gl.getUniformLocation(this.bloomDownProg, 'uTexA');
+    this.uDownOffsetLoc = gl.getUniformLocation(this.bloomDownProg, 'uTexelOffset');
+    if (uDownTexLoc) gl.uniform1i(uDownTexLoc, 0);
+
+    gl.useProgram(this.bloomBlurProg);
+    const uBlurTexLoc = gl.getUniformLocation(this.bloomBlurProg, 'uTexA');
+    this.uBlurStepLoc = gl.getUniformLocation(this.bloomBlurProg, 'uBlurStep');
+    if (uBlurTexLoc) gl.uniform1i(uBlurTexLoc, 0);
+
+    gl.useProgram(this.compositeProg);
+    const uSceneTexLoc = gl.getUniformLocation(this.compositeProg, 'uSceneTex');
+    const uBloomTexLoc = gl.getUniformLocation(this.compositeProg, 'uBloomTex');
+    this.uCompGlowLoc = gl.getUniformLocation(this.compositeProg, 'uGlowIntensity');
+    this.uCompFilterLoc = gl.getUniformLocation(this.compositeProg, 'uFilterMode');
+    this.uCompCozyLoc = gl.getUniformLocation(this.compositeProg, 'uCozyFilter');
+    if (uSceneTexLoc) gl.uniform1i(uSceneTexLoc, 0);
+    if (uBloomTexLoc) gl.uniform1i(uBloomTexLoc, 1);
 
     this.skyVao = gl.createVertexArray()!;
     this.spriteVao = gl.createVertexArray()!;
     this.instanceBuffer = gl.createBuffer()!;
     this.atlasTexture = gl.createTexture()!;
+    this.indexAtlasTexture = gl.createTexture()!;
+    this.paletteLutTexture = gl.createTexture()!;
 
     gl.bindVertexArray(this.spriteVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE * 4, gl.DYNAMIC_DRAW);
 
     const stride = FLOATS_PER_INSTANCE * 4;
-    for (let loc = 0; loc < 4; loc++) {
+    for (let loc = 0; loc < 5; loc++) {
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, stride, loc * 16);
       gl.vertexAttribDivisor(loc, 1);
     }
     gl.bindVertexArray(null);
 
-    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    this.uploadAtlas(atlasWidth, atlasHeight, initialPixels);
+    const initNearestTex = (tex: WebGLTexture) => {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    };
+    initNearestTex(this.atlasTexture);
+    initNearestTex(this.indexAtlasTexture);
+    initNearestTex(this.paletteLutTexture);
+
+    this.uploadAtlas(
+      atlasWidth,
+      atlasHeight,
+      initialPixels,
+      initialIndexPixels ?? new Uint8Array(atlasWidth * atlasHeight).fill(255),
+      initialPaletteLut ?? new Uint8Array(16 * this.paletteRows * 4).fill(255),
+      this.paletteRows,
+    );
+
+    // Validate MRT FBO support eagerly so tryCreate can degrade cleanly if needed
+    this.ensureRenderTargets(Math.max(1, gl.canvas.width), Math.max(1, gl.canvas.height));
 
     if (onLost) {
       let triggered = false;
@@ -120,6 +225,9 @@ export class WebGl2Backend implements IGpuBackend {
     atlasHeight: number,
     initialPixels: Uint8Array,
     onLost?: () => void,
+    initialIndexPixels?: Uint8Array,
+    initialPaletteLut?: Uint8Array,
+    initialPaletteRows = DEFAULT_PALETTE_ROWS,
   ): WebGl2Backend | null {
     try {
       const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
@@ -127,21 +235,114 @@ export class WebGl2Backend implements IGpuBackend {
         appLogger.warn('gpu', 'webgl2.tryCreate', 'WebGL2 Context 不可用或已遺失，改用 Canvas 2D');
         return null;
       }
-      return new WebGl2Backend(canvas, gl, atlasWidth, atlasHeight, initialPixels, onLost);
+      return new WebGl2Backend(
+        canvas,
+        gl,
+        atlasWidth,
+        atlasHeight,
+        initialPixels,
+        onLost,
+        initialIndexPixels,
+        initialPaletteLut,
+        initialPaletteRows,
+      );
     } catch (err) {
       appLogger.warn('gpu', 'webgl2.tryCreate', 'WebGL2 初始化發生例外，退回 Canvas 2D', err);
       return null;
     }
   }
 
-  public uploadAtlas(width: number, height: number, pixels: Uint8Array): void {
+  private destroyRenderTargets(): void {
+    if (!this.targets) return;
+    const gl = this.gl;
+    gl.deleteFramebuffer(this.targets.mrtFbo);
+    gl.deleteFramebuffer(this.targets.bloomFboA);
+    gl.deleteFramebuffer(this.targets.bloomFboB);
+    gl.deleteTexture(this.targets.sceneTex);
+    gl.deleteTexture(this.targets.emissiveTex);
+    gl.deleteTexture(this.targets.bloomTexA);
+    gl.deleteTexture(this.targets.bloomTexB);
+    this.targets = null;
+  }
+
+  private ensureRenderTargets(w: number, h: number): GlRenderTargets {
+    if (this.targets && this.targets.w === w && this.targets.h === h) {
+      return this.targets;
+    }
+    this.destroyRenderTargets();
+    const gl = this.gl;
+    const bloomW = Math.max(1, Math.floor(w / 4));
+    const bloomH = Math.max(1, Math.floor(h / 4));
+
+    const sceneTex = createRenderTexture(gl, w, h, gl.NEAREST);
+    const emissiveTex = createRenderTexture(gl, w, h, gl.LINEAR);
+    const mrtFbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, mrtFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, emissiveTex, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error('WebGL2 MRT framebuffer incomplete');
+    }
+
+    const bloomTexA = createRenderTexture(gl, bloomW, bloomH, gl.LINEAR);
+    const bloomFboA = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFboA);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bloomTexA, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+
+    const bloomTexB = createRenderTexture(gl, bloomW, bloomH, gl.LINEAR);
+    const bloomFboB = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFboB);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bloomTexB, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    this.targets = {
+      w,
+      h,
+      bloomW,
+      bloomH,
+      mrtFbo,
+      sceneTex,
+      emissiveTex,
+      bloomFboA,
+      bloomFboB,
+      bloomTexA,
+      bloomTexB,
+    };
+    return this.targets;
+  }
+
+  public uploadAtlas(
+    width: number,
+    height: number,
+    pixels: Uint8Array,
+    indexPixels?: Uint8Array,
+    paletteLut?: Uint8Array,
+    paletteRows?: number,
+  ): void {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    if (indexPixels) {
+      gl.bindTexture(gl.TEXTURE_2D, this.indexAtlasTexture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, width, height, 0, gl.RED, gl.UNSIGNED_BYTE, indexPixels);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    }
+
+    if (paletteLut && paletteRows) {
+      this.paletteRows = Math.max(1, paletteRows);
+      gl.bindTexture(gl.TEXTURE_2D, this.paletteLutTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 16, this.paletteRows, 0, gl.RGBA, gl.UNSIGNED_BYTE, paletteLut);
+    }
   }
 
   public resize(_pixelWidth: number, _pixelHeight: number): void {
-    // Viewport updated cleanly each frame via canvas dimensions
+    // Framebuffers synchronize lazily with canvas dimensions in renderFrame
   }
 
   public renderFrame(
@@ -153,7 +354,14 @@ export class WebGl2Backend implements IGpuBackend {
     timeSec: number,
   ): number {
     const gl = this.gl;
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    const w = Math.max(1, gl.canvas.width);
+    const h = Math.max(1, gl.canvas.height);
+    const rt = this.ensureRenderTargets(w, h);
+
+    // Pass 1: MRT Scene Color + Emissive Mask
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rt.mrtFbo);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.viewport(0, 0, w, h);
 
     let drawCalls = 1;
     gl.disable(gl.BLEND);
@@ -167,8 +375,13 @@ export class WebGl2Backend implements IGpuBackend {
 
     gl.useProgram(this.spriteProg);
     gl.bindVertexArray(this.spriteVao);
+    gl.uniform1f(this.uPaletteRowsLoc, this.paletteRows);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.indexAtlasTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.paletteLutTexture);
 
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);
     const safeAdd = Math.min(additiveCount, MAX_INSTANCES_PER_PASS);
@@ -191,6 +404,46 @@ export class WebGl2Backend implements IGpuBackend {
       drawCalls++;
     }
 
+    // Pass 2: 1/4-res Emissive Downsample + Separable H/V Gaussian Blur
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(this.skyVao);
+    if (sky.glowIntensity > 0.01) {
+      gl.viewport(0, 0, rt.bloomW, rt.bloomH);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFboA);
+      gl.useProgram(this.bloomDownProg);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, rt.emissiveTex);
+      gl.uniform2f(this.uDownOffsetLoc, 1 / w, 1 / h);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFboB);
+      gl.useProgram(this.bloomBlurProg);
+      gl.bindTexture(gl.TEXTURE_2D, rt.bloomTexA);
+      gl.uniform2f(this.uBlurStepLoc, 1.25 / rt.bloomW, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, rt.bloomFboA);
+      gl.bindTexture(gl.TEXTURE_2D, rt.bloomTexB);
+      gl.uniform2f(this.uBlurStepLoc, 0, 1.25 / rt.bloomH);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      drawCalls += 3;
+    }
+
+    // Pass 3: Crisp Pixel Upscale + Bloom Composite + Clean/LCD/CRT Post
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(this.compositeProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, rt.sceneTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, rt.bloomTexA);
+    gl.uniform1f(this.uCompGlowLoc, sky.glowIntensity);
+    gl.uniform1f(this.uCompFilterLoc, sky.filterMode);
+    gl.uniform1f(this.uCompCozyLoc, sky.cozyFilter ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    drawCalls++;
+
     return drawCalls;
   }
 
@@ -199,12 +452,19 @@ export class WebGl2Backend implements IGpuBackend {
       this.canvasEl.removeEventListener('webglcontextlost', this.onLostListener);
       this.onLostListener = undefined;
     }
+    this.destroyRenderTargets();
     const gl = this.gl;
     gl.deleteBuffer(this.instanceBuffer);
     gl.deleteTexture(this.atlasTexture);
+    gl.deleteTexture(this.indexAtlasTexture);
+    gl.deleteTexture(this.paletteLutTexture);
     gl.deleteVertexArray(this.skyVao);
     gl.deleteVertexArray(this.spriteVao);
     gl.deleteProgram(this.skyProg);
     gl.deleteProgram(this.spriteProg);
+    gl.deleteProgram(this.bloomDownProg);
+    gl.deleteProgram(this.bloomBlurProg);
+    gl.deleteProgram(this.compositeProg);
   }
 }
+

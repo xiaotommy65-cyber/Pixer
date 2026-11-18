@@ -173,6 +173,8 @@ export function createApp(): AppHandle | null {
     });
   };
 
+  let gpuEngine: GpuEngine | null = null;
+
   consoleView = new ConsoleView(host, atlas, () => orientationCtrl.setLandscape(false), {
     onGamepadChange: (connected, label) => syncGamepadHeaderBadge(connected, label),
     onOpenEditor: (originEl) => enterEditorWithIris(originEl),
@@ -195,6 +197,9 @@ export function createApp(): AppHandle | null {
     onThemeGlowChange: (hex) => {
       ambientGlow.style.setProperty('--lobby-theme-glow', hex);
     },
+    onFilterChange: (mode) => {
+      gpuEngine?.setFilterModeCode(mode === 'crt' ? 2 : mode === 'lcd' ? 1 : 0);
+    },
   });
 
   consoleView.setTouchAutofire(autofireOn);
@@ -207,7 +212,9 @@ export function createApp(): AppHandle | null {
     drawerView?.updateGpuBadge(kind);
   };
 
-  const gpuEngine = new GpuEngine(consoleView.canvas, updateGpuBadge, atlas);
+  gpuEngine = new GpuEngine(consoleView.canvas, updateGpuBadge, atlas);
+  const initFilter = host.getScreenFilter();
+  gpuEngine.setFilterModeCode(initFilter === 'crt' ? 2 : initFilter === 'lcd' ? 1 : 0);
   const syncGovernorResolution = () => {
     const { width, height } = governor.getTargetPixelSize();
     gpuEngine.resize(width, height);

@@ -77,6 +77,9 @@ export interface EntityDesc {
   scaleY?: number;
   anchorY?: number; // 0 = top, 0.5 = center (default), 1 = feet bottom
   flash?: number; // 0..1 white hit-flash in GPU shader
+  skewX?: number; // Horizontal shear factor for sprint lean / impact tilt
+  emissive?: number; // 0..1.5 extra self-illumination for Pass 2 bloom
+  paletteRow?: number; // Override 16xN Palette LUT row (0..7)
   flipX?: boolean;
   rot?: number;
   tint?: string;
@@ -176,6 +179,8 @@ export interface RenderSceneSnapshot {
   skyTop: string;
   skyBottom: string;
   cozyFilter: boolean;
+  glowIntensity?: number;
+  paletteRow?: number;
   timeSec: number;
   elapsedSec: number;
   status: 'playing' | 'won' | 'lost';

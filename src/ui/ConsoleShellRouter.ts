@@ -37,6 +37,7 @@ export interface ConsoleShellRouterCallbacks {
   onEscapeExternal?: () => boolean;
   onSyncHudIdle: () => void;
   onToast: (msg: string) => void;
+  onFilterChange?: (mode: ScreenFilterMode) => void;
 }
 
 /**
@@ -61,6 +62,7 @@ export class ConsoleShellRouter {
     this.cb = callbacks;
     this.screenFilter = host.getScreenFilter();
     this.cb.screenFilterLayer.dataset.filter = this.screenFilter;
+    this.cb.onFilterChange?.(this.screenFilter);
 
     this.bootBlink = new BootBlinkOverlay(host);
     this.homeLobby = new HomeLobbyView(host, atlas, {
@@ -229,6 +231,7 @@ export class ConsoleShellRouter {
     const nextIdx = (FILTER_CYCLE.indexOf(this.screenFilter) + 1) % FILTER_CYCLE.length;
     this.screenFilter = FILTER_CYCLE[nextIdx];
     this.cb.screenFilterLayer.dataset.filter = this.screenFilter;
+    this.cb.onFilterChange?.(this.screenFilter);
     this.host.saveScreenFilter(this.screenFilter);
     this.cb.onToast(`🖥 螢幕濾鏡：${FILTER_NAMES[this.screenFilter]}`);
     return this.screenFilter;

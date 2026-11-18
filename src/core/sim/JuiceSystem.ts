@@ -29,12 +29,14 @@ export const FEEDBACK_RECIPES: Record<FeedbackPreset, FeedbackRecipe> = {
   relic_burst: { hitstop: 0.04, trauma: 0.34, kickMag: 3.0, flashColor: '#5ec2f7', flashAlpha: 0.2, sound: 'ignite', haptic: 'thump' },
 };
 
+export const MAX_JUICE_PARTICLES = 256;
+
 /**
  * Shared game-feel / juice orchestrator implementing:
  * - Multi-clock Hitstop (freezes sim step while visual decay, directional kick, & shake continue)
  * - Directional exponential recoil kick (kickX, kickY)
  * - Trauma^2 multi-frequency harmonic camera shake with 0.65x vertical comfort damping
- * - Semantic feedback recipe execution + shared particle burst & converge pools
+ * - Semantic feedback recipe execution + Zero-GC pre-allocated particle pool / ring buffer
  */
 export class JuiceSystem {
   public visualTime = 0;
@@ -50,7 +52,55 @@ export class JuiceSystem {
   private comboTimer = 0;
 
   public readonly particles: ParticleDesc[] = [];
+  private readonly freePool: ParticleDesc[] = [];
+  private ringCursor = 0;
   private readonly rng = new SeededRng(0xcafe1234);
+
+  constructor() {
+    for (let i = 0; i < MAX_JUICE_PARTICLES; i++) {
+      this.freePool.push({
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        life: 0,
+        maxLife: 1,
+        size: 2,
+        color: '#fffaf0',
+        rot: 0,
+        vRot: 0,
+        sprite: undefined,
+        additive: false,
+        gravity: undefined,
+        targetX: undefined,
+        targetY: undefined,
+        pull: undefined,
+        damping: undefined,
+        convergeSnapRadius: undefined,
+      });
+    }
+  }
+
+  private acquireParticle(): ParticleDesc {
+    const free = this.freePool.pop();
+    if (free) {
+      this.particles.push(free);
+      return free;
+    }
+    const idx = this.ringCursor % this.particles.length;
+    this.ringCursor = (idx + 1) % this.particles.length;
+    return this.particles[idx];
+  }
+
+  private releaseParticleAt(index: number): void {
+    const lastIdx = this.particles.length - 1;
+    const dead = this.particles[index];
+    if (index !== lastIdx) {
+      this.particles[index] = this.particles[lastIdx];
+    }
+    this.particles.pop();
+    this.freePool.push(dead);
+  }
 
   public triggerHitstop(durationSec: number): void {
     this.hitstopTimer = Math.max(this.hitstopTimer, Math.min(0.14, durationSec));
@@ -88,7 +138,10 @@ export class JuiceSystem {
     this.flashAlpha = 0;
     this.comboCount = 0;
     this.comboTimer = 0;
-    this.particles.length = 0;
+    this.ringCursor = 0;
+    while (this.particles.length > 0) {
+      this.freePool.push(this.particles.pop()!);
+    }
   }
 
   public applyPreset(
@@ -157,12 +210,12 @@ export class JuiceSystem {
       if (this.comboTimer <= 0) this.comboCount = 0;
     }
 
-    // Update visual particles smoothly even during hitstop freeze
+    // Update visual particles smoothly even during hitstop freeze (O(1) swap-pop, zero GC)
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const p = this.particles[i];
       p.life += dt;
       if (p.life >= p.maxLife) {
-        this.particles.splice(i, 1);
+        this.releaseParticleAt(i);
         continue;
       }
       if (p.targetX !== undefined && p.targetY !== undefined) {
@@ -170,7 +223,7 @@ export class JuiceSystem {
         const dy = p.targetY - p.y;
         const dist = Math.hypot(dx, dy);
         if (dist <= (p.convergeSnapRadius ?? 2.8)) {
-          this.particles.splice(i, 1);
+          this.releaseParticleAt(i);
           continue;
         }
         const pull = p.pull ?? 380;
@@ -194,12 +247,6 @@ export class JuiceSystem {
       return 0;
     }
     return dt;
-  }
-
-  private trimPool(limit = 180): void {
-    if (this.particles.length > limit) {
-      this.particles.splice(0, this.particles.length - limit);
-    }
   }
 
   public spawnBurst(
@@ -229,23 +276,26 @@ export class JuiceSystem {
       const ang = (Math.PI * 2 * i) / actual + this.rng.range(-0.35, 0.35);
       const spd = this.rng.range(spdMin, spdMax);
       const useSprite = opts?.sprite ?? (i % 3 === 0 ? 'sparkle' : undefined);
-      this.particles.push({
-        x,
-        y,
-        vx: Math.cos(ang) * spd,
-        vy: Math.sin(ang) * spd + liftY,
-        life: 0,
-        maxLife: this.rng.range(0.32, 0.68),
-        size: useSprite ? this.rng.range(opts?.sizeMin ?? 5, opts?.sizeMax ?? 8) : this.rng.range(2, 4),
-        color: colors[i % colors.length],
-        rot: this.rng.range(0, Math.PI * 2),
-        vRot: (i % 2 === 0 ? 1 : -1) * this.rng.range(3, 7),
-        sprite: useSprite,
-        additive: opts?.additive ?? Boolean(useSprite),
-        gravity: grav,
-      });
+      const p = this.acquireParticle();
+      p.x = x;
+      p.y = y;
+      p.vx = Math.cos(ang) * spd;
+      p.vy = Math.sin(ang) * spd + liftY;
+      p.life = 0;
+      p.maxLife = this.rng.range(0.32, 0.68);
+      p.size = useSprite ? this.rng.range(opts?.sizeMin ?? 5, opts?.sizeMax ?? 8) : this.rng.range(2, 4);
+      p.color = colors[i % colors.length];
+      p.rot = this.rng.range(0, Math.PI * 2);
+      p.vRot = (i % 2 === 0 ? 1 : -1) * this.rng.range(3, 7);
+      p.sprite = useSprite;
+      p.additive = opts?.additive ?? Boolean(useSprite);
+      p.gravity = grav;
+      p.targetX = undefined;
+      p.targetY = undefined;
+      p.pull = undefined;
+      p.damping = undefined;
+      p.convergeSnapRadius = undefined;
     }
-    this.trimPool();
   }
 
   /**
@@ -283,27 +333,26 @@ export class JuiceSystem {
       const py = targetY + Math.sin(ang) * r;
       const tangentDir = i % 2 === 0 ? 1 : -1;
       const useSprite = opts?.sprite;
-      this.particles.push({
-        x: px,
-        y: py,
-        vx: -Math.cos(ang) * 28 - Math.sin(ang) * swirl * tangentDir,
-        vy: -Math.sin(ang) * 28 + Math.cos(ang) * swirl * tangentDir,
-        life: 0,
-        maxLife,
-        size: useSprite ? this.rng.range(opts?.sizeMin ?? 4, opts?.sizeMax ?? 7) : this.rng.range(1.6, 3.0),
-        color: colors[i % colors.length],
-        rot: ang,
-        vRot: tangentDir * 5,
-        sprite: useSprite,
-        additive: true,
-        targetX,
-        targetY,
-        pull,
-        damping: 3.2,
-        convergeSnapRadius: opts?.snapRadius ?? 3,
-      });
+      const p = this.acquireParticle();
+      p.x = px;
+      p.y = py;
+      p.vx = -Math.cos(ang) * 28 - Math.sin(ang) * swirl * tangentDir;
+      p.vy = -Math.sin(ang) * 28 + Math.cos(ang) * swirl * tangentDir;
+      p.life = 0;
+      p.maxLife = maxLife;
+      p.size = useSprite ? this.rng.range(opts?.sizeMin ?? 4, opts?.sizeMax ?? 7) : this.rng.range(1.6, 3.0);
+      p.color = colors[i % colors.length];
+      p.rot = ang;
+      p.vRot = tangentDir * 5;
+      p.sprite = useSprite;
+      p.additive = true;
+      p.gravity = undefined;
+      p.targetX = targetX;
+      p.targetY = targetY;
+      p.pull = pull;
+      p.damping = 3.2;
+      p.convergeSnapRadius = opts?.snapRadius ?? 3;
     }
-    this.trimPool();
   }
 }
 

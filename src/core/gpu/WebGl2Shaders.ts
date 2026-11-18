@@ -19,7 +19,8 @@ uniform vec3 uTopColor;
 uniform vec3 uBottomColor;
 uniform float uCozyFilter;
 uniform float uTimeSec;
-out vec4 fragColor;
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
 void main() {
   float y = clamp(vUv.y, 0.0, 1.0);
   float horizonGlow = pow(y, 2.4) * 0.045 * (0.85 + 0.15 * sin(uTimeSec * 0.7 + vUv.x * 3.14159));
@@ -28,6 +29,7 @@ void main() {
     col *= 0.985 + 0.015 * sin(vUv.y * 180.0 * 6.28318);
   }
   fragColor = vec4(col, 1.0);
+  fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
 }`;
 
 export const SPRITE_VS = `#version 300 es
@@ -35,6 +37,7 @@ layout(location = 0) in vec4 aRectPosSize;
 layout(location = 1) in vec4 aUvBounds;
 layout(location = 2) in vec4 aTint;
 layout(location = 3) in vec4 aExtra;
+layout(location = 4) in vec4 aDeform; // x: pivotX, y: pivotY, z: skewX, w: paletteRow
 
 out vec2 vTexUv;
 out vec2 vLocalUv;
@@ -43,22 +46,22 @@ out float vMode;
 out float vFlash;
 out float vParam;
 out vec4 vUvBounds;
+out float vPaletteRow;
 
 void main() {
-  vec2 quad[6] = vec2[6](
-    vec2(-0.5, -0.5), vec2(0.5, -0.5), vec2(-0.5, 0.5),
-    vec2(-0.5, 0.5), vec2(0.5, -0.5), vec2(0.5, 0.5)
-  );
   vec2 uvUnit[6] = vec2[6](
     vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
     vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0)
   );
-  vec2 q = quad[gl_VertexID];
   vec2 u01 = uvUnit[gl_VertexID];
+  vec2 pivot = aDeform.xy;
+  float skewX = aDeform.z;
+  vec2 local = (u01 - pivot) * aRectPosSize.zw;
+  vec2 sheared = vec2(local.x - local.y * skewX, local.y);
+
   float c = cos(aExtra.x);
   float s = sin(aExtra.x);
-  vec2 scaled = q * aRectPosSize.zw;
-  vec2 rotated = vec2(scaled.x * c - scaled.y * s, scaled.x * s + scaled.y * c);
+  vec2 rotated = vec2(sheared.x * c - sheared.y * s, sheared.x * s + sheared.y * c);
   vec2 world = aRectPosSize.xy + rotated;
 
   float ndcX = (world.x / ${GAME_W}.0) * 2.0 - 1.0;
@@ -72,6 +75,7 @@ void main() {
   vFlash = aExtra.z;
   vParam = aExtra.w;
   vUvBounds = aUvBounds;
+  vPaletteRow = aDeform.w;
 }`;
 
 export const SPRITE_FS = `#version 300 es
@@ -83,8 +87,15 @@ in float vMode;
 in float vFlash;
 in float vParam;
 in vec4 vUvBounds;
+in float vPaletteRow;
+
 uniform sampler2D uAtlas;
-out vec4 fragColor;
+uniform sampler2D uIndexAtlas;
+uniform sampler2D uPaletteLut;
+uniform float uPaletteRows;
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
 
 float hash21(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -104,7 +115,9 @@ void main() {
       float d = length((vLocalUv - vec2(0.5)) * vec2(1.5, 1.9));
       fade = smoothstep(0.45, 1.25, d);
     }
-    fragColor = vec4(vTint.rgb, vTint.a * fade);
+    float a = vTint.a * fade;
+    fragColor = vec4(vTint.rgb, a);
+    fragEmissive = vec4(0.0, 0.0, 0.0, a);
     return;
   }
 
@@ -173,7 +186,9 @@ void main() {
     vec3 baseCol = vTint.rgb * (1.0 + cellTint + grain) * mortarMask * ndl * aoBottom;
     baseCol += vec3(topRim + runeAccent * 0.6, topRim + runeAccent * 0.45, topRim * 1.1 + runeAccent);
     float sideSoft = smoothstep(0.0, 0.04, vLocalUv.x) * smoothstep(1.0, 0.96, vLocalUv.x);
-    fragColor = vec4(clamp(baseCol, vec3(0.0), vec3(1.0)), vTint.a * mix(0.75, 1.0, sideSoft));
+    float finalAlpha = vTint.a * mix(0.75, 1.0, sideSoft);
+    fragColor = vec4(clamp(baseCol, vec3(0.0), vec3(1.0)), finalAlpha);
+    fragEmissive = vec4(0.0, 0.0, 0.0, finalAlpha);
     return;
   }
 
@@ -188,6 +203,7 @@ void main() {
     float umbra = smoothstep(0.68, 0.0, d) * 0.36;
     float shadowAlpha = vTint.a * clamp(outer * 0.78 + umbra, 0.0, 1.0);
     fragColor = vec4(vTint.rgb, shadowAlpha);
+    fragEmissive = vec4(0.0, 0.0, 0.0, shadowAlpha);
     return;
   }
 
@@ -204,8 +220,10 @@ void main() {
       float cornerMask = smoothstep(0.0, 0.06, edgeX) * smoothstep(0.0, 0.14, edgeY);
       alpha *= mix(0.65, 1.0, cornerMask);
     }
-    vec3 solidRgb = mix(col, vec3(1.0), clamp(vFlash, 0.0, 1.0));
+    float flashAmt = clamp(vFlash, 0.0, 1.0);
+    vec3 solidRgb = mix(col, vec3(1.0), flashAmt);
     fragColor = vec4(solidRgb, alpha);
+    fragEmissive = vec4(solidRgb * flashAmt * 0.45, alpha);
     return;
   }
 
@@ -221,19 +239,138 @@ void main() {
       float arms = exp(-abs(p.x) * (4.5 * sharp)) * exp(-abs(p.y) * 1.9)
                  + exp(-abs(p.y) * (4.5 * sharp)) * exp(-abs(p.x) * 1.9);
       float glint = clamp(core + arms * 0.8, 0.0, 1.0) * smoothstep(1.0, 0.25, d);
-      fragColor = vec4(vTint.rgb, vTint.a * glint);
+      float a = vTint.a * glint;
+      fragColor = vec4(vTint.rgb, a);
+      fragEmissive = vec4(vTint.rgb * 0.85, a);
       return;
     }
     float f = clamp(1.0 - d, 0.0, 1.0);
     float power = vParam > 0.1 ? vParam : 2.0;
     float glow = f > 0.001 ? pow(f, power) : 0.0;
-    fragColor = vec4(vTint.rgb, vTint.a * glow);
+    float a = vTint.a * glow;
+    fragColor = vec4(vTint.rgb, a);
+    fragEmissive = vec4(vTint.rgb * 0.68, a);
     return;
   }
 
-  vec4 sampled = texture(uAtlas, vTexUv);
-  if (sampled.a < 0.05) discard;
-  vec3 baseRgb = sampled.rgb * vTint.rgb;
-  vec3 finalRgb = mix(baseRgb, vec3(1.0), clamp(vFlash, 0.0, 1.0));
-  fragColor = vec4(finalRgb, sampled.a * vTint.a);
+  // Mode 0: Crisp Palette-Indexed LUT sprite OR 32-bit RGBA passthrough (idx == 255)
+  float idxVal = floor(texture(uIndexAtlas, vTexUv).r * 255.0 + 0.5);
+  if (idxVal < 0.5) discard;
+
+  vec3 texRgb = vec3(1.0);
+  float texAlpha = 1.0;
+  float lutEmissive = 0.0;
+
+  if (idxVal <= 15.5 && vPaletteRow >= -0.5) {
+    float rows = max(1.0, uPaletteRows);
+    float rowIdx = clamp(floor(vPaletteRow + 0.5), 0.0, rows - 1.0);
+    vec2 lutUv = vec2((idxVal + 0.5) / 16.0, (rowIdx + 0.5) / rows);
+    vec4 lutSample = texture(uPaletteLut, lutUv);
+    texRgb = lutSample.rgb;
+    lutEmissive = lutSample.a;
+  } else {
+    vec4 sampled = texture(uAtlas, vTexUv);
+    if (sampled.a < 0.05) discard;
+    texRgb = sampled.rgb;
+    texAlpha = sampled.a;
+  }
+
+  float flashAmt = clamp(vFlash, 0.0, 1.0);
+  vec3 baseRgb = texRgb * vTint.rgb;
+  vec3 finalRgb = mix(baseRgb, vec3(1.0), flashAmt);
+  float finalAlpha = texAlpha * vTint.a;
+  float emissiveAmt = max(lutEmissive, clamp(vParam, 0.0, 1.5)) + flashAmt * 0.5;
+
+  fragColor = vec4(finalRgb, finalAlpha);
+  fragEmissive = vec4(finalRgb * emissiveAmt, finalAlpha);
+}`;
+
+export const POST_VS = `#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 corners[6] = vec2[6](
+    vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0),
+    vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0)
+  );
+  vec2 p = corners[gl_VertexID];
+  vUv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+export const BLOOM_DOWN_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTexA;
+uniform vec2 uTexelOffset;
+out vec4 fragColor;
+void main() {
+  vec3 c0 = texture(uTexA, vUv + vec2(-uTexelOffset.x, -uTexelOffset.y)).rgb;
+  vec3 c1 = texture(uTexA, vUv + vec2(uTexelOffset.x, -uTexelOffset.y)).rgb;
+  vec3 c2 = texture(uTexA, vUv + vec2(-uTexelOffset.x, uTexelOffset.y)).rgb;
+  vec3 c3 = texture(uTexA, vUv + vec2(uTexelOffset.x, uTexelOffset.y)).rgb;
+  vec3 avg = (c0 + c1 + c2 + c3) * 0.25;
+  fragColor = vec4(max(avg - vec3(0.08), vec3(0.0)), 1.0);
+}`;
+
+export const BLOOM_BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTexA;
+uniform vec2 uBlurStep;
+out vec4 fragColor;
+void main() {
+  float w0 = 0.38774;
+  float w1 = 0.24477;
+  float w2 = 0.06136;
+  vec3 acc = texture(uTexA, vUv).rgb * w0;
+  acc += texture(uTexA, vUv - uBlurStep).rgb * w1;
+  acc += texture(uTexA, vUv + uBlurStep).rgb * w1;
+  acc += texture(uTexA, vUv - uBlurStep * 2.0).rgb * w2;
+  acc += texture(uTexA, vUv + uBlurStep * 2.0).rgb * w2;
+  fragColor = vec4(acc, 1.0);
+}`;
+
+export const COMPOSITE_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uSceneTex;
+uniform sampler2D uBloomTex;
+uniform float uGlowIntensity;
+uniform float uFilterMode;
+uniform float uCozyFilter;
+out vec4 fragColor;
+void main() {
+  vec3 sceneCol = texture(uSceneTex, vUv).rgb;
+  vec3 col = sceneCol;
+
+  if (uGlowIntensity > 0.01) {
+    vec3 bloom = texture(uBloomTex, vUv).rgb;
+    vec3 bloomTerm = bloom * uGlowIntensity * 0.72;
+    col = sceneCol + bloomTerm * (vec3(1.0) - sceneCol * 0.28);
+  }
+
+  vec2 centered = vUv - vec2(0.5);
+  float r2 = dot(centered, centered);
+
+  if (uFilterMode > 1.5) {
+    float scan = 0.94 + 0.06 * sin(vUv.y * ${GAME_H}.0 * 6.28318);
+    float maskPhase = vUv.x * ${GAME_W}.0 * 3.14159;
+    vec3 triad = vec3(
+      0.98 + 0.025 * sin(maskPhase),
+      0.98 + 0.025 * sin(maskPhase + 2.094),
+      0.98 + 0.025 * sin(maskPhase + 4.188)
+    );
+    float vig = clamp(1.0 - r2 * 0.24, 0.76, 1.0);
+    col = col * scan * triad * vig;
+  } else if (uFilterMode > 0.5) {
+    float gx = 0.97 + 0.03 * cos(vUv.x * ${GAME_W}.0 * 6.28318);
+    float gy = 0.97 + 0.03 * cos(vUv.y * ${GAME_H}.0 * 6.28318);
+    float vig = clamp(1.0 - r2 * 0.12, 0.88, 1.0);
+    col = col * (gx * gy * vig) * vec3(1.01, 1.005, 0.985);
+  } else if (uCozyFilter > 0.5) {
+    float vig = clamp(1.0 - r2 * 0.06, 0.94, 1.0);
+    col *= vig;
+  }
+
+  fragColor = vec4(clamp(col, vec3(0.0), vec3(1.0)), 1.0);
 }`;

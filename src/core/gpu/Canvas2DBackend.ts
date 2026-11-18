@@ -87,7 +87,14 @@ export class Canvas2DBackend implements IGpuBackend {
     }
   }
 
-  public uploadAtlas(width: number, height: number, pixels: Uint8Array): void {
+  public uploadAtlas(
+    width: number,
+    height: number,
+    pixels: Uint8Array,
+    _indexPixels?: Uint8Array,
+    _paletteLut?: Uint8Array,
+    _paletteRows?: number,
+  ): void {
     this.atlasWidth = width;
     this.atlasHeight = height;
     if (this.atlasCanvas.width !== width || this.atlasCanvas.height !== height) {
@@ -166,12 +173,19 @@ export class Canvas2DBackend implements IGpuBackend {
       const mode = items[b + 13];
       const flash = items[b + 14];
       const param = items[b + 15];
+      const pivotX = items[b + 16];
+      const pivotY = items[b + 17];
+      const skewX = items[b + 18];
 
       if (a <= 0.005 || w <= 0 || h <= 0) continue;
 
       ctx.save();
       ctx.translate(cx, cy);
       if (rot !== 0) ctx.rotate(rot);
+      if (skewX !== 0) ctx.transform(1, 0, -skewX, 1, 0, 0);
+      if (pivotX !== 0.5 || pivotY !== 0.5) {
+        ctx.translate((0.5 - pivotX) * w, (0.5 - pivotY) * h);
+      }
       ctx.globalAlpha = Math.max(0, Math.min(1, a));
 
       if (mode > 4.5) {

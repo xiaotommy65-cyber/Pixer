@@ -79,6 +79,14 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
 
     const dropOffset = findFloorDropY(world, e.x + e.w * 0.5, e.y + e.h);
     const shouldShadow = dropOffset !== null && !e.tags.has('portal');
+    const isGlowing =
+      e.archetype === 'star' ||
+      e.archetype === 'torch' ||
+      e.archetype === 'key' ||
+      e.archetype === 'coin' ||
+      e.tags.has('relic') ||
+      e.tags.has('portal') ||
+      e.tags.has('burning');
 
     outEntities.push({
       id: e.id,
@@ -91,6 +99,7 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
       scaleY: e.scaleY,
       anchorY: 1,
       flash: Math.min(1, e.flashTimer),
+      emissive: isGlowing ? (e.archetype === 'torch' || e.tags.has('portal') ? 0.95 : 0.72) : undefined,
       flipX: e.flipX,
       rot: e.tags.has('portal') ? t * 2.2 : undefined,
       tint: e.tags.has('burning') ? '#ffd447' : undefined,
@@ -124,6 +133,7 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
       rot: t * 12,
       tint: '#ffd447',
       additive: true,
+      emissive: 1.0,
     });
     if (glow > 0.05) {
       lights.push({ x: sp.x, y: sp.y, radius: 22, color: '#ffd447', intensity: 0.5 * glow });
@@ -136,6 +146,7 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
   if (!blink || h.flash > 0) {
     const moving = Math.abs(h.vx) > 8 || !h.onGround;
     const heroSprite: SpriteId = moving && Math.floor(h.walkAnim) % 2 === 1 ? 'hero_b' : 'hero_a';
+    const heroSkew = Math.abs(h.vx) > 10 ? Math.max(-0.24, Math.min(0.24, h.vx / 460)) : 0;
     outEntities.push({
       id: 'hero',
       sprite: heroSprite,
@@ -146,6 +157,7 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
       scaleX: h.squash.scaleX,
       scaleY: h.squash.scaleY,
       anchorY: 1,
+      skewX: heroSkew,
       flash: Math.min(1, h.flash),
       flipX: h.facingLeft,
       castShadow: heroDrop !== null,
@@ -194,6 +206,7 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams): R
     skyTop: world.skyTop,
     skyBottom: world.skyBottom,
     cozyFilter: params.cozyFilter > 0.5,
+    glowIntensity: params.glowIntensity,
     timeSec: t,
     elapsedSec: world.elapsedSec,
     status: world.status,

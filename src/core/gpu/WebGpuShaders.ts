@@ -5,15 +5,23 @@ struct SkyUniforms {
   topColor: vec4f,
   bottomColor: vec4f,
   params: vec4f, // x: timeSec, y: cozyFilter (1 or 0), z: viewW, w: viewH
+  extra: vec4f,  // x: paletteRows
 };
 
 @group(0) @binding(0) var<uniform> uSky: SkyUniforms;
 @group(0) @binding(1) var uAtlas: texture_2d<f32>;
 @group(0) @binding(2) var uSamp: sampler;
+@group(0) @binding(3) var uIndexAtlas: texture_2d<f32>;
+@group(0) @binding(4) var uPaletteLut: texture_2d<f32>;
 
 struct SkyOut {
   @builtin(position) pos: vec4f,
   @location(0) uv: vec2f,
+};
+
+struct SceneOut {
+  @location(0) color: vec4f,
+  @location(1) emissive: vec4f,
 };
 
 @vertex
@@ -30,7 +38,7 @@ fn vsSky(@builtin(vertex_index) vid: u32) -> SkyOut {
 }
 
 @fragment
-fn fsSky(in: SkyOut) -> @location(0) vec4f {
+fn fsSky(in: SkyOut) -> SceneOut {
   let y = clamp(in.uv.y, 0.0, 1.0);
   let horizonGlow = pow(y, 2.4) * 0.045 * (0.85 + 0.15 * sin(uSky.params.x * 0.7 + in.uv.x * 3.14159));
   var col = mix(uSky.topColor.rgb, uSky.bottomColor.rgb, y) + uSky.bottomColor.rgb * horizonGlow;
@@ -38,7 +46,10 @@ fn fsSky(in: SkyOut) -> @location(0) vec4f {
     let gridY = 0.985 + 0.015 * sin(in.uv.y * 180.0 * 6.28318);
     col *= gridY;
   }
-  return vec4f(col, 1.0);
+  var out: SceneOut;
+  out.color = vec4f(col, 1.0);
+  out.emissive = vec4f(0.0, 0.0, 0.0, 1.0);
+  return out;
 }
 
 struct InstanceIn {
@@ -46,6 +57,7 @@ struct InstanceIn {
   @location(1) uvBounds: vec4f,    // u0, v0, u1, v1
   @location(2) tint: vec4f,        // r, g, b, a
   @location(3) extra: vec4f,       // x: rot, y: mode (0..5), z: flash, w: param
+  @location(4) deform: vec4f,      // x: pivotX, y: pivotY, z: skewX, w: paletteRow
 };
 
 struct SpriteOut {
@@ -57,6 +69,7 @@ struct SpriteOut {
   @location(4) flash: f32,
   @location(5) param: f32,
   @location(6) uvBounds: vec4f,
+  @location(7) paletteRow: f32,
 };
 
 fn hash21(p: vec2f) -> f32 {
@@ -65,24 +78,22 @@ fn hash21(p: vec2f) -> f32 {
 
 @vertex
 fn vsSprite(@builtin(vertex_index) vid: u32, inst: InstanceIn) -> SpriteOut {
-  var quad = array<vec2f, 6>(
-    vec2f(-0.5, -0.5), vec2f(0.5, -0.5), vec2f(-0.5, 0.5),
-    vec2f(-0.5, 0.5), vec2f(0.5, -0.5), vec2f(0.5, 0.5)
-  );
   var uvUnit = array<vec2f, 6>(
     vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
     vec2f(0.0, 1.0), vec2f(1.0, 0.0), vec2f(1.0, 1.0)
   );
 
-  let q = quad[vid];
   let u01 = uvUnit[vid];
+  let pivot = inst.deform.xy;
+  let skewX = inst.deform.z;
+  let local = (u01 - pivot) * inst.rectPosSize.zw;
+  let sheared = vec2f(local.x - local.y * skewX, local.y);
+
   let c = cos(inst.extra.x);
   let s = sin(inst.extra.x);
-
-  let scaled = q * inst.rectPosSize.zw;
   let rotated = vec2f(
-    scaled.x * c - scaled.y * s,
-    scaled.x * s + scaled.y * c
+    sheared.x * c - sheared.y * s,
+    sheared.x * s + sheared.y * c
   );
   let world = inst.rectPosSize.xy + rotated;
 
@@ -98,11 +109,14 @@ fn vsSprite(@builtin(vertex_index) vid: u32, inst: InstanceIn) -> SpriteOut {
   out.flash = inst.extra.z;
   out.param = inst.extra.w;
   out.uvBounds = inst.uvBounds;
+  out.paletteRow = inst.deform.w;
   return out;
 }
 
 @fragment
-fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
+fn fsSprite(in: SpriteOut) -> SceneOut {
+  var out: SceneOut;
+
   // Mode 5: Smooth atmospheric gradient & tilt-shift vignette
   if (in.mode > 4.5) {
     let dir = in.uvBounds.x;
@@ -116,7 +130,10 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
       let d = length((in.localUv - vec2f(0.5)) * vec2f(1.5, 1.9));
       fade = smoothstep(0.45, 1.25, d);
     }
-    return vec4f(in.tint.rgb, in.tint.a * fade);
+    let a = in.tint.a * fade;
+    out.color = vec4f(in.tint.rgb, a);
+    out.emissive = vec4f(0.0, 0.0, 0.0, a);
+    return out;
   }
 
   // Mode 4: Procedural normal-lit beveled masonry / earth / timber / astral facade
@@ -134,7 +151,6 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
     var runeAccent = 0.0;
 
     if (mat > 0.5 && mat < 1.5) {
-      // Material 1: Layered earth / cliff strata with organic pebbles
       let wave = sin(coord.x * 4.4 + seed) * 0.14;
       let strata = fract(coord.y * 2.2 + wave);
       ny = (strata - 0.5) * 0.75;
@@ -142,7 +158,6 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
       mortarMask = smoothstep(0.0, 0.14, strata) * smoothstep(1.0, 0.86, strata);
       cellTint = (hash21(floor(coord * 3.5) + seed) - 0.5) * 0.14;
     } else if (mat >= 1.5 && mat < 2.5) {
-      // Material 2: Riveted timber / metallic platform underside trim
       let panel = fract(coord.x * 1.5);
       let rivetDist = length(vec2f(panel - 0.5, in.localUv.y - 0.52) * vec2f(2.4, 2.0));
       nx = (0.5 - panel) * 0.35;
@@ -152,7 +167,6 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
         runeAccent = (1.0 - rivetDist / 0.28) * 0.24;
       }
     } else {
-      // Material 0 (stone masonry) or 3 (astral rune pillar)
       let row = floor(coord.y * 2.0);
       let stagger = fract(row * 0.5) * 0.5;
       let brickUv = vec2f(fract(coord.x * 1.45 + stagger), fract(coord.y * 2.0));
@@ -172,7 +186,6 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
       }
     }
 
-    // Outer quad chamfer & top cap rim highlight + bottom ground AO
     if (in.localUv.y < 0.16) { ny -= 0.7; }
     if (in.localUv.y > 0.88) { ny += 0.65; }
     if (in.localUv.x < 0.06) { nx -= 0.45; }
@@ -188,7 +201,10 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
     var baseCol = in.tint.rgb * (1.0 + cellTint + grain) * mortarMask * ndl * aoBottom;
     baseCol += vec3f(topRim + runeAccent * 0.6, topRim + runeAccent * 0.45, topRim * 1.1 + runeAccent);
     let sideSoft = smoothstep(0.0, 0.04, in.localUv.x) * smoothstep(1.0, 0.96, in.localUv.x);
-    return vec4f(clamp(baseCol, vec3f(0.0), vec3f(1.0)), in.tint.a * mix(0.75, 1.0, sideSoft));
+    let finalAlpha = in.tint.a * mix(0.75, 1.0, sideSoft);
+    out.color = vec4f(clamp(baseCol, vec3f(0.0), vec3f(1.0)), finalAlpha);
+    out.emissive = vec4f(0.0, 0.0, 0.0, finalAlpha);
+    return out;
   }
 
   // Mode 3: Smooth analytical SDF elliptical soft contact shadow
@@ -203,7 +219,9 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
     let outer = smoothstep(1.0, 1.0 - soft, d);
     let umbra = smoothstep(0.68, 0.0, d) * 0.36;
     let shadowAlpha = in.tint.a * clamp(outer * 0.78 + umbra, 0.0, 1.0);
-    return vec4f(in.tint.rgb, shadowAlpha);
+    out.color = vec4f(in.tint.rgb, shadowAlpha);
+    out.emissive = vec4f(0.0, 0.0, 0.0, shadowAlpha);
+    return out;
   }
 
   // Mode 2: Solid crisp quad or sculpted beveled UI frame (param > 0.01)
@@ -219,8 +237,11 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
       let cornerMask = smoothstep(0.0, 0.06, edgeX) * smoothstep(0.0, 0.14, edgeY);
       alpha *= mix(0.65, 1.0, cornerMask);
     }
-    let solidRgb = mix(col, vec3f(1.0), clamp(in.flash, 0.0, 1.0));
-    return vec4f(solidRgb, alpha);
+    let flashAmt = clamp(in.flash, 0.0, 1.0);
+    let solidRgb = mix(col, vec3f(1.0), flashAmt);
+    out.color = vec4f(solidRgb, alpha);
+    out.emissive = vec4f(solidRgb * flashAmt * 0.45, alpha);
+    return out;
   }
 
   // Mode 1: Smooth radial GPU light orb OR 4-point cross star glint (param >= 9.5)
@@ -237,21 +258,153 @@ fn fsSprite(in: SpriteOut) -> @location(0) vec4f {
       let arms = exp(-abs(p.x) * (4.5 * sharp)) * exp(-abs(p.y) * 1.9)
                + exp(-abs(p.y) * (4.5 * sharp)) * exp(-abs(p.x) * 1.9);
       let glint = clamp(core + arms * 0.8, 0.0, 1.0) * smoothstep(1.0, 0.25, d);
-      return vec4f(in.tint.rgb, in.tint.a * glint);
+      let a = in.tint.a * glint;
+      out.color = vec4f(in.tint.rgb, a);
+      out.emissive = vec4f(in.tint.rgb * 0.85, a);
+      return out;
     }
     let falloff = clamp(1.0 - d, 0.0, 1.0);
     let power = select(2.0, in.param, in.param > 0.1);
     let glow = select(0.0, pow(max(falloff, 0.0001), power), falloff > 0.001);
-    return vec4f(in.tint.rgb, in.tint.a * glow);
+    let a = in.tint.a * glow;
+    out.color = vec4f(in.tint.rgb, a);
+    out.emissive = vec4f(in.tint.rgb * 0.68, a);
+    return out;
   }
 
-  // Mode 0: Crisp nearest-sampled Texture Atlas sprite (no mipmaps -> safe in non-uniform branch)
-  let sampled = textureSampleLevel(uAtlas, uSamp, in.texUv, 0.0);
-  if (sampled.a < 0.05) {
+  // Mode 0: Crisp Palette-Indexed LUT sprite OR 32-bit RGBA passthrough (idx == 255)
+  let idxVal = round(textureSampleLevel(uIndexAtlas, uSamp, in.texUv, 0.0).r * 255.0);
+  if (idxVal < 0.5) {
     discard;
   }
-  let baseRgb = sampled.rgb * in.tint.rgb;
-  let finalRgb = mix(baseRgb, vec3f(1.0), clamp(in.flash, 0.0, 1.0));
-  return vec4f(finalRgb, sampled.a * in.tint.a);
+
+  var texRgb = vec3f(1.0);
+  var texAlpha = 1.0;
+  var lutEmissive = 0.0;
+
+  if (idxVal <= 15.5 && in.paletteRow >= -0.5) {
+    let rows = max(1.0, uSky.extra.x);
+    let rowIdx = clamp(floor(in.paletteRow + 0.5), 0.0, rows - 1.0);
+    let lutUv = vec2f((idxVal + 0.5) / 16.0, (rowIdx + 0.5) / rows);
+    let lutSample = textureSampleLevel(uPaletteLut, uSamp, lutUv, 0.0);
+    texRgb = lutSample.rgb;
+    lutEmissive = lutSample.a;
+  } else {
+    let sampled = textureSampleLevel(uAtlas, uSamp, in.texUv, 0.0);
+    if (sampled.a < 0.05) {
+      discard;
+    }
+    texRgb = sampled.rgb;
+    texAlpha = sampled.a;
+  }
+
+  let flashAmt = clamp(in.flash, 0.0, 1.0);
+  let baseRgb = texRgb * in.tint.rgb;
+  let finalRgb = mix(baseRgb, vec3f(1.0), flashAmt);
+  let finalAlpha = texAlpha * in.tint.a;
+  let emissiveAmt = max(lutEmissive, clamp(in.param, 0.0, 1.5)) + flashAmt * 0.5;
+
+  out.color = vec4f(finalRgb, finalAlpha);
+  out.emissive = vec4f(finalRgb * emissiveAmt, finalAlpha);
+  return out;
 }
 `;
+
+export const WGSL_POST_CODE = /* wgsl */ `
+struct PostUniforms {
+  params0: vec4f, // x: texelX, y: texelY, z: glowIntensity, w: filterMode (0=clean, 1=lcd, 2=crt)
+  params1: vec4f, // x: timeSec, y: cozyFilter, z: viewW, w: viewH
+};
+
+@group(0) @binding(0) var<uniform> uPost: PostUniforms;
+@group(0) @binding(1) var uTexA: texture_2d<f32>;
+@group(0) @binding(2) var uTexB: texture_2d<f32>;
+@group(0) @binding(3) var uLinearSamp: sampler;
+@group(0) @binding(4) var uNearestSamp: sampler;
+
+struct PostOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
+@vertex
+fn vsPost(@builtin(vertex_index) vid: u32) -> PostOut {
+  var corners = array<vec2f, 6>(
+    vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0),
+    vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0)
+  );
+  var p = corners[vid];
+  var out: PostOut;
+  out.pos = vec4f(p, 0.0, 1.0);
+  out.uv = vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  return out;
+}
+
+@fragment
+fn fsBloomDown(in: PostOut) -> @location(0) vec4f {
+  let off = uPost.params0.xy;
+  let c0 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off.x, -off.y), 0.0).rgb;
+  let c1 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off.x, -off.y), 0.0).rgb;
+  let c2 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off.x, off.y), 0.0).rgb;
+  let c3 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off.x, off.y), 0.0).rgb;
+  let avg = (c0 + c1 + c2 + c3) * 0.25;
+  let knee = max(avg - vec3f(0.08), vec3f(0.0));
+  return vec4f(knee, 1.0);
+}
+
+@fragment
+fn fsBloomBlur(in: PostOut) -> @location(0) vec4f {
+  let step = uPost.params0.xy;
+  let w0 = 0.38774;
+  let w1 = 0.24477;
+  let w2 = 0.06136;
+  var acc = textureSampleLevel(uTexA, uLinearSamp, in.uv, 0.0).rgb * w0;
+  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv - step, 0.0).rgb * w1;
+  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv + step, 0.0).rgb * w1;
+  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv - step * 2.0, 0.0).rgb * w2;
+  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv + step * 2.0, 0.0).rgb * w2;
+  return vec4f(acc, 1.0);
+}
+
+@fragment
+fn fsComposite(in: PostOut) -> @location(0) vec4f {
+  let sceneCol = textureSampleLevel(uTexA, uNearestSamp, in.uv, 0.0).rgb;
+  let glow = max(0.0, uPost.params0.z);
+  var col = sceneCol;
+
+  if (glow > 0.01) {
+    let bloom = textureSampleLevel(uTexB, uLinearSamp, in.uv, 0.0).rgb;
+    let bloomTerm = bloom * glow * 0.72;
+    col = sceneCol + bloomTerm * (vec3f(1.0) - sceneCol * 0.28);
+  }
+
+  let mode = uPost.params0.w;
+  let centered = in.uv - vec2f(0.5);
+  let r2 = dot(centered, centered);
+
+  if (mode > 1.5) {
+    // Console CRT post: 180-line scanline + subtle phosphor aperture + soft vignette
+    let scan = 0.94 + 0.06 * sin(in.uv.y * ${GAME_H}.0 * 6.28318);
+    let maskPhase = in.uv.x * ${GAME_W}.0 * 3.14159;
+    let triad = vec3f(
+      0.98 + 0.025 * sin(maskPhase),
+      0.98 + 0.025 * sin(maskPhase + 2.094),
+      0.98 + 0.025 * sin(maskPhase + 4.188)
+    );
+    let vig = clamp(1.0 - r2 * 0.24, 0.76, 1.0);
+    col = col * scan * triad * vig;
+  } else if (mode > 0.5) {
+    // Handheld LCD post: crisp 320x180 pixel subgrid + warm contrast
+    let gx = 0.97 + 0.03 * cos(in.uv.x * ${GAME_W}.0 * 6.28318);
+    let gy = 0.97 + 0.03 * cos(in.uv.y * ${GAME_H}.0 * 6.28318);
+    let vig = clamp(1.0 - r2 * 0.12, 0.88, 1.0);
+    col = col * (gx * gy * vig) * vec3f(1.01, 1.005, 0.985);
+  } else if (uPost.params1.y > 0.5) {
+    let vig = clamp(1.0 - r2 * 0.06, 0.94, 1.0);
+    col *= vig;
+  }
+
+  return vec4f(clamp(col, vec3f(0.0), vec3f(1.0)), 1.0);
+}
+`;
+

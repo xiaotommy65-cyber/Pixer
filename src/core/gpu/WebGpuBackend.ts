@@ -7,7 +7,29 @@ import {
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
-import { WGSL_CODE } from './WebGpuShaders.ts';
+import { WGSL_CODE, WGSL_POST_CODE } from './WebGpuShaders.ts';
+
+const DEFAULT_PALETTE_ROWS = 8;
+const LUT_ALIGNED_ROW_BYTES = 256;
+
+interface PostRenderTargets {
+  w: number;
+  h: number;
+  bloomW: number;
+  bloomH: number;
+  sceneTexture: GPUTexture;
+  emissiveTexture: GPUTexture;
+  bloomTexA: GPUTexture;
+  bloomTexB: GPUTexture;
+  sceneView: GPUTextureView;
+  emissiveView: GPUTextureView;
+  bloomViewA: GPUTextureView;
+  bloomViewB: GPUTextureView;
+  bloomDownBindGroup: GPUBindGroup;
+  bloomBlurHBindGroup: GPUBindGroup;
+  bloomBlurVBindGroup: GPUBindGroup;
+  compositeBindGroup: GPUBindGroup;
+}
 
 export class WebGpuBackend implements IGpuBackend {
   public readonly kind = 'webgpu' as const;
@@ -18,15 +40,34 @@ export class WebGpuBackend implements IGpuBackend {
   private skyPipeline: GPURenderPipeline;
   private alphaPipeline: GPURenderPipeline;
   private addPipeline: GPURenderPipeline;
+  private bloomDownPipeline: GPURenderPipeline;
+  private bloomBlurPipeline: GPURenderPipeline;
+  private compositePipeline: GPURenderPipeline;
   private skyUniformBuffer: GPUBuffer;
-  private skyUniformData = new Float32Array(12);
+  private skyUniformData = new Float32Array(16);
   private alphaBuffer: GPUBuffer;
   private addBuffer: GPUBuffer;
   private atlasTexture: GPUTexture;
-  private bindGroup: GPUBindGroup;
+  private indexAtlasTexture: GPUTexture;
+  private paletteLutTexture: GPUTexture;
+  private atlasSampler: GPUSampler;
+  private linearSampler: GPUSampler;
+  private nearestSampler: GPUSampler;
+  private pass1BindGroupLayout: GPUBindGroupLayout;
+  private pass1BindGroup: GPUBindGroup;
+  private postBindGroupLayout: GPUBindGroupLayout;
+  private postDownBuf: GPUBuffer;
+  private postBlurHBuf: GPUBuffer;
+  private postBlurVBuf: GPUBuffer;
+  private postCompBuf: GPUBuffer;
+  private postUniformData = new Float32Array(8);
+  private renderTargets: PostRenderTargets | null = null;
+  private paletteRows = DEFAULT_PALETTE_ROWS;
   private onLostCallback?: () => void;
   private recovered = false;
   private atlasStaging: Uint8Array<ArrayBuffer> | null = null;
+  private indexStaging: Uint8Array<ArrayBuffer> | null = null;
+  private lutStaging: Uint8Array<ArrayBuffer> | null = null;
   private configuredW = 0;
   private configuredH = 0;
 
@@ -37,11 +78,26 @@ export class WebGpuBackend implements IGpuBackend {
     skyPipeline: GPURenderPipeline,
     alphaPipeline: GPURenderPipeline,
     addPipeline: GPURenderPipeline,
+    bloomDownPipeline: GPURenderPipeline,
+    bloomBlurPipeline: GPURenderPipeline,
+    compositePipeline: GPURenderPipeline,
     skyUniformBuffer: GPUBuffer,
     alphaBuffer: GPUBuffer,
     addBuffer: GPUBuffer,
     atlasTexture: GPUTexture,
-    bindGroup: GPUBindGroup,
+    indexAtlasTexture: GPUTexture,
+    paletteLutTexture: GPUTexture,
+    atlasSampler: GPUSampler,
+    linearSampler: GPUSampler,
+    nearestSampler: GPUSampler,
+    pass1BindGroupLayout: GPUBindGroupLayout,
+    pass1BindGroup: GPUBindGroup,
+    postBindGroupLayout: GPUBindGroupLayout,
+    postDownBuf: GPUBuffer,
+    postBlurHBuf: GPUBuffer,
+    postBlurVBuf: GPUBuffer,
+    postCompBuf: GPUBuffer,
+    paletteRows: number,
     onLost?: () => void,
   ) {
     this.device = device;
@@ -50,11 +106,26 @@ export class WebGpuBackend implements IGpuBackend {
     this.skyPipeline = skyPipeline;
     this.alphaPipeline = alphaPipeline;
     this.addPipeline = addPipeline;
+    this.bloomDownPipeline = bloomDownPipeline;
+    this.bloomBlurPipeline = bloomBlurPipeline;
+    this.compositePipeline = compositePipeline;
     this.skyUniformBuffer = skyUniformBuffer;
     this.alphaBuffer = alphaBuffer;
     this.addBuffer = addBuffer;
     this.atlasTexture = atlasTexture;
-    this.bindGroup = bindGroup;
+    this.indexAtlasTexture = indexAtlasTexture;
+    this.paletteLutTexture = paletteLutTexture;
+    this.atlasSampler = atlasSampler;
+    this.linearSampler = linearSampler;
+    this.nearestSampler = nearestSampler;
+    this.pass1BindGroupLayout = pass1BindGroupLayout;
+    this.pass1BindGroup = pass1BindGroup;
+    this.postBindGroupLayout = postBindGroupLayout;
+    this.postDownBuf = postDownBuf;
+    this.postBlurHBuf = postBlurHBuf;
+    this.postBlurVBuf = postBlurVBuf;
+    this.postCompBuf = postCompBuf;
+    this.paletteRows = paletteRows;
     this.onLostCallback = onLost;
 
     void device.lost.then((info) => {
@@ -69,12 +140,67 @@ export class WebGpuBackend implements IGpuBackend {
     });
   }
 
+  private static writePaddedIndexTexture(
+    device: GPUDevice,
+    texture: GPUTexture,
+    width: number,
+    height: number,
+    indexPixels: Uint8Array,
+    staging?: Uint8Array<ArrayBuffer> | null,
+  ): Uint8Array<ArrayBuffer> {
+    const alignedRow = Math.ceil(width / 256) * 256;
+    const total = alignedRow * height;
+    const buf = staging && staging.byteLength === total ? staging : new Uint8Array(total);
+    if (alignedRow === width) {
+      buf.set(indexPixels);
+    } else {
+      for (let y = 0; y < height; y++) {
+        buf.set(indexPixels.subarray(y * width, (y + 1) * width), y * alignedRow);
+      }
+    }
+    device.queue.writeTexture(
+      { texture },
+      buf,
+      { bytesPerRow: alignedRow, rowsPerImage: height },
+      { width, height },
+    );
+    return buf;
+  }
+
+  private static writePaddedLutTexture(
+    device: GPUDevice,
+    texture: GPUTexture,
+    rows: number,
+    paletteLut: Uint8Array,
+    staging?: Uint8Array<ArrayBuffer> | null,
+  ): Uint8Array<ArrayBuffer> {
+    const total = LUT_ALIGNED_ROW_BYTES * rows;
+    const buf = staging && staging.byteLength === total ? staging : new Uint8Array(total);
+    buf.fill(0);
+    for (let r = 0; r < rows; r++) {
+      const srcOff = r * 64;
+      if (srcOff + 64 <= paletteLut.byteLength) {
+        buf.set(paletteLut.subarray(srcOff, srcOff + 64), r * LUT_ALIGNED_ROW_BYTES);
+      }
+    }
+    device.queue.writeTexture(
+      { texture },
+      buf,
+      { bytesPerRow: LUT_ALIGNED_ROW_BYTES, rowsPerImage: rows },
+      { width: 16, height: rows },
+    );
+    return buf;
+  }
+
   public static async tryCreate(
     canvas: HTMLCanvasElement,
     atlasWidth: number,
     atlasHeight: number,
     initialPixels: Uint8Array,
     onLost?: () => void,
+    initialIndexPixels?: Uint8Array,
+    initialPaletteLut?: Uint8Array,
+    initialPaletteRows = DEFAULT_PALETTE_ROWS,
   ): Promise<WebGpuBackend | null> {
     if (typeof navigator === 'undefined' || !navigator.gpu) return null;
     try {
@@ -89,11 +215,21 @@ export class WebGpuBackend implements IGpuBackend {
       const format = navigator.gpu.getPreferredCanvasFormat();
 
       device.pushErrorScope('validation');
-      const module = device.createShaderModule({ code: WGSL_CODE });
-      const info = await module.getCompilationInfo();
-      if (info.messages.some((m) => m.type === 'error')) {
-        const firstErr = info.messages.find((m) => m.type === 'error');
-        appLogger.error('gpu', 'webgpu.compileShader', 'WGSL 著色器編譯失敗，已退回 WebGL2', new Error(firstErr?.message ?? 'WGSL error'));
+      const sceneModule = device.createShaderModule({ code: WGSL_CODE });
+      const postModule = device.createShaderModule({ code: WGSL_POST_CODE });
+      const [sceneInfo, postInfo] = await Promise.all([
+        sceneModule.getCompilationInfo(),
+        postModule.getCompilationInfo(),
+      ]);
+      const allMsgs = [...sceneInfo.messages, ...postInfo.messages];
+      if (allMsgs.some((m) => m.type === 'error')) {
+        const firstErr = allMsgs.find((m) => m.type === 'error');
+        appLogger.error(
+          'gpu',
+          'webgpu.compileShader',
+          'WGSL 著色器編譯失敗，已退回 WebGL2',
+          new Error(firstErr?.message ?? 'WGSL error'),
+        );
         await device.popErrorScope();
         device.destroy();
         return null;
@@ -104,15 +240,44 @@ export class WebGpuBackend implements IGpuBackend {
         format: 'rgba8unorm',
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       });
-      const copy = new Uint8Array(initialPixels);
+      const rgbaCopy = new Uint8Array(initialPixels);
       device.queue.writeTexture(
         { texture: atlasTexture },
-        copy,
+        rgbaCopy,
         { bytesPerRow: atlasWidth * 4, rowsPerImage: atlasHeight },
         { width: atlasWidth, height: atlasHeight },
       );
 
-      const sampler = device.createSampler({
+      const indexAtlasTexture = device.createTexture({
+        size: [atlasWidth, atlasHeight, 1],
+        format: 'r8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      const idxInit = initialIndexPixels ?? new Uint8Array(atlasWidth * atlasHeight).fill(255);
+      WebGpuBackend.writePaddedIndexTexture(device, indexAtlasTexture, atlasWidth, atlasHeight, idxInit);
+
+      const safeRows = Math.max(1, initialPaletteRows);
+      const paletteLutTexture = device.createTexture({
+        size: [16, safeRows, 1],
+        format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      const lutInit = initialPaletteLut ?? new Uint8Array(16 * safeRows * 4).fill(255);
+      WebGpuBackend.writePaddedLutTexture(device, paletteLutTexture, safeRows, lutInit);
+
+      const atlasSampler = device.createSampler({
+        magFilter: 'nearest',
+        minFilter: 'nearest',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+      });
+      const linearSampler = device.createSampler({
+        magFilter: 'linear',
+        minFilter: 'linear',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+      });
+      const nearestSampler = device.createSampler({
         magFilter: 'nearest',
         minFilter: 'nearest',
         addressModeU: 'clamp-to-edge',
@@ -120,9 +285,18 @@ export class WebGpuBackend implements IGpuBackend {
       });
 
       const skyUniformBuffer = device.createBuffer({
-        size: 48,
+        size: 64,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      const makePostBuf = () =>
+        device.createBuffer({
+          size: 32,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+      const postDownBuf = makePostBuf();
+      const postBlurHBuf = makePostBuf();
+      const postBlurVBuf = makePostBuf();
+      const postCompBuf = makePostBuf();
 
       const instanceBytes = MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE * 4;
       const alphaBuffer = device.createBuffer({
@@ -134,25 +308,41 @@ export class WebGpuBackend implements IGpuBackend {
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       });
 
-      const bindGroupLayout = device.createBindGroupLayout({
+      const pass1BindGroupLayout = device.createBindGroupLayout({
         entries: [
           { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
           { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
           { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+          { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+          { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         ],
       });
-
-      const pipelineLayout = device.createPipelineLayout({
-        bindGroupLayouts: [bindGroupLayout],
-      });
-
-      const bindGroup = device.createBindGroup({
-        layout: bindGroupLayout,
+      const pass1BindGroup = device.createBindGroup({
+        layout: pass1BindGroupLayout,
         entries: [
           { binding: 0, resource: { buffer: skyUniformBuffer } },
           { binding: 1, resource: atlasTexture.createView() },
-          { binding: 2, resource: sampler },
+          { binding: 2, resource: atlasSampler },
+          { binding: 3, resource: indexAtlasTexture.createView() },
+          { binding: 4, resource: paletteLutTexture.createView() },
         ],
+      });
+
+      const postBindGroupLayout = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+          { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+          { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+          { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        ],
+      });
+
+      const pass1PipelineLayout = device.createPipelineLayout({
+        bindGroupLayouts: [pass1BindGroupLayout],
+      });
+      const postPipelineLayout = device.createPipelineLayout({
+        bindGroupLayouts: [postBindGroupLayout],
       });
 
       const instanceLayout: GPUVertexBufferLayout = {
@@ -163,48 +353,71 @@ export class WebGpuBackend implements IGpuBackend {
           { shaderLocation: 1, offset: 16, format: 'float32x4' },
           { shaderLocation: 2, offset: 32, format: 'float32x4' },
           { shaderLocation: 3, offset: 48, format: 'float32x4' },
+          { shaderLocation: 4, offset: 64, format: 'float32x4' },
         ],
       };
 
-      const [skyPipeline, alphaPipeline, addPipeline] = await Promise.all([
+      const mrtFormat: GPUTextureFormat = 'rgba8unorm';
+      const alphaBlend: GPUBlendState = {
+        color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      };
+      const addBlend: GPUBlendState = {
+        color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      };
+
+      const [
+        skyPipeline,
+        alphaPipeline,
+        addPipeline,
+        bloomDownPipeline,
+        bloomBlurPipeline,
+        compositePipeline,
+      ] = await Promise.all([
         device.createRenderPipelineAsync({
-          layout: pipelineLayout,
-          vertex: { module, entryPoint: 'vsSky' },
-          fragment: { module, entryPoint: 'fsSky', targets: [{ format }] },
+          layout: pass1PipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsSky' },
+          fragment: { module: sceneModule, entryPoint: 'fsSky', targets: [{ format: mrtFormat }, { format: mrtFormat }] },
         }),
         device.createRenderPipelineAsync({
-          layout: pipelineLayout,
-          vertex: { module, entryPoint: 'vsSprite', buffers: [instanceLayout] },
+          layout: pass1PipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsSprite', buffers: [instanceLayout] },
           fragment: {
-            module,
+            module: sceneModule,
             entryPoint: 'fsSprite',
             targets: [
-              {
-                format,
-                blend: {
-                  color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                  alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-                },
-              },
+              { format: mrtFormat, blend: alphaBlend },
+              { format: mrtFormat, blend: alphaBlend },
             ],
           },
         }),
         device.createRenderPipelineAsync({
-          layout: pipelineLayout,
-          vertex: { module, entryPoint: 'vsSprite', buffers: [instanceLayout] },
+          layout: pass1PipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsSprite', buffers: [instanceLayout] },
           fragment: {
-            module,
+            module: sceneModule,
             entryPoint: 'fsSprite',
             targets: [
-              {
-                format,
-                blend: {
-                  color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
-                  alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-                },
-              },
+              { format: mrtFormat, blend: addBlend },
+              { format: mrtFormat, blend: addBlend },
             ],
           },
+        }),
+        device.createRenderPipelineAsync({
+          layout: postPipelineLayout,
+          vertex: { module: postModule, entryPoint: 'vsPost' },
+          fragment: { module: postModule, entryPoint: 'fsBloomDown', targets: [{ format: mrtFormat }] },
+        }),
+        device.createRenderPipelineAsync({
+          layout: postPipelineLayout,
+          vertex: { module: postModule, entryPoint: 'vsPost' },
+          fragment: { module: postModule, entryPoint: 'fsBloomBlur', targets: [{ format: mrtFormat }] },
+        }),
+        device.createRenderPipelineAsync({
+          layout: postPipelineLayout,
+          vertex: { module: postModule, entryPoint: 'vsPost' },
+          fragment: { module: postModule, entryPoint: 'fsComposite', targets: [{ format }] },
         }),
       ]);
 
@@ -230,11 +443,26 @@ export class WebGpuBackend implements IGpuBackend {
         skyPipeline,
         alphaPipeline,
         addPipeline,
+        bloomDownPipeline,
+        bloomBlurPipeline,
+        compositePipeline,
         skyUniformBuffer,
         alphaBuffer,
         addBuffer,
         atlasTexture,
-        bindGroup,
+        indexAtlasTexture,
+        paletteLutTexture,
+        atlasSampler,
+        linearSampler,
+        nearestSampler,
+        pass1BindGroupLayout,
+        pass1BindGroup,
+        postBindGroupLayout,
+        postDownBuf,
+        postBlurHBuf,
+        postBlurVBuf,
+        postCompBuf,
+        safeRows,
         onLost,
       );
       device.addEventListener('uncapturederror', (ev) => {
@@ -251,7 +479,76 @@ export class WebGpuBackend implements IGpuBackend {
     }
   }
 
-  public uploadAtlas(width: number, height: number, pixels: Uint8Array): void {
+  private destroyRenderTargets(): void {
+    if (!this.renderTargets) return;
+    this.renderTargets.sceneTexture.destroy();
+    this.renderTargets.emissiveTexture.destroy();
+    this.renderTargets.bloomTexA.destroy();
+    this.renderTargets.bloomTexB.destroy();
+    this.renderTargets = null;
+  }
+
+  private ensureRenderTargets(w: number, h: number): PostRenderTargets {
+    if (this.renderTargets && this.renderTargets.w === w && this.renderTargets.h === h) {
+      return this.renderTargets;
+    }
+    this.destroyRenderTargets();
+
+    const bloomW = Math.max(1, Math.floor(w / 4));
+    const bloomH = Math.max(1, Math.floor(h / 4));
+    const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
+
+    const sceneTexture = this.device.createTexture({ size: [w, h, 1], format: 'rgba8unorm', usage });
+    const emissiveTexture = this.device.createTexture({ size: [w, h, 1], format: 'rgba8unorm', usage });
+    const bloomTexA = this.device.createTexture({ size: [bloomW, bloomH, 1], format: 'rgba8unorm', usage });
+    const bloomTexB = this.device.createTexture({ size: [bloomW, bloomH, 1], format: 'rgba8unorm', usage });
+
+    const sceneView = sceneTexture.createView();
+    const emissiveView = emissiveTexture.createView();
+    const bloomViewA = bloomTexA.createView();
+    const bloomViewB = bloomTexB.createView();
+
+    const mkPostBind = (buf: GPUBuffer, viewA: GPUTextureView, viewB: GPUTextureView) =>
+      this.device.createBindGroup({
+        layout: this.postBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: buf } },
+          { binding: 1, resource: viewA },
+          { binding: 2, resource: viewB },
+          { binding: 3, resource: this.linearSampler },
+          { binding: 4, resource: this.nearestSampler },
+        ],
+      });
+
+    this.renderTargets = {
+      w,
+      h,
+      bloomW,
+      bloomH,
+      sceneTexture,
+      emissiveTexture,
+      bloomTexA,
+      bloomTexB,
+      sceneView,
+      emissiveView,
+      bloomViewA,
+      bloomViewB,
+      bloomDownBindGroup: mkPostBind(this.postDownBuf, emissiveView, bloomViewB),
+      bloomBlurHBindGroup: mkPostBind(this.postBlurHBuf, bloomViewA, bloomViewB),
+      bloomBlurVBindGroup: mkPostBind(this.postBlurVBuf, bloomViewB, bloomViewA),
+      compositeBindGroup: mkPostBind(this.postCompBuf, sceneView, bloomViewA),
+    };
+    return this.renderTargets;
+  }
+
+  public uploadAtlas(
+    width: number,
+    height: number,
+    pixels: Uint8Array,
+    indexPixels?: Uint8Array,
+    paletteLut?: Uint8Array,
+    paletteRows?: number,
+  ): void {
     if (!this.atlasStaging || this.atlasStaging.byteLength !== pixels.byteLength) {
       this.atlasStaging = new Uint8Array(pixels.byteLength);
     }
@@ -262,6 +559,46 @@ export class WebGpuBackend implements IGpuBackend {
       { bytesPerRow: width * 4, rowsPerImage: height },
       { width, height },
     );
+
+    if (indexPixels) {
+      this.indexStaging = WebGpuBackend.writePaddedIndexTexture(
+        this.device,
+        this.indexAtlasTexture,
+        width,
+        height,
+        indexPixels,
+        this.indexStaging,
+      );
+    }
+
+    if (paletteLut && paletteRows) {
+      if (paletteRows !== this.paletteRows) {
+        this.paletteRows = paletteRows;
+        this.paletteLutTexture.destroy();
+        this.paletteLutTexture = this.device.createTexture({
+          size: [16, paletteRows, 1],
+          format: 'rgba8unorm',
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        this.pass1BindGroup = this.device.createBindGroup({
+          layout: this.pass1BindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.skyUniformBuffer } },
+            { binding: 1, resource: this.atlasTexture.createView() },
+            { binding: 2, resource: this.atlasSampler },
+            { binding: 3, resource: this.indexAtlasTexture.createView() },
+            { binding: 4, resource: this.paletteLutTexture.createView() },
+          ],
+        });
+      }
+      this.lutStaging = WebGpuBackend.writePaddedLutTexture(
+        this.device,
+        this.paletteLutTexture,
+        paletteRows,
+        paletteLut,
+        this.lutStaging,
+      );
+    }
   }
 
   public resize(pixelWidth: number, pixelHeight: number): void {
@@ -283,6 +620,22 @@ export class WebGpuBackend implements IGpuBackend {
     additiveCount: number,
     timeSec: number,
   ): number {
+    let swapTex: GPUTexture;
+    try {
+      swapTex = this.context.getCurrentTexture();
+    } catch {
+      if (!this.recovered) {
+        this.recovered = true;
+        this.onLostCallback?.();
+      }
+      return 0;
+    }
+
+    const rtW = Math.max(1, swapTex.width);
+    const rtH = Math.max(1, swapTex.height);
+    const rt = this.ensureRenderTargets(rtW, rtH);
+    const view = swapTex.createView();
+
     this.skyUniformData[0] = sky.top[0];
     this.skyUniformData[1] = sky.top[1];
     this.skyUniformData[2] = sky.top[2];
@@ -295,6 +648,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.skyUniformData[9] = sky.cozyFilter ? 1 : 0;
     this.skyUniformData[10] = GAME_W;
     this.skyUniformData[11] = GAME_H;
+    this.skyUniformData[12] = this.paletteRows;
     this.device.queue.writeBuffer(this.skyUniformBuffer, 0, this.skyUniformData);
 
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);
@@ -319,58 +673,140 @@ export class WebGpuBackend implements IGpuBackend {
       );
     }
 
-    let view: GPUTextureView;
-    try {
-      view = this.context.getCurrentTexture().createView();
-    } catch {
-      if (!this.recovered) {
-        this.recovered = true;
-        this.onLostCallback?.();
-      }
-      return 0;
+    const doBloom = sky.glowIntensity > 0.01;
+    if (doBloom) {
+      this.postUniformData[0] = 1 / rtW;
+      this.postUniformData[1] = 1 / rtH;
+      this.postUniformData[2] = sky.glowIntensity;
+      this.postUniformData[3] = sky.filterMode;
+      this.postUniformData[4] = timeSec;
+      this.postUniformData[5] = sky.cozyFilter ? 1 : 0;
+      this.postUniformData[6] = rtW;
+      this.postUniformData[7] = rtH;
+      this.device.queue.writeBuffer(this.postDownBuf, 0, this.postUniformData);
+
+      this.postUniformData[0] = 1.25 / rt.bloomW;
+      this.postUniformData[1] = 0;
+      this.device.queue.writeBuffer(this.postBlurHBuf, 0, this.postUniformData);
+
+      this.postUniformData[0] = 0;
+      this.postUniformData[1] = 1.25 / rt.bloomH;
+      this.device.queue.writeBuffer(this.postBlurVBuf, 0, this.postUniformData);
     }
 
+    this.postUniformData[0] = 1 / rtW;
+    this.postUniformData[1] = 1 / rtH;
+    this.postUniformData[2] = sky.glowIntensity;
+    this.postUniformData[3] = sky.filterMode;
+    this.postUniformData[4] = timeSec;
+    this.postUniformData[5] = sky.cozyFilter ? 1 : 0;
+    this.postUniformData[6] = rtW;
+    this.postUniformData[7] = rtH;
+    this.device.queue.writeBuffer(this.postCompBuf, 0, this.postUniformData);
+
     const encoder = this.device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
+
+    // Pass 1: MRT Scene Color + Emissive Mask
+    const pass1 = encoder.beginRenderPass({
       colorAttachments: [
         {
-          view,
+          view: rt.sceneView,
           loadOp: 'clear',
           storeOp: 'store',
           clearValue: { r: sky.top[0], g: sky.top[1], b: sky.top[2], a: 1 },
+        },
+        {
+          view: rt.emissiveView,
+          loadOp: 'clear',
+          storeOp: 'store',
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
         },
       ],
     });
 
     let drawCalls = 1;
-    pass.setBindGroup(0, this.bindGroup);
-    pass.setPipeline(this.skyPipeline);
-    pass.draw(6);
+    pass1.setBindGroup(0, this.pass1BindGroup);
+    pass1.setPipeline(this.skyPipeline);
+    pass1.draw(6);
 
     if (safeAlpha > 0) {
-      pass.setPipeline(this.alphaPipeline);
-      pass.setVertexBuffer(0, this.alphaBuffer);
-      pass.draw(6, safeAlpha);
+      pass1.setPipeline(this.alphaPipeline);
+      pass1.setVertexBuffer(0, this.alphaBuffer);
+      pass1.draw(6, safeAlpha);
       drawCalls++;
     }
 
     if (safeAdd > 0) {
-      pass.setPipeline(this.addPipeline);
-      pass.setVertexBuffer(0, this.addBuffer);
-      pass.draw(6, safeAdd);
+      pass1.setPipeline(this.addPipeline);
+      pass1.setVertexBuffer(0, this.addBuffer);
+      pass1.draw(6, safeAdd);
       drawCalls++;
     }
+    pass1.end();
 
-    pass.end();
+    // Pass 2: 1/4-res Emissive Downsample + Separable H/V Gaussian Blur
+    if (doBloom) {
+      const pDown = encoder.beginRenderPass({
+        colorAttachments: [
+          { view: rt.bloomViewA, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
+        ],
+      });
+      pDown.setBindGroup(0, rt.bloomDownBindGroup);
+      pDown.setPipeline(this.bloomDownPipeline);
+      pDown.draw(6);
+      pDown.end();
+
+      const pBlurH = encoder.beginRenderPass({
+        colorAttachments: [
+          { view: rt.bloomViewB, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
+        ],
+      });
+      pBlurH.setBindGroup(0, rt.bloomBlurHBindGroup);
+      pBlurH.setPipeline(this.bloomBlurPipeline);
+      pBlurH.draw(6);
+      pBlurH.end();
+
+      const pBlurV = encoder.beginRenderPass({
+        colorAttachments: [
+          { view: rt.bloomViewA, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
+        ],
+      });
+      pBlurV.setBindGroup(0, rt.bloomBlurVBindGroup);
+      pBlurV.setPipeline(this.bloomBlurPipeline);
+      pBlurV.draw(6);
+      pBlurV.end();
+      drawCalls += 3;
+    }
+
+    // Pass 3: Crisp Pixel Upscale + Bloom Composite + Clean/LCD/CRT Post
+    const pComp = encoder.beginRenderPass({
+      colorAttachments: [
+        { view, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } },
+      ],
+    });
+    pComp.setBindGroup(0, rt.compositeBindGroup);
+    pComp.setPipeline(this.compositePipeline);
+    pComp.draw(6);
+    pComp.end();
+    drawCalls++;
+
     this.device.queue.submit([encoder.finish()]);
     return drawCalls;
   }
 
   public dispose(): void {
+    this.destroyRenderTargets();
     this.alphaBuffer.destroy();
     this.addBuffer.destroy();
     this.skyUniformBuffer.destroy();
+    this.postDownBuf.destroy();
+    this.postBlurHBuf.destroy();
+    this.postBlurVBuf.destroy();
+    this.postCompBuf.destroy();
     this.atlasTexture.destroy();
+    this.indexAtlasTexture.destroy();
+    this.paletteLutTexture.destroy();
     this.device.destroy();
   }
 }
+

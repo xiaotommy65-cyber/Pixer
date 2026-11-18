@@ -7,9 +7,10 @@ import {
   TOYBOX_PALETTE,
   type SpriteId,
 } from './AtlasSpritesData.ts';
+import { buildPaletteLutRgba, PALETTE_THEME_COUNT } from './sprites/PaletteData.ts';
 import type { SpriteRect } from '../core/gpu/GpuTypes.ts';
 
-export { DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B, TOYBOX_PALETTE };
+export { DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B, PALETTE_THEME_COUNT, TOYBOX_PALETTE };
 export type { SpriteId };
 
 export const ATLAS_SIZE = 512;
@@ -44,7 +45,7 @@ const SLOTS_PER_ROW = ATLAS_SIZE / TILE_PX; // 32 slots per row on 512x512
 const DYNAMIC_START_Y = 128; // Reserve top 128px (8 rows x 32 cols = 256 slots) for built-in tiles
 
 /**
- * Dynamic 512x512 Texture Atlas supporting built-in 16-color indexed sprites,
+ * Dynamic 512x512 Texture Atlas supporting built-in 16-color indexed sprites (with 16xN Palette LUT),
  * live Sprite Atelier hero editing, and runtime 32-bit RGBA / dynamic shelf allocation
  * for plugins and AI-synthesized pixel art.
  */
@@ -52,6 +53,10 @@ export class TextureAtlas {
   public readonly width = ATLAS_SIZE;
   public readonly height = ATLAS_SIZE;
   public readonly pixels = new Uint8Array(ATLAS_SIZE * ATLAS_SIZE * 4);
+  /** Per-texel palette index: 0 = transparent, 1..15 = LUT index, 255 = full RGBA passthrough */
+  public readonly indexPixels = new Uint8Array(ATLAS_SIZE * ATLAS_SIZE);
+  public readonly paletteLut = buildPaletteLutRgba();
+  public readonly paletteRows = PALETTE_THEME_COUNT;
   public readonly rects = new Map<SpriteId, SpriteRect>();
   public readonly heroPixelsA = new Uint8Array(TILE_PX * TILE_PX);
   public readonly heroPixelsB = new Uint8Array(TILE_PX * TILE_PX);
@@ -88,7 +93,9 @@ export class TextureAtlas {
       for (let x = 0; x < w; x++) {
         const idx = buf[y * w + x] ?? 0;
         const [r, g, b, a] = PALETTE_RGB[idx] ?? [0, 0, 0, 0];
-        const px = ((startY + y) * ATLAS_SIZE + (startX + x)) * 4;
+        const texIdx = (startY + y) * ATLAS_SIZE + (startX + x);
+        this.indexPixels[texIdx] = idx;
+        const px = texIdx * 4;
         this.pixels[px] = r;
         this.pixels[px + 1] = g;
         this.pixels[px + 2] = b;
@@ -101,7 +108,9 @@ export class TextureAtlas {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const src = (y * w + x) * 4;
-        const dst = ((startY + y) * ATLAS_SIZE + (startX + x)) * 4;
+        const texIdx = (startY + y) * ATLAS_SIZE + (startX + x);
+        this.indexPixels[texIdx] = 255;
+        const dst = texIdx * 4;
         this.pixels[dst] = rgba[src] ?? 0;
         this.pixels[dst + 1] = rgba[src + 1] ?? 0;
         this.pixels[dst + 2] = rgba[src + 2] ?? 0;
@@ -111,10 +120,12 @@ export class TextureAtlas {
   }
 
   private buildInitialAtlas(): void {
-    // Slot (0,0): solid white pixel tile
+    // Slot (0,0): solid white pixel tile (full RGBA passthrough)
     for (let y = 0; y < TILE_PX; y++) {
       for (let x = 0; x < TILE_PX; x++) {
-        const px = (y * ATLAS_SIZE + x) * 4;
+        const texIdx = y * ATLAS_SIZE + x;
+        this.indexPixels[texIdx] = 255;
+        const px = texIdx * 4;
         this.pixels[px] = 255;
         this.pixels[px + 1] = 255;
         this.pixels[px + 2] = 255;
