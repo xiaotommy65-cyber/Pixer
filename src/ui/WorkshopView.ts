@@ -118,6 +118,7 @@ export class WorkshopView {
   private gridCells = new Uint8Array(80 * LEVEL_ROWS);
   private activeBrush: BrushId = 1;
   private isPainting = false;
+  private lastPaintedIdx = -1;
   private bgmTheme: BgmTheme = 'meadow';
   private paletteRow = 0;
   private useStudioSprites = true;
@@ -331,8 +332,32 @@ export class WorkshopView {
     this.boardGridEl = el('div', 'workshop-level-grid');
     const stopPaint = () => {
       this.isPainting = false;
+      this.lastPaintedIdx = -1;
     };
-    this.boardGridEl.addEventListener('pointerleave', stopPaint, { signal: this.ac.signal });
+    this.boardGridEl.addEventListener(
+      'pointerdown',
+      (e) => {
+        e.preventDefault();
+        this.host.unlockAudio();
+        this.isPainting = true;
+        this.lastPaintedIdx = -1;
+        try {
+          this.boardGridEl.setPointerCapture(e.pointerId);
+        } catch {
+          // Ignore browsers rejecting capture on synthetic events
+        }
+        this.paintAtClientPoint(e.clientX, e.clientY);
+      },
+      { signal: this.ac.signal },
+    );
+    this.boardGridEl.addEventListener(
+      'pointermove',
+      (e) => {
+        if (this.isPainting) this.paintAtClientPoint(e.clientX, e.clientY);
+      },
+      { signal: this.ac.signal },
+    );
+    this.boardGridEl.addEventListener('pointercancel', stopPaint, { signal: this.ac.signal });
     window.addEventListener('pointerup', stopPaint, { signal: this.ac.signal });
     scrollWrap.appendChild(this.boardGridEl);
     this.rebuildLevelBoard();
@@ -524,6 +549,7 @@ export class WorkshopView {
 
   public destroy(): void {
     this.isPainting = false;
+    this.lastPaintedIdx = -1;
     this.ac.abort();
     this.sliders.clear();
   }
@@ -564,58 +590,62 @@ export class WorkshopView {
     this.gridCells[9 * 80 + 36] = 9; // gate
   }
 
+  private paintAtClientPoint(clientX: number, clientY: number): void {
+    const rect = this.boardGridEl.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const col = Math.floor(((clientX - rect.left) / rect.width) * this.cols);
+    const row = Math.floor(((clientY - rect.top) / rect.height) * LEVEL_ROWS);
+    if (col < 0 || col >= this.cols || row < 0 || row >= LEVEL_ROWS) return;
+    const gridIdx = row * 80 + col;
+    if (gridIdx === this.lastPaintedIdx) return;
+    this.lastPaintedIdx = gridIdx;
+    this.paintCell(col, row);
+  }
+
   private rebuildLevelBoard(): void {
     this.boardGridEl.innerHTML = '';
     this.levelCellEls = [];
     this.boardGridEl.style.gridTemplateColumns = `repeat(${this.cols}, 18px)`;
     for (let r = 0; r < LEVEL_ROWS; r++) {
       for (let c = 0; c < this.cols; c++) {
-        const cell = el('div', 'workshop-level-cell');
-        cell.addEventListener(
-          'pointerdown',
-          (e) => {
-            e.preventDefault();
-            this.host.unlockAudio();
-            this.isPainting = true;
-            this.paintCell(c, r);
-          },
-          { signal: this.ac.signal },
-        );
-        cell.addEventListener(
-          'pointerenter',
-          () => {
-            if (this.isPainting) this.paintCell(c, r);
-          },
-          { signal: this.ac.signal },
-        );
-        this.levelCellEls.push(cell);
-        this.boardGridEl.appendChild(cell);
+        this.levelCellEls.push(el('div', 'workshop-level-cell'));
       }
     }
+    this.boardGridEl.append(...this.levelCellEls);
     this.renderLevelCells();
+  }
+
+  private renderSingleCell(col: number, row: number): void {
+    if (col < 0 || col >= this.cols || row < 0 || row >= LEVEL_ROWS) return;
+    const cell = this.levelCellEls[row * this.cols + col];
+    if (!cell) return;
+    const val = this.gridCells[row * 80 + col] as BrushId;
+    const br = BRUSHES[val] ?? BRUSHES[0];
+    cell.textContent = val === 0 ? '' : br.icon;
+    cell.style.backgroundColor = br.color;
   }
 
   private paintCell(col: number, row: number): void {
     if (this.activeBrush === 10) {
       // Only one spawn point in the level
-      for (let i = 0; i < this.gridCells.length; i++) {
-        if (this.gridCells[i] === 10) this.gridCells[i] = 0;
+      for (let r = 0; r < LEVEL_ROWS; r++) {
+        for (let c = 0; c < 80; c++) {
+          if (this.gridCells[r * 80 + c] === 10) {
+            this.gridCells[r * 80 + c] = 0;
+            this.renderSingleCell(c, r);
+          }
+        }
       }
     }
     this.gridCells[row * 80 + col] = this.activeBrush;
     this.host.playTactile('ui', 'down');
-    this.renderLevelCells();
+    this.renderSingleCell(col, row);
   }
 
   private renderLevelCells(): void {
     for (let r = 0; r < LEVEL_ROWS; r++) {
       for (let c = 0; c < this.cols; c++) {
-        const idx = r * this.cols + c;
-        const val = this.gridCells[r * 80 + c] as BrushId;
-        const cell = this.levelCellEls[idx];
-        const br = BRUSHES[val] ?? BRUSHES[0];
-        cell.textContent = val === 0 ? '' : br.icon;
-        cell.style.backgroundColor = br.color;
+        this.renderSingleCell(c, r);
       }
     }
   }

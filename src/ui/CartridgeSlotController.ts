@@ -21,6 +21,7 @@ export interface CartridgeSlotViewRefs {
   ejectBtn: HTMLButtonElement;
   clearSaveBtn: HTMLButtonElement;
   screenFrame: HTMLElement;
+  bootVeilEl?: HTMLElement;
   ledStrips: HTMLElement[];
 }
 
@@ -33,7 +34,7 @@ export interface CartridgeSlotHooks {
 }
 
 /**
- * Manages the physical top cartridge slot bezel, slot LED strips, bounce-rename badge,
+ * Manages the physical top cartridge slot bezel, slot LED strips, drop-in / eject card animations,
  * active/booting phase timer, and mount/unmount lifecycle via EngineHost.
  */
 export class CartridgeSlotController {
@@ -44,7 +45,9 @@ export class CartridgeSlotController {
 
   private slotState: SlotState = { phase: 'empty' };
   private slotCardEl: HTMLElement | null = null;
-  private previewCode = '';
+  private pendingEjectTimer: number | null = null;
+  private pendingEjectCard: HTMLElement | null = null;
+  private veilTimer: number | null = null;
 
   constructor(
     host: EngineHost,
@@ -71,6 +74,10 @@ export class CartridgeSlotController {
     return this.slotState.phase === 'empty' ? null : this.slotState.id;
   }
 
+  public isEjecting(): boolean {
+    return this.pendingEjectTimer !== null;
+  }
+
   public tick(dt: number): void {
     if (this.slotState.phase !== 'booting') return;
     this.slotState.timer -= dt;
@@ -91,19 +98,41 @@ export class CartridgeSlotController {
     }
   }
 
-  /** Syncs the top slot indicator badge with a bounce transition when browsing in HOME_LOBBY. */
+  /** Syncs the top slot label hint when browsing in HOME_LOBBY without pre-inserting a cartridge card. */
   public showLobbyFocusBadge(meta: CartridgeMeta): void {
     if (this.slotState.phase === 'empty') {
       this.refs.slotHint.textContent = `🎴 ${meta.code} · ${meta.title}`;
       this.refs.slotHint.classList.remove('panel-hidden');
-      if (this.previewCode !== meta.code) {
-        this.previewCode = meta.code;
-        this.mountSlotBadge(meta, true);
-      }
     }
   }
 
+  private pulseBootVeil(kind: 'is-inserting' | 'is-ejecting', durationMs: number): void {
+    const veil = this.refs.bootVeilEl;
+    if (!veil) return;
+    if (this.veilTimer !== null) {
+      window.clearTimeout(this.veilTimer);
+      this.veilTimer = null;
+    }
+    veil.classList.remove('is-inserting', 'is-ejecting');
+    void veil.offsetWidth;
+    veil.classList.add(kind);
+    this.veilTimer = this.hooks.scheduleTimer(() => {
+      veil.classList.remove('is-inserting', 'is-ejecting');
+      this.veilTimer = null;
+    }, durationMs);
+  }
+
+  private cancelPendingEject(): void {
+    if (this.pendingEjectTimer !== null) {
+      window.clearTimeout(this.pendingEjectTimer);
+      this.pendingEjectTimer = null;
+    }
+    this.pendingEjectCard?.remove();
+    this.pendingEjectCard = null;
+  }
+
   public insertCartridge(id: CartridgeId, instant = false, skipSplash = false, forceFresh = false): void {
+    this.cancelPendingEject();
     const meta = getCartridgeMeta(id);
     const sameActive = this.host.activeCartridge === id && !forceFresh;
 
@@ -120,6 +149,7 @@ export class CartridgeSlotController {
       pulseHaptic(14);
       this.host.playUiSound('snap');
       this.hooks.onPlayRailSnap();
+      this.pulseBootVeil('is-inserting', 320);
     }
     this.mountSlotBadge(meta, !instant);
     this.slotState = skipSplash || instant ? { phase: 'running', id } : { phase: 'booting', id, timer: BOOT_SEC };
@@ -135,16 +165,21 @@ export class CartridgeSlotController {
   public eject(after?: () => void, instant = false): void {
     const id = this.getInserted();
     if (!id) {
+      if (this.pendingEjectTimer !== null && instant) {
+        this.cancelPendingEject();
+      }
       after?.();
       return;
     }
+    this.cancelPendingEject();
     this.host.unmount();
     this.host.playUiSound('bounce');
     this.slotState = { phase: 'empty' };
-    this.previewCode = '';
     const slotCard = this.slotCardEl;
 
     const done = () => {
+      this.pendingEjectTimer = null;
+      this.pendingEjectCard = null;
       slotCard?.remove();
       if (this.slotCardEl === slotCard) this.slotCardEl = null;
       this.refs.slotEl.classList.add('is-empty');
@@ -160,8 +195,11 @@ export class CartridgeSlotController {
     if (instant || !slotCard) {
       done();
     } else {
+      this.pulseBootVeil('is-ejecting', 260);
+      this.pendingEjectCard = slotCard;
+      slotCard.classList.remove('is-slot-bouncing');
       slotCard.classList.add('is-ejecting');
-      this.hooks.scheduleTimer(done, 240);
+      this.pendingEjectTimer = this.hooks.scheduleTimer(done, 250);
     }
   }
 
@@ -178,6 +216,11 @@ export class CartridgeSlotController {
   }
 
   public destroy(): void {
+    this.cancelPendingEject();
+    if (this.veilTimer !== null) {
+      window.clearTimeout(this.veilTimer);
+      this.veilTimer = null;
+    }
     this.slotCardEl?.remove();
     this.slotCardEl = null;
   }

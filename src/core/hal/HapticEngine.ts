@@ -132,6 +132,7 @@ const HAPTIC_SPECS: Record<HapticProfile, HapticSpec> = {
 
 const DUTY_WINDOW_MS = 1000;
 const MAX_DUTY_MOTOR_MS = 220;
+const NATIVE_JNI_COOLDOWN_MS = 45;
 
 interface MotorBurstRecord {
   at: number;
@@ -156,6 +157,7 @@ export class HapticEngine {
   private readonly clock: () => number;
 
   private lastProfileAt = new Map<HapticProfile, number>();
+  private lastNativeBridgeAt = -Infinity;
   private burstHistory: MotorBurstRecord[] = [];
 
   constructor(clock?: () => number) {
@@ -235,19 +237,25 @@ export class HapticEngine {
 
     let channel: HapticDispatchResult['channel'] = 'compensation_only';
 
-    // 1. Priority: Native HAL adapter (Android TWA JSBridge / Capacitor plugin)
-    if (this.nativeAdapter?.hapticTrigger) {
+    // 1. Priority: Native HAL adapter (Android TWA JSBridge / Capacitor plugin) with >=45ms global JNI cooldown
+    const hasNativeBridge = Boolean(
+      this.nativeAdapter?.hapticTrigger || this.nativeAdapter?.vibratePattern,
+    );
+    const nativeBridgeReady = now - this.lastNativeBridgeAt >= NATIVE_JNI_COOLDOWN_MS;
+    if (nativeBridgeReady && this.nativeAdapter?.hapticTrigger) {
       const handled = this.nativeAdapter.hapticTrigger(
         profile,
         reqIntensity,
         customDuration ?? spec.gamepadMs,
       );
       if (handled !== false) {
+        this.lastNativeBridgeAt = now;
         channel = 'native';
       }
-    } else if (this.nativeAdapter?.vibratePattern) {
+    } else if (nativeBridgeReady && this.nativeAdapter?.vibratePattern) {
       const handled = this.nativeAdapter.vibratePattern(scaledPattern);
       if (handled !== false) {
+        this.lastNativeBridgeAt = now;
         channel = 'native';
       }
     }
@@ -276,9 +284,10 @@ export class HapticEngine {
     }
 
     // 3. Browser navigator.vibrate (Android Chrome / WebView)
+    const nativeThrottled = hasNativeBridge && !nativeBridgeReady;
     const canWebVibrate =
       typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
-    if (channel === 'compensation_only' && canWebVibrate && !overBudget) {
+    if (channel === 'compensation_only' && !nativeThrottled && canWebVibrate && !overBudget) {
       try {
         const vibPattern = scaledPattern.length === 1 ? scaledPattern[0] : scaledPattern;
         const ok = navigator.vibrate(vibPattern);

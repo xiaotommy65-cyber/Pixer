@@ -303,40 +303,57 @@ export class SpriteAtelierView {
 
     // 16x16 Pixel Canvas Grid
     const board = el('div', 'pixel-board');
+    let lastPaintedKey = -1;
     const stopDrawing = () => {
       this.isDrawing = false;
+      lastPaintedKey = -1;
     };
-    board.addEventListener('pointerleave', stopDrawing, { signal: this.ac.signal });
+    const paintFromEvent = (clientX: number, clientY: number) => {
+      const rect = board.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const x = Math.floor(((clientX - rect.left) / rect.width) * TILE_PX);
+      const y = Math.floor(((clientY - rect.top) / rect.height) * TILE_PX);
+      if (x < 0 || x >= TILE_PX || y < 0 || y >= TILE_PX) return;
+      const key = y * TILE_PX + x;
+      if (key === lastPaintedKey) return;
+      lastPaintedKey = key;
+      this.applyPaintAt(x, y);
+    };
+
+    board.addEventListener(
+      'pointerdown',
+      (e) => {
+        e.preventDefault();
+        this.synth.unlock();
+        this.saveUndoSnapshot();
+        this.isDrawing = true;
+        lastPaintedKey = -1;
+        try {
+          board.setPointerCapture(e.pointerId);
+        } catch {
+          // Safe fallback if pointer capture is unavailable
+        }
+        paintFromEvent(e.clientX, e.clientY);
+      },
+      { signal: this.ac.signal },
+    );
+    board.addEventListener(
+      'pointermove',
+      (e) => {
+        if (!this.isDrawing || this.fillMode || this.activeStamp) return;
+        paintFromEvent(e.clientX, e.clientY);
+      },
+      { signal: this.ac.signal },
+    );
+    board.addEventListener('pointercancel', stopDrawing, { signal: this.ac.signal });
+    board.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
     window.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
     window.addEventListener('blur', stopDrawing, { signal: this.ac.signal });
 
     for (let i = 0; i < TILE_PX * TILE_PX; i++) {
-      const cell = el('div', 'pixel-cell');
-      const x = i % TILE_PX;
-      const y = Math.floor(i / TILE_PX);
-      cell.addEventListener(
-        'pointerdown',
-        (e) => {
-          e.preventDefault();
-          this.synth.unlock();
-          this.saveUndoSnapshot();
-          this.isDrawing = true;
-          this.applyPaintAt(x, y);
-        },
-        { signal: this.ac.signal },
-      );
-      cell.addEventListener(
-        'pointerenter',
-        () => {
-          if (this.isDrawing && !this.fillMode && !this.activeStamp) {
-            this.applyPaintAt(x, y);
-          }
-        },
-        { signal: this.ac.signal },
-      );
-      this.cellEls.push(cell);
-      board.appendChild(cell);
+      this.cellEls.push(el('div', 'pixel-cell'));
     }
+    board.append(...this.cellEls);
 
     // Sidebar controls
     const sidebar = el('div', 'atelier-sidebar');

@@ -65,9 +65,14 @@ export class TextureAtlas {
   private shelfY = DYNAMIC_START_Y;
   private shelfRowH = 0;
   private dirty = false;
+  private revision = 0;
 
   constructor() {
     this.buildInitialAtlas();
+  }
+
+  public getRevision(): number {
+    return this.revision;
   }
 
   private pixelUv(x0: number, y0: number, w: number, h: number): SpriteRect {
@@ -218,6 +223,7 @@ export class TextureAtlas {
     this.rects.set('hero_a', this.slotUv(1, 0));
     this.rects.set('hero_b', this.slotUv(2, 0));
     this.dirty = true;
+    this.revision++;
   }
 
   private allocateDynamicRegion(w: number, h: number): { x: number; y: number } {
@@ -253,6 +259,7 @@ export class TextureAtlas {
       if (startY >= DYNAMIC_START_Y) {
         this.blitRgbaBuffer(startX, startY, safeW, safeH, rgba);
         this.dirty = true;
+        this.revision++;
         return existing;
       }
     }
@@ -261,6 +268,7 @@ export class TextureAtlas {
     const rect = this.pixelUv(x, y, safeW, safeH);
     this.rects.set(id, rect);
     this.dirty = true;
+    this.revision++;
     return rect;
   }
 
@@ -276,6 +284,7 @@ export class TextureAtlas {
       if (startY >= DYNAMIC_START_Y) {
         this.blitIndexBufferAt(startX, startY, indices, safeW, safeH);
         this.dirty = true;
+        this.revision++;
         return existing;
       }
     }
@@ -284,6 +293,7 @@ export class TextureAtlas {
     const rect = this.pixelUv(x, y, safeW, safeH);
     this.rects.set(id, rect);
     this.dirty = true;
+    this.revision++;
     return rect;
   }
 

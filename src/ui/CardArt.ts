@@ -76,8 +76,30 @@ const ART: Record<string, ArtSpec> = {
 const W = 80;
 const H = 50;
 
+interface CardArtCacheEntry {
+  revision: number;
+  epoch: number;
+  urls: Map<CartridgeId, string>;
+}
+
+const cardArtCache = new WeakMap<TextureAtlas, CardArtCacheEntry>();
+let cardArtEpoch = 0;
+
+export function invalidateCardArtCache(): void {
+  cardArtEpoch++;
+}
+
 /** Paints a tiny pixel-art cartridge label from live atlas sprites (so the painted hero or custom cartridge shows up). */
 export function renderCardArt(atlas: TextureAtlas, id: CartridgeId): string {
+  const rev = atlas.getRevision();
+  let entry = cardArtCache.get(atlas);
+  if (!entry || entry.revision !== rev || entry.epoch !== cardArtEpoch) {
+    entry = { revision: rev, epoch: cardArtEpoch, urls: new Map() };
+    cardArtCache.set(atlas, entry);
+  }
+  const cached = entry.urls.get(id);
+  if (cached !== undefined) return cached;
+
   const customJson = !ART[id] ? getCartridgeJson(id) : undefined;
   const st0 = customJson?.stages[0];
   const spec: ArtSpec = ART[id] ?? {
@@ -129,7 +151,9 @@ export function renderCardArt(atlas: TextureAtlas, id: CartridgeId): string {
     }
     ctx.restore();
   }
-  return c.toDataURL('image/png');
+  const dataUrl = c.toDataURL('image/png');
+  entry.urls.set(id, dataUrl);
+  return dataUrl;
 }
 
 /** Renders a 320x180 pixel cover preview from a CartridgeJsonV1 stage for Workshop Polaroid PNG exports. */

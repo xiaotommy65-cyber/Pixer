@@ -100,13 +100,14 @@ export class DisplayThermalGovernor {
    * on this RAF invocation. Active gameplay runs uncapped at display refresh; idle surfaces pace
    * at 30fps (balanced/quality) or 20fps (eco) to avoid unnecessary phone heat.
    */
-  public shouldRenderThisFrame(dtSec: number, isActiveGameplay: boolean): boolean {
+  public shouldRenderThisFrame(dtSec: number, isActiveGameplay: boolean, idleTargetFps?: number): boolean {
     if (this.background) return false;
     if (isActiveGameplay) {
       this.idleAccumSec = 0;
       return true;
     }
-    const targetInterval = this.profile === 'eco' ? 1 / 20 : this.profile === 'quality' ? 0 : 1 / 30;
+    const fps = idleTargetFps ?? (this.profile === 'eco' ? 20 : this.profile === 'quality' ? 0 : 30);
+    const targetInterval = fps > 0 ? 1 / fps : 0;
     if (targetInterval <= 0) return true;
     this.idleAccumSec += dtSec;
     if (this.idleAccumSec >= targetInterval) {

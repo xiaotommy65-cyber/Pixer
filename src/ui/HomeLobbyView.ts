@@ -40,6 +40,7 @@ export class HomeLobbyView {
 
   private cartridges: readonly CartridgeMeta[] = [];
   private cardEls: HTMLElement[] = [];
+  private cardSubEls: HTMLElement[] = [];
   private cardArtImgs = new Map<CartridgeId, HTMLImageElement>();
   private focusRow: LobbyFocusRow = 'cards';
   private focusedCardIdx = 0;
@@ -69,6 +70,10 @@ export class HomeLobbyView {
     this.focusedMetaEl = el('span', 'lobby-quick-meta', '');
     topbar.append(greeting, this.focusedMetaEl);
 
+    const centerWindow = el('div', 'lobby-center-window');
+    centerWindow.setAttribute('aria-hidden', 'true');
+
+    const lowerDock = el('div', 'lobby-lower-dock');
     this.carouselEl = el('div', 'lobby-carousel');
 
     const bottomBar = el('div', 'lobby-bottom-bar');
@@ -107,7 +112,8 @@ export class HomeLobbyView {
 
     dock.append(this.editorBtn, this.settingsBtn);
     bottomBar.append(this.hintLineEl, dock);
-    this.element.append(topbar, this.carouselEl, bottomBar);
+    lowerDock.append(this.carouselEl, bottomBar);
+    this.element.append(topbar, centerWindow, lowerDock);
 
     this.rebuildCards();
   }
@@ -123,7 +129,12 @@ export class HomeLobbyView {
   public show(preferredCartridgeId?: CartridgeId | null): void {
     this.visible = true;
     this.focusRow = 'cards';
-    this.rebuildCards();
+    const nextList = this.host.listCartridges();
+    if (nextList.length !== this.cartridges.length) {
+      this.rebuildCards();
+    } else {
+      this.syncCardStates();
+    }
     if (preferredCartridgeId) {
       const idx = this.cartridges.findIndex((c) => c.id === preferredCartridgeId);
       if (idx >= 0) this.focusedCardIdx = idx;
@@ -149,11 +160,34 @@ export class HomeLobbyView {
     }
   }
 
+  public syncCardStates(): void {
+    const activeId = this.host.activeCartridge;
+    for (let i = 0; i < this.cartridges.length; i++) {
+      const meta = this.cartridges[i];
+      const card = this.cardEls[i];
+      const sub = this.cardSubEls[i];
+      if (!card || !sub) continue;
+
+      const rec = this.host.getRecord(meta.id);
+      const subText = rec ? `${meta.code} · ★${rec.bestStars}/${rec.starsTotal}` : `${meta.code} · ${meta.genre}`;
+      if (sub.textContent !== subText) sub.textContent = subText;
+
+      const pill = card.querySelector('.lobby-playing-pill');
+      const shouldShowPill = activeId === meta.id;
+      if (shouldShowPill && !pill) {
+        card.appendChild(el('span', 'lobby-playing-pill', '遊玩中'));
+      } else if (!shouldShowPill && pill) {
+        pill.remove();
+      }
+    }
+  }
+
   public rebuildCards(): void {
     this.listAc?.abort();
     this.listAc = new AbortController();
     this.carouselEl.innerHTML = '';
     this.cardEls = [];
+    this.cardSubEls = [];
     this.cardArtImgs.clear();
 
     this.cartridges = this.host.listCartridges();
@@ -201,6 +235,7 @@ export class HomeLobbyView {
       );
 
       this.cardEls.push(card);
+      this.cardSubEls.push(sub);
       this.carouselEl.appendChild(card);
     }
 
@@ -294,7 +329,14 @@ export class HomeLobbyView {
 
     const focusedCard = this.cardEls[this.focusedCardIdx];
     if (focusedCard && this.visible) {
-      focusedCard.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+      const targetLeft = Math.max(
+        0,
+        focusedCard.offsetLeft - (this.carouselEl.clientWidth - focusedCard.clientWidth) * 0.5,
+      );
+      this.carouselEl.scrollTo({
+        left: targetLeft,
+        behavior: playCardTick ? 'smooth' : 'auto',
+      });
     }
 
     this.cb.onFocusCartridge(meta);

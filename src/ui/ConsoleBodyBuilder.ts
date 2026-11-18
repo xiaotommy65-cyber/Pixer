@@ -19,7 +19,9 @@ export interface ConsoleBodyRefs {
   fpsTag: HTMLElement;
   screenFrame: HTMLElement;
   canvas: HTMLCanvasElement;
+  bootVeilEl: HTMLElement;
   screenFilterLayer: HTMLElement;
+  glassSheen: HTMLElement;
   resultOverlay: HTMLElement;
   resultTitle: HTMLElement;
   resultDesc: HTMLElement;
@@ -73,6 +75,9 @@ export function buildConsoleBodyDom(opts: {
   canvas.width = 960;
   canvas.height = 540;
 
+  const bootVeilEl = el('div', 'cartridge-boot-veil');
+  bootVeilEl.setAttribute('aria-hidden', 'true');
+
   const screenFilterLayer = el('div', 'screen-filter-layer');
   screenFilterLayer.dataset.filter = opts.initialFilter;
 
@@ -97,6 +102,7 @@ export function buildConsoleBodyDom(opts: {
     opts.shmupOverlay.element,
     opts.chronicleOverlay.element,
     resultOverlay,
+    bootVeilEl,
     screenFilterLayer,
     glassSheen,
   );
@@ -129,7 +135,9 @@ export function buildConsoleBodyDom(opts: {
     fpsTag,
     screenFrame,
     canvas,
+    bootVeilEl,
     screenFilterLayer,
+    glassSheen,
     resultOverlay,
     resultTitle,
     resultDesc,

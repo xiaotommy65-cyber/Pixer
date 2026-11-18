@@ -46,7 +46,7 @@ export class AudioBus {
       // Wrap AudioContext instantiation and DSP graph construction: autoplay policies,
       // device restrictions, or hardware driver errors can throw synchronously here.
       try {
-        const ctx = new AudioCtor();
+        const ctx = new AudioCtor({ latencyHint: 'interactive' });
 
         const dryBus = ctx.createGain();
         dryBus.gain.value = 1.0;

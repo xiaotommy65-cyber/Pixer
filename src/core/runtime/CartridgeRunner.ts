@@ -45,6 +45,9 @@ export class CartridgeRunner {
   private prevRestart = false;
   private debugHitboxes = false;
   private lastEmittedStageIdx = -1;
+  private cachedSnapshot: RenderSceneSnapshot | null = null;
+  private cachedSnapAlpha = -1;
+  private snapshotDirty = true;
 
   public sparkleBenchmark = false;
   public benchmarkSprites: BenchmarkSprite[] = [];
@@ -52,6 +55,11 @@ export class CartridgeRunner {
   constructor(initialId: CartridgeId = 'cloudberry-hop') {
     this.cartridgeId = initialId;
     this.instance = this.createInstance(initialId);
+  }
+
+  public invalidateSnapshot(): void {
+    this.snapshotDirty = true;
+    this.cachedSnapshot = null;
   }
 
   private createInstance(id: CartridgeId): CartridgeInstance {
@@ -83,6 +91,7 @@ export class CartridgeRunner {
     if (isDebuggableCartridge(this.instance)) {
       this.instance.setDebugHitboxes(this.debugHitboxes);
     }
+    this.invalidateSnapshot();
     return this.debugHitboxes;
   }
 
@@ -90,6 +99,7 @@ export class CartridgeRunner {
     this.cartridgeId = id;
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
+    this.invalidateSnapshot();
     this.instance = this.createInstance(id);
     let resumed = false;
     if (savedSram !== undefined && savedSram !== null && this.instance.hydrateSave) {
@@ -120,6 +130,7 @@ export class CartridgeRunner {
   public restart(): void {
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
+    this.invalidateSnapshot();
     this.instance = this.createInstance(this.cartridgeId);
     this.events.emit('cartridge:restarted', { id: this.cartridgeId });
     appLogger.info('lifecycle', 'cartridge.restart', `已重新啟動卡匣「${this.cartridgeId}」`, {
@@ -130,6 +141,7 @@ export class CartridgeRunner {
   public retryStage(): void {
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
+    this.invalidateSnapshot();
     if (this.instance.retryStage) {
       this.instance.retryStage();
     } else {
@@ -154,7 +166,9 @@ export class CartridgeRunner {
 
   public hydrateSave(raw: unknown): boolean {
     try {
-      return this.instance.hydrateSave?.(raw) ?? false;
+      const ok = this.instance.hydrateSave?.(raw) ?? false;
+      if (ok) this.invalidateSnapshot();
+      return ok;
     } catch (err) {
       appLogger.warn('parsing', 'cartridge.hydrateSave', `手動還原卡匣存檔失敗 (${this.cartridgeId})`, err, {
         cartridgeId: this.cartridgeId,
@@ -169,6 +183,7 @@ export class CartridgeRunner {
 
   public setParam<K extends keyof RuntimeParams>(key: K, value: RuntimeParams[K]): void {
     this.params[key] = value;
+    this.invalidateSnapshot();
     if (key === 'enemyCount' && this.cartridgeId === 'sandbox-toybox') {
       this.instance = this.createInstance('sandbox-toybox');
     }
@@ -190,6 +205,7 @@ export class CartridgeRunner {
     this.sandboxScript = code;
     this.cartridgeId = 'sandbox-toybox';
     this.lastEmittedStageIdx = -1;
+    this.invalidateSnapshot();
     const sb = this.createInstance('sandbox-toybox');
     this.instance = sb;
     this.accumulator = 0;
@@ -216,6 +232,7 @@ export class CartridgeRunner {
       }
       this.cartridgeId = 'emberkeep-dnd';
       this.lastEmittedStageIdx = -1;
+      this.invalidateSnapshot();
       this.instance = inst;
       this.accumulator = 0;
       this.interpolating = false;
@@ -255,6 +272,7 @@ export class CartridgeRunner {
 
   public dispatchCommand(commandId: string): void {
     const events = this.instance.dispatchCommand?.(commandId) ?? [];
+    this.invalidateSnapshot();
     for (const ev of events) {
       this.events.emit('sim:event', { cartridgeId: this.cartridgeId, event: ev, combo: 0 });
       this.eventListener?.(ev, { kind: ev, combo: 0 });
@@ -299,28 +317,24 @@ export class CartridgeRunner {
     this.accumulator += clamped;
     this.interpolating = true;
 
+    let stepped = false;
     while (this.accumulator >= STEP_DT) {
-      this.stepFixedInternal(STEP_DT, input, false);
+      this.stepFixedInternal(STEP_DT, input, false, false);
       this.accumulator -= STEP_DT;
+      stepped = true;
+    }
+    if (stepped && this.events.listenerCount('stage:changed') > 0) {
+      this.emitStageChangeIfNeeded();
     }
   }
 
   public stepFixed(dt: number, input: InputState): SimEvent[] {
     this.interpolating = false;
-    return this.stepFixedInternal(dt, input, true);
+    return this.stepFixedInternal(dt, input, true, true);
   }
 
-  private stepFixedInternal(dt: number, input: InputState, directStep: boolean): SimEvent[] {
-    this.instance.prepareFixedStep?.();
-    const events = this.instance.step(dt, input, this.params);
-    const combo = isComboTrackingCartridge(this.instance) ? this.instance.getComboCount() : 0;
-
-    for (const ev of events) {
-      this.events.emit('sim:event', { cartridgeId: this.cartridgeId, event: ev, combo });
-      this.eventListener?.(ev, { kind: ev, combo });
-    }
-
-    const snap = this.instance.snapshot(this.params, directStep ? 1 : this.getRenderAlpha());
+  private emitStageChangeIfNeeded(): void {
+    const snap = this.getSnapshot();
     if (snap.stage && snap.stage.index !== this.lastEmittedStageIdx) {
       this.lastEmittedStageIdx = snap.stage.index;
       this.events.emit('stage:changed', {
@@ -329,6 +343,22 @@ export class CartridgeRunner {
         total: snap.stage.total,
         name: snap.stage.name,
       });
+    }
+  }
+
+  private stepFixedInternal(dt: number, input: InputState, _directStep: boolean, emitStageCheck: boolean): SimEvent[] {
+    this.instance.prepareFixedStep?.();
+    const events = this.instance.step(dt, input, this.params);
+    this.invalidateSnapshot();
+    const combo = isComboTrackingCartridge(this.instance) ? this.instance.getComboCount() : 0;
+
+    for (const ev of events) {
+      this.events.emit('sim:event', { cartridgeId: this.cartridgeId, event: ev, combo });
+      this.eventListener?.(ev, { kind: ev, combo });
+    }
+
+    if (emitStageCheck && this.events.listenerCount('stage:changed') > 0) {
+      this.emitStageChangeIfNeeded();
     }
 
     if (this.sparkleBenchmark) {
@@ -357,6 +387,14 @@ export class CartridgeRunner {
   }
 
   public getSnapshot(): RenderSceneSnapshot {
-    return this.instance.snapshot(this.params, this.getRenderAlpha());
+    const alpha = this.getRenderAlpha();
+    if (!this.snapshotDirty && this.cachedSnapshot && this.cachedSnapAlpha === alpha) {
+      return this.cachedSnapshot;
+    }
+    const snap = this.instance.snapshot(this.params, alpha);
+    this.cachedSnapshot = snap;
+    this.cachedSnapAlpha = alpha;
+    this.snapshotDirty = false;
+    return snap;
   }
 }

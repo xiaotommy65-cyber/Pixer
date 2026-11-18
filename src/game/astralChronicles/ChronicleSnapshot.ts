@@ -12,112 +12,25 @@ import type {
 import { CHAPTER_SPECS, buildGearSummaries, getGearById } from './AstralChroniclesData.ts';
 import { getHeroAtk, getHeroDef, type ChronicleState } from './ChronicleCombat.ts';
 
-export function buildChaptersSummary(s: ChronicleState): ChronicleChapterSummary[] {
-  return CHAPTER_SPECS.map((ch) => ({
-    index: ch.index,
-    id: ch.id,
-    title: ch.title,
-    subtitle: ch.subtitle,
-    levelReq: ch.levelReq,
-    unlocked: ch.index < s.unlockedChapters,
-    cleared: s.clearedChapters.has(ch.index),
-    chestsFound: ch.chests.filter((c) => s.openedChestIds.has(c.id)).length,
-    chestsTotal: ch.chests.length,
-    bossDefeated: s.bossDefeatedChapters.has(ch.index),
-    accentHex: ch.accentHex,
-  }));
+const TOTAL_CHESTS = CHAPTER_SPECS.reduce((acc, c) => acc + c.chests.length, 0);
+const WALL_FACE_COLORS = ['#3b4d3f', '#3c4c7a', '#5b2b33', '#436b94', '#452866'] as const;
+const STATIC_CHAPTER_TILES = new Map<number, TileDesc[]>();
+
+interface ChronicleHudCache {
+  chaptersKey: string;
+  chapters: ChronicleChapterSummary[];
+  gearKey: string;
+  gear: ReturnType<typeof buildGearSummaries>;
 }
+const HUD_CACHE = new WeakMap<ChronicleState, ChronicleHudCache>();
 
-export function buildHudSnapshot(s: ChronicleState): ChronicleHudSnapshot {
-  const ch = CHAPTER_SPECS[s.chapterIdx];
-  const weapon = getGearById(s.equippedWeaponId);
-  const armor = getGearById(s.equippedArmorId);
-  const relic = getGearById(s.equippedRelicId);
+function getStaticChapterTiles(chapterIdx: number, gateOpen: boolean): TileDesc[] {
+  const key = chapterIdx * 2 + (gateOpen ? 1 : 0);
+  const cached = STATIC_CHAPTER_TILES.get(key);
+  if (cached) return cached;
 
-  let tutorialHint: string | null = null;
-  if (s.uiMode === 'PLAYING' && s.chapterIdx === 0) {
-    if (!s.hasSlashed) tutorialHint = '操作教學：移動靠近敵人，按 A 鍵（或 X 鍵）施展三段劍舞連擊';
-    else if (!s.hasDashed) tutorialHint = '操作教學：按 B 鍵（或空白鍵）翻滾閃避，擁有瞬間無敵幀';
-    else if (!s.hasUsedRelic) tutorialHint = '操作教學：按 Q 鍵或點擊右上「遺物技」消耗 MP 施放全向星爆';
-  }
-
-  const totalChests = CHAPTER_SPECS.reduce((acc, c) => acc + c.chests.length, 0);
-
-  return {
-    uiMode: s.uiMode,
-    hasSavedRun: s.hasSavedState,
-    chapterIndex: s.chapterIdx,
-    chapterTotal: CHAPTER_SPECS.length,
-    chapterTitle: ch.title,
-    areaTitle: ch.areaTitle,
-    hero: {
-      name: '星穹守望者',
-      level: s.heroLevel,
-      xp: s.heroXp,
-      nextXp: s.heroNextXp,
-      hp: Math.round(s.heroHp),
-      maxHp: s.heroMaxHp,
-      mp: Math.round(s.heroMp),
-      maxMp: s.heroMaxMp,
-      stamina: Math.round(s.heroStamina),
-      maxStamina: s.heroMaxStamina,
-      gold: s.heroGold,
-      atk: getHeroAtk(s),
-      def: getHeroDef(s),
-      potions: s.heroPotions,
-      kills: s.totalKills,
-      chestsFound: s.openedChestIds.size,
-      chestsTotal: totalChests,
-      equippedWeaponName: weapon.name,
-      equippedArmorName: armor.name,
-      equippedRelicName: relic.name,
-      relicMpCost: Math.max(10, relic.mpCost),
-    },
-    questObjective: ch.questObjective,
-    interactPrompt: s.activePrompt?.label ?? null,
-    tutorialHint,
-    pauseTab: s.pauseTab,
-    titleCursorIdx: s.titleCursorIdx,
-    mapCursorIdx: s.mapCursorIdx,
-    bagCursorIdx: s.bagCursorIdx,
-    gear: buildGearSummaries(
-      s.ownedGearIds,
-      s.equippedWeaponId,
-      s.equippedArmorId,
-      s.equippedRelicId,
-    ),
-    chapters: buildChaptersSummary(s),
-    cutscene: s.cutscene.getViewSnapshot(),
-    boss: s.boss
-      ? {
-          name: s.boss.name,
-          subtitle: s.boss.subtitle,
-          hp: Math.max(0, s.boss.hp),
-          maxHp: s.boss.maxHp,
-          phase: s.boss.phase,
-        }
-      : undefined,
-    camera: {
-      zoom: Number(s.camera.zoom.toFixed(2)),
-      letterbox: Number(s.camera.letterbox.toFixed(2)),
-      mode: s.camera.mode,
-    },
-  };
-}
-
-export function buildChronicleSceneSnapshot(
-  s: ChronicleState,
-  params: RuntimeParams,
-  status: 'playing' | 'won' | 'lost',
-): RenderSceneSnapshot {
-  const ch = CHAPTER_SPECS[s.chapterIdx];
-  const t = s.juice.visualTime;
-  const glow = params.glowIntensity;
-  const camFields = s.camera.toSnapshotFields(s.juice.shakeX, s.juice.shakeY);
-
-  const wallFaceColors = ['#3b4d3f', '#3c4c7a', '#5b2b33', '#436b94', '#452866'];
-  const wallFaceHex = wallFaceColors[s.chapterIdx] ?? '#3b3854';
-
+  const ch = CHAPTER_SPECS[chapterIdx];
+  const wallFaceHex = WALL_FACE_COLORS[chapterIdx] ?? '#3b3854';
   const tiles: TileDesc[] = [];
   const tileStep = 24;
   for (let x = 0; x < ch.worldW; x += tileStep) {
@@ -147,13 +60,18 @@ export function buildChronicleSceneSnapshot(
         elevationZ: 9,
         extrudeH: isBottomSeg ? 10 : 0,
         wallColor: wallFaceHex,
-        wallMaterial: wall.sprite === 'tree_canopy' ? 'earth' : ch.id === 'ch4-frostspire' || ch.id === 'ch5-core' ? 'astral' : 'stone',
+        wallMaterial:
+          wall.sprite === 'tree_canopy'
+            ? 'earth'
+            : ch.id === 'ch4-frostspire' || ch.id === 'ch5-core'
+              ? 'astral'
+              : 'stone',
         castShadow: isBottomSeg,
         sortY: columnSortY,
       });
     }
   }
-  if (!s.gateOpen) {
+  if (!gateOpen) {
     const g = ch.gateWall;
     const gateSortY = g.y + g.h;
     for (let gy = g.y; gy < g.y + g.h; gy += 16) {
@@ -175,6 +93,127 @@ export function buildChronicleSceneSnapshot(
       });
     }
   }
+  STATIC_CHAPTER_TILES.set(key, tiles);
+  return tiles;
+}
+
+export function buildChaptersSummary(s: ChronicleState): ChronicleChapterSummary[] {
+  return CHAPTER_SPECS.map((ch) => ({
+    index: ch.index,
+    id: ch.id,
+    title: ch.title,
+    subtitle: ch.subtitle,
+    levelReq: ch.levelReq,
+    unlocked: ch.index < s.unlockedChapters,
+    cleared: s.clearedChapters.has(ch.index),
+    chestsFound: ch.chests.filter((c) => s.openedChestIds.has(c.id)).length,
+    chestsTotal: ch.chests.length,
+    bossDefeated: s.bossDefeatedChapters.has(ch.index),
+    accentHex: ch.accentHex,
+  }));
+}
+
+export function buildHudSnapshot(s: ChronicleState): ChronicleHudSnapshot {
+  const ch = CHAPTER_SPECS[s.chapterIdx];
+  const weapon = getGearById(s.equippedWeaponId);
+  const armor = getGearById(s.equippedArmorId);
+  const relic = getGearById(s.equippedRelicId);
+
+  let tutorialHint: string | null = null;
+  if (s.uiMode === 'PLAYING' && s.chapterIdx === 0) {
+    if (!s.hasSlashed) tutorialHint = '操作教學：移動靠近敵人，按 A 鍵（或 X 鍵）施展三段劍舞連擊';
+    else if (!s.hasDashed) tutorialHint = '操作教學：按 B 鍵（或空白鍵）翻滾閃避，擁有瞬間無敵幀';
+    else if (!s.hasUsedRelic) tutorialHint = '操作教學：按 Q 鍵或點擊右上「遺物技」消耗 MP 施放全向星爆';
+  }
+
+  let cache = HUD_CACHE.get(s);
+  if (!cache) {
+    cache = { chaptersKey: '', chapters: [], gearKey: '', gear: [] };
+    HUD_CACHE.set(s, cache);
+  }
+  const chaptersKey = `${s.unlockedChapters}|${s.clearedChapters.size}|${s.bossDefeatedChapters.size}|${s.openedChestIds.size}`;
+  if (cache.chaptersKey !== chaptersKey) {
+    cache.chaptersKey = chaptersKey;
+    cache.chapters = buildChaptersSummary(s);
+  }
+  const gearKey = `${s.ownedGearIds.size}|${s.equippedWeaponId}|${s.equippedArmorId}|${s.equippedRelicId}`;
+  if (cache.gearKey !== gearKey) {
+    cache.gearKey = gearKey;
+    cache.gear = buildGearSummaries(
+      s.ownedGearIds,
+      s.equippedWeaponId,
+      s.equippedArmorId,
+      s.equippedRelicId,
+    );
+  }
+
+  return {
+    uiMode: s.uiMode,
+    hasSavedRun: s.hasSavedState,
+    chapterIndex: s.chapterIdx,
+    chapterTotal: CHAPTER_SPECS.length,
+    chapterTitle: ch.title,
+    areaTitle: ch.areaTitle,
+    hero: {
+      name: '星穹守望者',
+      level: s.heroLevel,
+      xp: s.heroXp,
+      nextXp: s.heroNextXp,
+      hp: Math.round(s.heroHp),
+      maxHp: s.heroMaxHp,
+      mp: Math.round(s.heroMp),
+      maxMp: s.heroMaxMp,
+      stamina: Math.round(s.heroStamina),
+      maxStamina: s.heroMaxStamina,
+      gold: s.heroGold,
+      atk: getHeroAtk(s),
+      def: getHeroDef(s),
+      potions: s.heroPotions,
+      kills: s.totalKills,
+      chestsFound: s.openedChestIds.size,
+      chestsTotal: TOTAL_CHESTS,
+      equippedWeaponName: weapon.name,
+      equippedArmorName: armor.name,
+      equippedRelicName: relic.name,
+      relicMpCost: Math.max(10, relic.mpCost),
+    },
+    questObjective: ch.questObjective,
+    interactPrompt: s.activePrompt?.label ?? null,
+    tutorialHint,
+    pauseTab: s.pauseTab,
+    titleCursorIdx: s.titleCursorIdx,
+    mapCursorIdx: s.mapCursorIdx,
+    bagCursorIdx: s.bagCursorIdx,
+    gear: cache.gear,
+    chapters: cache.chapters,
+    cutscene: s.cutscene.getViewSnapshot(),
+    boss: s.boss
+      ? {
+          name: s.boss.name,
+          subtitle: s.boss.subtitle,
+          hp: Math.max(0, s.boss.hp),
+          maxHp: s.boss.maxHp,
+          phase: s.boss.phase,
+        }
+      : undefined,
+    camera: {
+      zoom: Number(s.camera.zoom.toFixed(2)),
+      letterbox: Number(s.camera.letterbox.toFixed(2)),
+      mode: s.camera.mode,
+    },
+  };
+}
+
+export function buildChronicleSceneSnapshot(
+  s: ChronicleState,
+  params: RuntimeParams,
+  status: 'playing' | 'won' | 'lost',
+): RenderSceneSnapshot {
+  const ch = CHAPTER_SPECS[s.chapterIdx];
+  const t = s.juice.visualTime;
+  const glow = params.glowIntensity;
+  const camFields = s.camera.toSnapshotFields(s.juice.shakeX, s.juice.shakeY);
+  const tiles = getStaticChapterTiles(s.chapterIdx, s.gateOpen);
 
   const entities: EntityDesc[] = [];
   const lights: LightDesc[] = [];

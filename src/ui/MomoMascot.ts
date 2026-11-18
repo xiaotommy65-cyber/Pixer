@@ -1,6 +1,22 @@
 import { PALETTE_RGB, TILE_PX, type SpriteId, type TextureAtlas } from '../assets/TextureAtlas.ts';
 
+interface AtlasSpriteCanvasCache {
+  revision: number;
+  sprites: Map<SpriteId, HTMLCanvasElement>;
+}
+
+const spriteCanvasCache = new WeakMap<TextureAtlas, AtlasSpriteCanvasCache>();
+
 export function atlasSpriteToCanvas(atlas: TextureAtlas, spriteId: SpriteId): HTMLCanvasElement {
+  const rev = atlas.getRevision();
+  let entry = spriteCanvasCache.get(atlas);
+  if (!entry || entry.revision !== rev) {
+    entry = { revision: rev, sprites: new Map() };
+    spriteCanvasCache.set(atlas, entry);
+  }
+  const cached = entry.sprites.get(spriteId);
+  if (cached) return cached;
+
   const rect = atlas.getRect(spriteId);
   const srcX = Math.floor(rect.u0 * atlas.width);
   const srcY = Math.floor(rect.v0 * atlas.height);
@@ -22,6 +38,7 @@ export function atlasSpriteToCanvas(atlas: TextureAtlas, spriteId: SpriteId): HT
     }
   }
   octx.putImageData(img, 0, 0);
+  entry.sprites.set(spriteId, off);
   return off;
 }
 

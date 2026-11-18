@@ -6,6 +6,8 @@ import type { GpuFrameStats } from '../core/gpu/GpuTypes.ts';
 import type { TextureAtlas } from '../assets/TextureAtlas.ts';
 import type { HapticSide } from '../core/hal/HapticEngine.ts';
 import type { ErgonomicGripMode } from '../core/hal/SystemHal.ts';
+import type { BootPickupStage } from './BootBlinkOverlay.ts';
+import { invalidateCardArtCache } from './CardArt.ts';
 import { CartridgeSlotController, type ConsolePhase } from './CartridgeSlotController.ts';
 import { ChronicleOverlayView } from './ChronicleOverlayView.ts';
 import { buildConsoleBodyDom } from './ConsoleBodyBuilder.ts';
@@ -50,11 +52,13 @@ export class ConsoleView {
   private readonly rightJoyconEl: HTMLElement;
   private readonly auxRailEl: HTMLElement;
   private readonly screenFrame: HTMLElement;
+  private readonly glassSheenEl: HTMLElement;
   private readonly deskWorld: DeskWorldView;
   private readonly ac = new AbortController();
   private readonly activeTimers = new Set<number>();
   private readonly recoilTimers = new WeakMap<HTMLElement, number>();
   private readonly busUnsubs: (() => void)[] = [];
+  private readonly trackResizeObserver: ResizeObserver | null = null;
 
   private readonly gamepad: VirtualGamepadInput;
   private readonly slots: CartridgeSlotController;
@@ -65,6 +69,10 @@ export class ConsoleView {
   private hwGamepadLabel: string | null = null;
   private debugHitboxesOn = false;
   private lastParallaxMs = 0;
+  private spatialTrackWidth = 0;
+  private activeDeskPage: 0 | 1 | 2 = 1;
+  private isDeskScrolling = false;
+  private deskScrollTimer: number | null = null;
 
   constructor(host: EngineHost, atlas: TextureAtlas, onExitLandscape: (() => void) | undefined, opts: ConsoleViewOptions) {
     this.host = host;
@@ -148,6 +156,7 @@ export class ConsoleView {
     });
     this.bodyEl = body.bodyEl;
     this.screenFrame = body.screenFrame;
+    this.glassSheenEl = body.glassSheen;
     this.canvas = body.canvas;
 
     this.consoleEl.append(rig.portraitRailBridge, this.auxRailEl, this.leftJoyconEl, this.bodyEl, this.rightJoyconEl);
@@ -164,6 +173,15 @@ export class ConsoleView {
     consoleSlot.append(this.consoleEl, this.deskWorld.handsOverlayEl);
     this.spatialTrackEl.append(this.deskWorld.notebookPropEl, consoleSlot, this.deskWorld.trayPropEl);
     this.element.append(this.deskWorld.deskBgEl, this.spatialTrackEl, this.deskWorld.portraitPagerEl);
+
+    const syncTrackWidth = () => {
+      this.spatialTrackWidth = this.spatialTrackEl.clientWidth;
+    };
+    if (typeof ResizeObserver !== 'undefined') {
+      this.trackResizeObserver = new ResizeObserver(syncTrackWidth);
+      this.trackResizeObserver.observe(this.spatialTrackEl);
+    }
+    window.addEventListener('resize', syncTrackWidth, { passive: true, signal: this.ac.signal });
 
     this.hud = new ConsoleHudPresenter(
       host,
@@ -207,6 +225,7 @@ export class ConsoleView {
         ejectBtn: body.ejectBtn,
         clearSaveBtn: body.clearSaveBtn,
         screenFrame: body.screenFrame,
+        bootVeilEl: body.bootVeilEl,
         ledStrips: rig.ledStrips,
       },
       {
@@ -216,7 +235,6 @@ export class ConsoleView {
         },
         onShowEmpty: () => {
           this.hud.showEmpty();
-          this.router.returnToHomeLobby();
         },
         onPlayRailSnap: () => this.playRailSnap(),
         onSlotClick: () => this.router.openCartridgeDrawer(),
@@ -258,6 +276,9 @@ export class ConsoleView {
           this.setParallax(0, 0);
         }
       },
+      hasInsertedCartridge: () => Boolean(this.slots.getInserted()),
+      isEjectingCartridge: () => this.slots.isEjecting(),
+      onRequestEject: (after) => this.slots.eject(after),
     });
 
     this.consoleEl.addEventListener(
@@ -273,10 +294,23 @@ export class ConsoleView {
     this.spatialTrackEl.addEventListener(
       'scroll',
       () => {
-        const w = this.spatialTrackEl.clientWidth;
+        this.isDeskScrolling = true;
+        if (this.deskScrollTimer !== null) {
+          window.clearTimeout(this.deskScrollTimer);
+        }
+        this.deskScrollTimer = this.scheduleTimer(() => {
+          this.deskScrollTimer = null;
+          this.isDeskScrolling = false;
+        }, 180);
+
+        const w = this.spatialTrackWidth || this.spatialTrackEl.clientWidth;
         if (w <= 0) return;
         const idx = Math.max(0, Math.min(2, Math.round(this.spatialTrackEl.scrollLeft / w))) as 0 | 1 | 2;
-        this.deskWorld.setActivePage(idx);
+        if (idx !== this.activeDeskPage) {
+          this.activeDeskPage = idx;
+          this.deskWorld.setActivePage(idx);
+          if (idx !== 1) this.setParallax(0, 0);
+        }
       },
       { passive: true, signal: this.ac.signal },
     );
@@ -285,8 +319,14 @@ export class ConsoleView {
       'pointermove',
       (e) => {
         if (e.pointerType !== 'mouse') return;
-        const phase = this.router.getShellPhase();
-        if (phase === 'IN_EDITOR' || phase === 'IN_GAME') return;
+        if (
+          this.router.getShellPhase() !== 'HOME_LOBBY' ||
+          this.router.getBootStage() !== 'awake' ||
+          this.isDeskScrolling ||
+          this.activeDeskPage !== 1
+        ) {
+          return;
+        }
         const now = performance.now();
         if (now - this.lastParallaxMs < 24) return;
         this.lastParallaxMs = now;
@@ -303,9 +343,18 @@ export class ConsoleView {
     window.addEventListener(
       'deviceorientation',
       (ev) => {
-        const phase = this.router.getShellPhase();
-        if (phase === 'IN_EDITOR' || phase === 'IN_GAME') return;
+        if (
+          this.router.getShellPhase() !== 'HOME_LOBBY' ||
+          this.router.getBootStage() !== 'awake' ||
+          this.isDeskScrolling ||
+          this.activeDeskPage !== 1
+        ) {
+          return;
+        }
         if (ev.gamma === null || ev.beta === null) return;
+        const now = performance.now();
+        if (now - this.lastParallaxMs < 48) return;
+        this.lastParallaxMs = now;
         const nx = Math.max(-1, Math.min(1, ev.gamma / 30));
         const ny = Math.max(-1, Math.min(1, (ev.beta - 35) / 30));
         this.setParallax(nx, ny);
@@ -318,10 +367,12 @@ export class ConsoleView {
 
     this.busUnsubs.push(
       this.host.events.on('plugin:registered', () => {
+        invalidateCardArtCache();
         this.router.refreshCards();
         this.deskWorld.rebuildTray();
       }),
       this.host.events.on('sprite:registered', () => {
+        invalidateCardArtCache();
         this.router.refreshCardArt();
         this.deskWorld.rebuildTray();
       }),
@@ -329,24 +380,37 @@ export class ConsoleView {
   }
 
   private setParallax(nx: number, ny: number): void {
-    this.element.style.setProperty('--px', nx.toFixed(3));
-    this.element.style.setProperty('--py', ny.toFixed(3));
+    const px = nx.toFixed(3);
+    const py = ny.toFixed(3);
+    this.deskWorld.deskBgEl.style.setProperty('--px', px);
+    this.deskWorld.deskBgEl.style.setProperty('--py', py);
+    this.glassSheenEl.style.setProperty('--px', px);
+    this.glassSheenEl.style.setProperty('--py', py);
+    this.consoleEl.style.setProperty('--px', px);
+    this.consoleEl.style.setProperty('--py', py);
   }
 
   private scrollToDeskPage(pageIdx: 0 | 1 | 2, smooth: boolean): void {
-    const w = this.spatialTrackEl.clientWidth;
+    const w = this.spatialTrackWidth || this.spatialTrackEl.clientWidth;
     if (w > 0) {
       this.spatialTrackEl.scrollTo({
         left: w * pageIdx,
         behavior: smooth ? 'smooth' : 'auto',
       });
     }
+    this.activeDeskPage = pageIdx;
     this.deskWorld.setActivePage(pageIdx);
   }
 
   public startBootSequence(): void {
     this.router.startBootSequence();
-    requestAnimationFrame(() => this.scrollToDeskPage(1, false));
+    requestAnimationFrame(() => {
+      this.spatialTrackWidth = this.spatialTrackEl.clientWidth;
+      this.scrollToDeskPage(1, false);
+    });
+  }
+  public getBootStage(): BootPickupStage {
+    return this.router.getBootStage();
   }
   public getShellPhase(): ShellPhase {
     return this.router.getShellPhase();
@@ -418,6 +482,7 @@ export class ConsoleView {
 
   public destroy(): void {
     this.hud.resetOverlays();
+    this.trackResizeObserver?.disconnect();
     for (const off of this.busUnsubs) off();
     this.busUnsubs.length = 0;
     this.deskWorld.destroy();
@@ -494,7 +559,7 @@ export class ConsoleView {
   }
 
   public eject(after?: () => void, instant = false): void {
-    this.slots.eject(after, instant);
+    this.slots.eject(after ?? (() => this.router.returnToHomeLobby()), instant);
   }
 
   public updateHud(snap: RenderSceneSnapshot, stats: GpuFrameStats, fps: number): void {

@@ -315,10 +315,12 @@ export class EngineHost {
 
   public stepFrame(dt: number, input: InputState): void {
     if (this.paused) {
-      const pausedSnap = this.runner.getSnapshot();
-      this.synth.setBgmTheme(
-        this.activeCartridgeId && pausedSnap.status === 'playing' ? (pausedSnap.bgmTheme ?? null) : null,
-      );
+      if (this.activeCartridgeId) {
+        const pausedSnap = this.runner.getSnapshot();
+        this.synth.setBgmTheme(pausedSnap.status === 'playing' ? (pausedSnap.bgmTheme ?? null) : null);
+      } else {
+        this.synth.setBgmTheme(null);
+      }
       this.synth.tickBgm(dt);
       return;
     }
@@ -386,6 +388,7 @@ export class EngineHost {
 
   public resetParams(): void {
     Object.assign(this.runner.getParams(), DEFAULT_RUNTIME_PARAMS);
+    this.runner.invalidateSnapshot();
   }
 
   public getSandboxScript(): string {

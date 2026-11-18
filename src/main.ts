@@ -167,6 +167,7 @@ export function createApp(): AppHandle | null {
         studioWorkbench?.hide();
         utilityBar.classList.remove('panel-hidden');
         consoleView.setInEditor(false);
+        handleViewportMetrics();
         if (targetCartridgeId) {
           consoleView.launchCartridge(targetCartridgeId, true);
         }
@@ -443,7 +444,14 @@ export function createApp(): AppHandle | null {
     { signal },
   );
 
+  const isImeOrEditorActive = (): boolean => {
+    if (consoleView.getShellPhase() === 'IN_EDITOR') return true;
+    const tag = document.activeElement?.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  };
+
   const handleViewportMetrics = () => {
+    if (isImeOrEditorActive()) return;
     governor.setViewportMetrics(window.innerWidth, window.devicePixelRatio || 1, isCompactViewport());
     syncGovernorResolution();
   };
@@ -503,7 +511,18 @@ export function createApp(): AppHandle | null {
           const activeSim = consoleView.isSimulationActive() && consoleView.getPhase() === 'running';
           nativeBridge.setKeepAwake(activeSim);
 
-          if (governor.shouldRenderThisFrame(dt, activeSim)) {
+          const bootStage = shellPhase === 'BOOT_BLINK' ? consoleView.getBootStage() : 'awake';
+          const skipIdleRender = shellPhase === 'BOOT_BLINK' && (bootStage === 'standby' || bootStage === 'picking');
+          const idleTargetFps =
+            shellPhase === 'HOME_LOBBY'
+              ? perfProfile === 'quality'
+                ? 30
+                : 20
+              : skipIdleRender
+                ? 15
+                : undefined;
+
+          if (governor.shouldRenderThisFrame(dt, activeSim, idleTargetFps)) {
             const frameT0 = performance.now();
             consoleView.tick(dt);
             if (activeSim) {
@@ -518,7 +537,7 @@ export function createApp(): AppHandle | null {
                 const snap = host.getSnapshot();
                 const stats = bridge.render(gpuEngine, snap, runner.sparkleBenchmark ? runner.benchmarkSprites : null);
                 consoleView.updateHud(snap, stats, fpsSmooth);
-              } else {
+              } else if (!skipIdleRender) {
                 const stats = bridge.renderIdle(gpuEngine, now / 1000, false);
                 consoleView.updateStats(stats, fpsSmooth);
               }

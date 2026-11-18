@@ -541,7 +541,8 @@
 .slot-window {
   position: absolute;
   inset: 0 0 4px 0;
-  overflow: hidden;
+  overflow: visible;
+  clip-path: inset(-100px -16px 0 -16px);
 }
 
 .slot-mouth {
@@ -602,19 +603,19 @@
 }
 
 .slot-card.is-ejecting {
-  animation: slotOut 300ms ease-in forwards;
+  animation: slotOut 260ms ease-in forwards;
 }
 
 @keyframes slotIn {
-  0% { transform: translateY(-40px); }
+  0% { transform: translateY(-62px); }
   70% { transform: translateY(3px); }
   100% { transform: translateY(0); }
 }
 
 @keyframes slotOut {
   0% { transform: translateY(0); }
-  40% { transform: translateY(6px); }
-  100% { transform: translateY(-44px) rotate(-6deg); opacity: 0; }
+  35% { transform: translateY(6px); }
+  100% { transform: translateY(-66px) rotate(-8deg); opacity: 0; }
 }
 
 .slot-led {
@@ -739,6 +740,9 @@
   overflow: hidden;
   border: 3.5px solid #161114;
   background: #6dbcf2;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   box-shadow:
     inset 0 1.5px 0 rgba(255, 255, 255, 0.34),
     inset 0 4px 10px rgba(0, 0, 0, 0.42),
@@ -785,6 +789,35 @@
   height: 100%;
   display: block;
   image-rendering: pixelated;
+}
+
+.cartridge-boot-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(255, 250, 240, 0.92) 0%, rgba(28, 22, 29, 0.94) 100%);
+}
+
+.cartridge-boot-veil.is-inserting {
+  animation: bootVeilInsert 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cartridge-boot-veil.is-ejecting {
+  animation: bootVeilEject 260ms ease-out;
+}
+
+@keyframes bootVeilInsert {
+  0% { opacity: 0.72; }
+  45% { opacity: 0.28; }
+  100% { opacity: 0; }
+}
+
+@keyframes bootVeilEject {
+  0% { opacity: 0; }
+  35% { opacity: 0.65; }
+  100% { opacity: 0; }
 }
 
 .screen-overlay {
@@ -1157,7 +1190,7 @@
       'left right';
     row-gap: 15px;
     column-gap: 6px;
-    margin-top: 38px;
+    margin-top: 52px;
     padding-bottom: 4px;
   }
 
@@ -1271,6 +1304,7 @@
   }
 
   .joycon.is-left {
+    padding-left: max(10px, calc(5px + env(safe-area-inset-left)));
     border-right: 3px solid var(--ink);
     border-radius: 14px 12px 14px 36px;
     box-shadow:
@@ -1280,6 +1314,7 @@
   }
 
   .joycon.is-right {
+    padding-right: max(10px, calc(5px + env(safe-area-inset-right)));
     border-left: 3px solid var(--ink);
     border-radius: 12px 14px 36px 14px;
     box-shadow:
@@ -1392,7 +1427,7 @@
     grid-template-columns: clamp(86px, 14vw, 108px) minmax(0, 1fr) clamp(86px, 14vw, 108px);
     grid-template-areas: 'left body right';
     gap: 0;
-    margin-top: 18px;
+    margin-top: 28px;
     padding-bottom: 0;
   }
 
@@ -1451,11 +1486,13 @@
   }
 
   .joycon.is-left {
+    padding-left: max(10px, calc(5px + env(safe-area-inset-left)));
     border-right: none;
     border-radius: 36px 8px 8px 36px / 40px 8px 8px 40px;
   }
 
   .joycon.is-right {
+    padding-right: max(10px, calc(5px + env(safe-area-inset-right)));
     border-left: none;
     border-radius: 8px 36px 36px 8px / 8px 40px 40px 8px;
   }
@@ -1609,6 +1646,14 @@
 .atelier-shell.is-handheld-landscape .joycon.is-right {
   border-left: none;
   border-radius: 8px 42px 42px 8px / 8px 48px 48px 8px;
+}
+
+.atelier-shell.is-handheld-landscape:not(.is-rotated-90) .joycon.is-left {
+  padding-left: max(12px, calc(6px + env(safe-area-inset-left)));
+}
+
+.atelier-shell.is-handheld-landscape:not(.is-rotated-90) .joycon.is-right {
+  padding-right: max(12px, calc(6px + env(safe-area-inset-right)));
 }
 
 .atelier-shell.is-handheld-landscape .jc-bumper {
@@ -2143,6 +2188,9 @@
   display: flex;
   flex-direction: column;
   font-variant-numeric: tabular-nums;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .chr-btn {
@@ -2160,6 +2208,9 @@
   white-space: nowrap;
   cursor: pointer;
   touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 2.5px 0 #090b16;
@@ -2286,6 +2337,10 @@
   justify-content: space-between;
   gap: 6px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 212, 71, 0.55) rgba(10, 14, 28, 0.6);
 }
@@ -2340,10 +2395,20 @@
   gap: 2.5px;
   cursor: pointer;
   touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 2.5px 0 rgba(5, 7, 15, 0.92);
   transition: transform 90ms var(--ease-bounce), border-color 120ms ease, background 120ms ease;
+}
+
+.chr-card:focus:not(:focus-visible),
+.chr-btn:focus:not(:focus-visible),
+.chr-tab:focus:not(:focus-visible),
+.chr-choice:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .chr-card.is-selected {
@@ -2713,6 +2778,10 @@
   font-weight: 700;
   padding: 3px 8px;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .chr-choice.is-selected {
@@ -2795,6 +2864,10 @@
   padding: 3px 9px;
   white-space: nowrap;
   cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .chr-tab.is-active {
@@ -2805,6 +2878,7 @@
 
 .chr-pause-body {
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -3026,7 +3100,7 @@
   max-width: 450px;
   margin-left: auto;
   margin-right: auto;
-  margin-top: 40px;
+  margin-top: 50px;
   row-gap: 14px;
   column-gap: 6px;
   align-items: stretch;
@@ -3163,7 +3237,7 @@
   .switch-console.is-grip-one-right,
   .switch-console.is-grip-one-left {
     max-width: none;
-    margin-top: 36px;
+    margin-top: 50px;
   }
 
   .switch-console.is-grip-one-right {

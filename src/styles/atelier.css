@@ -102,9 +102,23 @@ body::before {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font-family: inherit;
   color: inherit;
+}
+
+button:focus:not(:focus-visible),
+[role='button']:focus:not(:focus-visible) {
+  outline: none;
+}
+
+input,
+textarea,
+select {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .atelier-shell {
@@ -116,6 +130,15 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.switch-stage {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* Header Bar */
@@ -441,7 +464,10 @@ textarea {
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   touch-action: none;
+  -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: contain;
   box-shadow: 0 4px 0 var(--ink);
 }
 
@@ -1426,6 +1452,7 @@ body.is-handheld-lock {
 
 .workshop-level-scroll {
   overflow-x: auto;
+  overscroll-behavior: contain;
   border: 2.5px solid var(--ink);
   border-radius: 12px;
   background: linear-gradient(180deg, #9ed9ff 0%, #fff6e5 100%);
@@ -1438,7 +1465,10 @@ body.is-handheld-lock {
   display: grid;
   gap: 1px;
   width: max-content;
+  -webkit-user-select: none;
   user-select: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: contain;
   touch-action: none;
 }
 

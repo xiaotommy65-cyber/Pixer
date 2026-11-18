@@ -40,6 +40,9 @@ export interface ConsoleShellRouterCallbacks {
   onFilterChange?: (mode: ScreenFilterMode) => void;
   onBootStageChange?: (stage: BootPickupStage) => void;
   onShellPhaseChange?: (phase: ShellPhase) => void;
+  hasInsertedCartridge?: () => boolean;
+  isEjectingCartridge?: () => boolean;
+  onRequestEject?: (after: () => void) => void;
 }
 
 /**
@@ -58,6 +61,9 @@ export class ConsoleShellRouter {
   private returnPhaseFromEditor: 'HOME_LOBBY' | 'IN_GAME' = 'HOME_LOBBY';
   private screenFilter: ScreenFilterMode;
   private prevLobbyInput: InputState = createEmptyInputState();
+  private lastLaunchAt = 0;
+  private lastLaunchId: CartridgeId | null = null;
+  private lastLaunchFresh = false;
 
   constructor(host: EngineHost, atlas: TextureAtlas, callbacks: ConsoleShellRouterCallbacks) {
     this.host = host;
@@ -127,6 +133,10 @@ export class ConsoleShellRouter {
     }
   }
 
+  public getBootStage(): BootPickupStage {
+    return this.bootBlink.getStage();
+  }
+
   public getShellPhase(): ShellPhase {
     return this.shellPhase;
   }
@@ -171,13 +181,26 @@ export class ConsoleShellRouter {
       this.cb.shellRootEl.classList.remove('panel-hidden');
       this.setShellPhase(this.returnPhaseFromEditor);
       if (this.shellPhase === 'HOME_LOBBY') {
-        this.homeLobby.show(this.host.activeCartridge);
+        this.homeLobby.show(this.host.activeCartridge ?? this.lastLaunchId);
       }
     }
     this.syncPauseState();
   }
 
   public launchCartridge(id: CartridgeId, forceFresh = false): void {
+    const now = performance.now();
+    if (
+      this.shellPhase === 'IN_GAME' &&
+      this.lastLaunchId === id &&
+      this.lastLaunchFresh === forceFresh &&
+      now - this.lastLaunchAt < 220
+    ) {
+      return;
+    }
+    this.lastLaunchAt = now;
+    this.lastLaunchId = id;
+    this.lastLaunchFresh = forceFresh;
+
     this.bootBlink.finishNow();
     this.homeLobby.hide();
     this.angledMenu.close();
@@ -191,10 +214,23 @@ export class ConsoleShellRouter {
     this.bootBlink.finishNow();
     this.angledMenu.close();
     this.cartridgeDrawer.close();
-    this.setShellPhase('HOME_LOBBY');
-    this.homeLobby.show(this.host.activeCartridge);
-    this.cb.onSyncHudIdle();
-    this.syncPauseState();
+    if (this.cb.isEjectingCartridge?.()) {
+      return;
+    }
+    const preferredFocus = this.host.activeCartridge ?? this.lastLaunchId;
+    const finishLobby = () => {
+      if (this.shellPhase === 'IN_EDITOR') return;
+      this.setShellPhase('HOME_LOBBY');
+      this.homeLobby.show(preferredFocus);
+      this.cb.onSyncHudIdle();
+      this.syncPauseState();
+    };
+    if (this.cb.hasInsertedCartridge?.() && this.cb.onRequestEject) {
+      this.host.setPaused(true);
+      this.cb.onRequestEject(finishLobby);
+      return;
+    }
+    finishLobby();
   }
 
   public openCartridgeDrawer(): void {

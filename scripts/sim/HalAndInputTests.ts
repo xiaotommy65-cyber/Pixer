@@ -42,6 +42,7 @@ export function testHalAndInputPipeline(): void {
   let recoilCount = 0;
   let acousticCount = 0;
   let nativeCalls = 0;
+  const getNativeCalls = () => nativeCalls;
   hal.haptic.setCallbacks({
     onVisualRecoil: () => {
       recoilCount += 1;
@@ -86,7 +87,7 @@ export function testHalAndInputPipeline(): void {
 
   const firstClick = hal.haptic.click('right');
   check(
-    firstClick.dispatched && firstClick.channel === 'native' && nativeCalls === 1 && recoilCount === 1 && acousticCount === 1,
+    firstClick.dispatched && firstClick.channel === 'native' && getNativeCalls() === 1 && recoilCount === 1 && acousticCount === 1,
     'First click should dispatch to NativeHalAdapter + visual recoil + acoustic fallback',
   );
 
@@ -94,6 +95,25 @@ export function testHalAndInputPipeline(): void {
   const blockedCooldown = hal.haptic.click('right');
   check(!blockedCooldown.dispatched && blockedCooldown.reason === 'cooldown', 'Rapid duplicate click within 24ms must be throttled by cooldown');
 
+  hapticClock += 50;
+  const jniTap = hal.haptic.tap('left');
+  check(jniTap.dispatched && jniTap.channel === 'native' && getNativeCalls() === 2, 'Native haptic bridge should dispatch again once >=45ms has elapsed');
+
+  hapticClock += 20;
+  const jniThrottledCrossProfile = hal.haptic.thump('right');
+  check(
+    jniThrottledCrossProfile.dispatched && jniThrottledCrossProfile.channel !== 'native' && getNativeCalls() === 2,
+    'Cross-profile native haptic within 45ms JNI cooldown must skip native bridge while retaining fallback feedback',
+  );
+
+  hapticClock += 30;
+  const jniImpactAfterCooldown = hal.haptic.impact('both');
+  check(
+    jniImpactAfterCooldown.dispatched && jniImpactAfterCooldown.channel === 'native' && getNativeCalls() === 3,
+    'Native haptic bridge should resume dispatching once 50ms (>=45ms) has passed',
+  );
+
+  hapticClock += 1100;
   for (let i = 0; i < 6; i++) {
     hapticClock += 60;
     hal.haptic.rumble(0.8, 50);
