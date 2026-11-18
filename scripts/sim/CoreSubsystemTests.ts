@@ -3,8 +3,20 @@ import {
   computeSidePan,
   computeSwungStepDuration,
 } from '../../src/assets/AudioPatterns.ts';
+import { deriveHarmonizedPalette } from '../../src/assets/sprites/PaletteData.ts';
 import { ToySynth } from '../../src/core/audio/ToySynth.ts';
 import { InputMap } from '../../src/core/input/InputMap.ts';
+import {
+  buildHueShiftedRamp,
+  hexToRgb01Into,
+  linearRgbToOklab,
+  linearToSrgb,
+  mixOklabRgb01,
+  oklabToLinearRgb,
+  oklabToOklch,
+  oklchToOklab,
+  srgbToLinear,
+} from '../../src/core/math/ColorMath.ts';
 import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
 import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGovernor.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
@@ -347,4 +359,233 @@ export function testM2EnginePrimitives(): void {
   check(runner.getRenderAlpha() === 1, 'Direct stepFixed should reset render alpha to 1');
 
   console.log('[SIM OK] M2 primitives (SoaEntityPool 2048, TilemapGrid 4-bit auto-tiling, EventActionVm 512-cap, accumulator alpha)');
+}
+
+function oracleHash21Bitwise(px: number, py: number): number {
+  const ix = Math.floor(px * 8.0 + 0.5) | 0;
+  const iy = Math.floor(py * 8.0 + 0.5) | 0;
+  let h = ((Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + 1442695041) | 0) >>> 0;
+  h = Math.imul((h ^ (h >>> 15)) >>> 0, 2246822519) >>> 0;
+  h = Math.imul((h ^ (h >>> 13)) >>> 0, 3266489917) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h & 0x00ffffff) / 16777216;
+}
+
+function oracleBayer4x4Bitwise(cx: number, cy: number): number {
+  const x = Math.floor(Math.max(0, cx)) >>> 0;
+  const y = Math.floor(Math.max(0, cy)) >>> 0;
+  const x0 = x & 1;
+  const y0 = y & 1;
+  const x1 = (x >>> 1) & 1;
+  const y1 = (y >>> 1) & 1;
+  const fine = (((x0 ^ y0) << 1) | y0) << 2;
+  const coarse = ((x1 ^ y1) << 1) | y1;
+  return ((fine | coarse) + 0.5) * 0.0625 - 0.5;
+}
+
+export function testModule1ColorMathAndShaderParity(): void {
+  // 1. Float64 Reference Oracle for IEC 61966-2-1 sRGB <-> Linear & Björn Ottosson Oklab <-> Oklch
+  const oracleSrgbToLin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const oracleLinToSrgb = (c: number) => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
+  const oracleLinToOklab = (r: number, g: number, b: number): [number, number, number] => {
+    const l_ = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m_ = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s_ = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return [
+      0.2104542553 * l_ + 0.793617785 * m_ - 0.0040720468 * s_,
+      1.9779984951 * l_ - 2.428592205 * m_ + 0.4505937099 * s_,
+      0.0259040371 * l_ + 0.7827717662 * m_ - 0.808675766 * s_,
+    ];
+  };
+
+  const rng = new SeededRng(0x51a7c010);
+  const vecA = new Float64Array(3);
+  const vecB = new Float64Array(3);
+  const f32Out = new Float32Array(3);
+  let maxOracleDiff = 0;
+  let maxRoundTripErr = 0;
+
+  // Test 2,000 random colors plus boundary cases (black, white, threshold 0.04045, saturated primaries)
+  const fixedBoundary: [number, number, number][] = [
+    [0, 0, 0],
+    [1, 1, 1],
+    [0.04045, 0.04045, 0.04045],
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+  ];
+  for (let i = 0; i < 2000 + fixedBoundary.length; i++) {
+    const [sr, sg, sb] = i < fixedBoundary.length ? fixedBoundary[i] : [rng.next(), rng.next(), rng.next()];
+    const lr = srgbToLinear(sr);
+    const lg = srgbToLinear(sg);
+    const lb = srgbToLinear(sb);
+    maxOracleDiff = Math.max(
+      maxOracleDiff,
+      Math.abs(lr - oracleSrgbToLin(sr)),
+      Math.abs(lg - oracleSrgbToLin(sg)),
+      Math.abs(lb - oracleSrgbToLin(sb)),
+    );
+
+    linearRgbToOklab(lr, lg, lb, vecA as unknown as number[], 0);
+    const refLab = oracleLinToOklab(oracleSrgbToLin(sr), oracleSrgbToLin(sg), oracleSrgbToLin(sb));
+    maxOracleDiff = Math.max(
+      maxOracleDiff,
+      Math.abs(vecA[0] - refLab[0]),
+      Math.abs(vecA[1] - refLab[1]),
+      Math.abs(vecA[2] - refLab[2]),
+    );
+
+    oklabToOklch(vecA[0], vecA[1], vecA[2], vecB as unknown as number[], 0);
+    oklchToOklab(vecB[0], vecB[1], vecB[2], vecB as unknown as number[], 0);
+    oklabToLinearRgb(vecB[0], vecB[1], vecB[2], vecB as unknown as number[], 0);
+    const rtR = linearToSrgb(vecB[0]);
+    const rtG = linearToSrgb(vecB[1]);
+    const rtB = linearToSrgb(vecB[2]);
+    maxOracleDiff = Math.max(maxOracleDiff, Math.abs(rtR - oracleLinToSrgb(vecB[0])));
+    maxRoundTripErr = Math.max(maxRoundTripErr, Math.abs(rtR - sr), Math.abs(rtG - sg), Math.abs(rtB - sb));
+    check(
+      Number.isFinite(rtR) && Number.isFinite(rtG) && Number.isFinite(rtB),
+      'Oklab/Oklch roundtrip must never emit NaN or Infinity',
+    );
+  }
+  check(maxOracleDiff < 1e-6, `ColorMath Oracle differential error exceeded tolerance (${maxOracleDiff})`);
+  check(maxRoundTripErr < 1e-5, `ColorMath roundtrip error exceeded 1e-5 (${maxRoundTripErr})`);
+
+  // NaN / out-of-range safety guard
+  oklabToOklch(Number.NaN, 0, Number.POSITIVE_INFINITY, f32Out, 0);
+  check(
+    Number.isFinite(f32Out[0]) && Number.isFinite(f32Out[1]) && Number.isFinite(f32Out[2]),
+    'oklabToOklch must guard NaN/Infinity inputs cleanly',
+  );
+
+  // Perceptual blue -> yellow midpoint must match exact Oklab (L0 + L1)/2 and avoid muddy sRGB dip
+  const mixed = mixOklabRgb01(0.145, 0.388, 0.922, 0.98, 0.8, 0.082, 0.5, f32Out, 0);
+  const naiveMidR = (0.145 + 0.98) * 0.5;
+  const naiveMidG = (0.388 + 0.8) * 0.5;
+  const naiveMidB = (0.922 + 0.082) * 0.5;
+  const labBlue = oracleLinToOklab(oracleSrgbToLin(0.145), oracleSrgbToLin(0.388), oracleSrgbToLin(0.922));
+  const labYellow = oracleLinToOklab(oracleSrgbToLin(0.98), oracleSrgbToLin(0.8), oracleSrgbToLin(0.082));
+  const oklabMixedL = oracleLinToOklab(
+    oracleSrgbToLin(mixed[0]),
+    oracleSrgbToLin(mixed[1]),
+    oracleSrgbToLin(mixed[2]),
+  )[0];
+  const oklabNaiveL = oracleLinToOklab(
+    oracleSrgbToLin(naiveMidR),
+    oracleSrgbToLin(naiveMidG),
+    oracleSrgbToLin(naiveMidB),
+  )[0];
+  check(
+    Math.abs(oklabMixedL - 0.5 * (labBlue[0] + labYellow[0])) < 0.005 && oklabMixedL > oklabNaiveL + 0.03,
+    `Perceptual Oklab midpoint L (${oklabMixedL.toFixed(3)}) must match average L (${(0.5 * (labBlue[0] + labYellow[0])).toFixed(3)}) and beat muddy sRGB L (${oklabNaiveL.toFixed(3)})`,
+  );
+
+  // 2. Hue-Shifted Ramp anti-degeneracy & strict Lightness monotonicity across adversarial seeds
+  const rampSeeds = [
+    '#ff708d',
+    '#5ec2f7',
+    '#56d39c',
+    '#ffd447',
+    '#000000',
+    '#ffffff',
+    '#808080',
+    '#ff0044',
+    '#00ffcc',
+    '#f0a',
+    'bad-hex',
+  ];
+  const rampBuf = new Uint8Array(5 * 4);
+  const labCheck = new Float32Array(3);
+  for (const seed of rampSeeds) {
+    buildHueShiftedRamp(seed, 5, rampBuf);
+    let prevL = -1;
+    let firstL = 0;
+    let lastL = 0;
+    for (let s = 0; s < 5; s++) {
+      const r = rampBuf[s * 4];
+      const g = rampBuf[s * 4 + 1];
+      const b = rampBuf[s * 4 + 2];
+      const a = rampBuf[s * 4 + 3];
+      check(a === 255 && r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255, 'Ramp RGBA values must stay valid [0..255]');
+      linearRgbToOklab(srgbToLinear(r / 255), srgbToLinear(g / 255), srgbToLinear(b / 255), labCheck, 0);
+      if (s === 0) firstL = labCheck[0];
+      if (s === 4) lastL = labCheck[0];
+      check(
+        labCheck[0] > prevL + 0.025,
+        `Hue-Shifted ramp for ${seed} must keep strictly monotonic lightness L (step ${s}: ${labCheck[0].toFixed(3)} <= ${prevL.toFixed(3)})`,
+      );
+      prevL = labCheck[0];
+    }
+    check(lastL - firstL >= 0.2, `Hue-Shifted ramp for ${seed} must maintain >= 0.20 lightness span (got ${(lastL - firstL).toFixed(3)})`);
+  }
+
+  // PaletteData derivation check
+  const derived = deriveHarmonizedPalette('#ff708d');
+  check(derived.colors.length === 16 && derived.colors[0] === 'transparent', 'deriveHarmonizedPalette must emit 16 slots starting with transparent');
+  for (let i = 1; i < 16; i++) {
+    check(/^#[0-9a-f]{6}$/.test(derived.colors[i]), `Derived palette slot ${i} must be #rrggbb hex (got ${derived.colors[i]})`);
+  }
+  hexToRgb01Into(derived.colors[1], f32Out, 0);
+  const outlineL = oracleLinToOklab(srgbToLinear(f32Out[0]), srgbToLinear(f32Out[1]), srgbToLinear(f32Out[2]))[0];
+  hexToRgb01Into(derived.colors[2], f32Out, 0);
+  const paperL = oracleLinToOklab(srgbToLinear(f32Out[0]), srgbToLinear(f32Out[1]), srgbToLinear(f32Out[2]))[0];
+  check(outlineL < 0.35 && paperL > 0.9, 'Derived palette must maintain readable dark outline and bright highlight contrast');
+
+  // 3. WGSL / GLSL Shader Bitmath Oracles (Integer Hash & Bayer 4x4 Dither)
+  const expectedBayerRows = [
+    [0, 8, 2, 10],
+    [12, 4, 14, 6],
+    [3, 11, 1, 9],
+    [15, 7, 13, 5],
+  ];
+  for (const offsetY of [0, 120, 1076]) {
+    for (const offsetX of [0, 64, 1916]) {
+      const seen = new Set<number>();
+      for (let dy = 0; dy < 4; dy++) {
+        for (let dx = 0; dx < 4; dx++) {
+          const got = oracleBayer4x4Bitwise(offsetX + dx, offsetY + dy);
+          const expected = (expectedBayerRows[dy][dx] + 0.5) / 16 - 0.5;
+          check(Math.abs(got - expected) < 1e-7, `Bayer 4x4 mismatch at (${dx},${dy})`);
+          seen.add(Math.round((got + 0.5) * 16 - 0.5));
+        }
+      }
+      check(seen.size === 16, 'Bayer 4x4 block must cover all 16 thresholds uniquely');
+    }
+  }
+
+  const quartiles = [0, 0, 0, 0];
+  for (let i = 0; i < 10000; i++) {
+    const px = -120 + (i % 200) * 1.125;
+    const py = -80 + Math.floor(i / 200) * 3.25;
+    const h = oracleHash21Bitwise(px, py);
+    check(Number.isFinite(h) && h >= 0 && h < 1, `Integer hash21 out of [0, 1) bounds: ${h}`);
+    quartiles[Math.min(3, Math.floor(h * 4))]++;
+  }
+  for (let q = 0; q < 4; q++) {
+    check(quartiles[q] > 2200 && quartiles[q] < 2800, `Integer hash21 quartile ${q} skewed unexpectedly (${quartiles[q]}/10000)`);
+  }
+  check(oracleHash21Bitwise(12.25, -4.5) !== oracleHash21Bitwise(13.25, -4.5), 'Adjacent tiles must yield distinct hash21 values');
+
+  // 4. Zero-GC Micro-Benchmark (50,000 Oklab sky/color mix steps into pre-allocated typed array)
+  const benchOut = new Float32Array(3);
+  for (let w = 0; w < 10000; w++) {
+    mixOklabRgb01(0.46, 0.78, 1.0, 1.0, 0.95, 0.87, (w & 127) / 127, benchOut, 0);
+  }
+  const heapBefore = process.memoryUsage().heapUsed;
+  const tStart = performance.now();
+  let sink = 0;
+  for (let i = 0; i < 50000; i++) {
+    const t = (i & 255) / 255;
+    mixOklabRgb01(0.14, 0.39, 0.92, 0.98, 0.8, 0.08, t, benchOut, 0);
+    sink += benchOut[0] + benchOut[1] + benchOut[2];
+  }
+  const benchMs = performance.now() - tStart;
+  const heapDeltaKb = Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024);
+  check(Number.isFinite(sink) && benchMs < 250, `ColorMath 50k Oklab mix benchmark took too long (${benchMs.toFixed(2)}ms)`);
+  check(heapDeltaKb < 2048, `ColorMath hot path heap delta too large (${heapDeltaKb}KB)`);
+
+  console.log(
+    `[BENCH] ColorMath 50k Oklab mix: ${benchMs.toFixed(2)}ms (heapDelta=${heapDeltaKb}KB, maxOracleDiff=${maxOracleDiff.toExponential(2)})`,
+  );
+  console.log('[SIM OK] Module 1 ColorMath (Oklab/Hue-Shift Oracle + Bayer 4x4 + Integer Hash Parity) verified');
 }

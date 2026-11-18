@@ -129,6 +129,9 @@ export class Canvas2DBackend implements IGpuBackend {
 
     const grad = ctx.createLinearGradient(0, 0, 0, ch);
     grad.addColorStop(0, rgbCss(sky.top[0], sky.top[1], sky.top[2]));
+    if (sky.mid) {
+      grad.addColorStop(0.5, rgbCss(sky.mid[0], sky.mid[1], sky.mid[2]));
+    }
     grad.addColorStop(1, rgbCss(sky.bottom[0], sky.bottom[1], sky.bottom[2]));
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, cw, ch);

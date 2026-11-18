@@ -74,6 +74,8 @@ export interface BatchDrawItem {
 export interface SkyGradient {
   top: [number, number, number];
   bottom: [number, number, number];
+  /** Pre-computed perceptual Oklab midpoint sRGB [0..1] for non-muddy sky gradients */
+  mid?: [number, number, number];
   cozyFilter: boolean;
   glowIntensity: number;
   filterMode: number; // 0 = clean, 1 = lcd, 2 = crt

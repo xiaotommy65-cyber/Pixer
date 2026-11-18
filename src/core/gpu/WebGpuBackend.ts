@@ -669,7 +669,11 @@ export class WebGpuBackend implements IGpuBackend {
     this.skyUniformData[9] = sky.cozyFilter ? 1 : 0;
     this.skyUniformData[10] = viewW;
     this.skyUniformData[11] = viewH;
+    const mid = sky.mid;
     this.skyUniformData[12] = this.paletteRows;
+    this.skyUniformData[13] = mid ? mid[0] : (sky.top[0] + sky.bottom[0]) * 0.5;
+    this.skyUniformData[14] = mid ? mid[1] : (sky.top[1] + sky.bottom[1]) * 0.5;
+    this.skyUniformData[15] = mid ? mid[2] : (sky.top[2] + sky.bottom[2]) * 0.5;
     this.device.queue.writeBuffer(this.skyUniformBuffer, 0, this.skyUniformData);
 
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);

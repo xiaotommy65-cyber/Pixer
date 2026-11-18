@@ -1,3 +1,15 @@
+import {
+  buildHueShiftedRamp,
+  hexToRgb01Into,
+  linearRgbToOklab,
+  linearToSrgb,
+  oklabToLinearRgbGamut,
+  oklabToOklch,
+  oklchToOklab,
+  rgb01ToHex,
+  srgbToLinear,
+} from '../../core/math/ColorMath.ts';
+
 // Curated Cozy Toybox 16-Color Master Palette (0 = transparent, 1..13 = standard, 14..15 = emissive candidates)
 export const TOYBOX_PALETTE: readonly string[] = [
   'transparent', // 0: Empty
@@ -134,6 +146,79 @@ export function buildPaletteLutRgba(): Uint8Array {
     }
   }
   return lut;
+}
+
+const PAL_TMP_VEC = new Float32Array(3);
+const PAL_RAMP_RGBA = new Uint8Array(16);
+
+function oklabToneHex(L: number, C: number, hRad: number): string {
+  oklchToOklab(L, C, hRad, PAL_TMP_VEC, 0);
+  oklabToLinearRgbGamut(PAL_TMP_VEC[0], PAL_TMP_VEC[1], PAL_TMP_VEC[2], PAL_TMP_VEC, 0);
+  return rgb01ToHex(
+    linearToSrgb(PAL_TMP_VEC[0]),
+    linearToSrgb(PAL_TMP_VEC[1]),
+    linearToSrgb(PAL_TMP_VEC[2]),
+  );
+}
+
+/**
+ * Generates a harmonious 16-color Toybox palette from a single accent seed hex color
+ * using Oklab + Hue-Shifted ramps (slots 1..15 keep outline, highlights, and complements balanced).
+ */
+export function deriveHarmonizedPalette(
+  seedHex: string,
+  id = 'harmonized',
+  label = '感知調和色盤',
+): PaletteThemeSpec {
+  hexToRgb01Into(seedHex, PAL_TMP_VEC, 0);
+  linearRgbToOklab(
+    srgbToLinear(PAL_TMP_VEC[0]),
+    srgbToLinear(PAL_TMP_VEC[1]),
+    srgbToLinear(PAL_TMP_VEC[2]),
+    PAL_TMP_VEC,
+    0,
+  );
+  oklabToOklch(PAL_TMP_VEC[0], PAL_TMP_VEC[1], PAL_TMP_VEC[2], PAL_TMP_VEC, 0);
+  const seedC = Math.max(0.08, Math.min(0.24, PAL_TMP_VEC[1]));
+  const seedH = PAL_TMP_VEC[2];
+
+  buildHueShiftedRamp(seedHex, 4, PAL_RAMP_RGBA);
+  const rampHex = (idx: number) =>
+    rgb01ToHex(PAL_RAMP_RGBA[idx * 4] / 255, PAL_RAMP_RGBA[idx * 4 + 1] / 255, PAL_RAMP_RGBA[idx * 4 + 2] / 255);
+
+  const mintHex = oklabToneHex(0.74, seedC * 0.85, seedH + 2.25);
+  const mintShadeHex = oklabToneHex(0.56, seedC * 0.9, seedH + 2.45);
+  const goldHex = oklabToneHex(0.86, Math.max(0.11, seedC * 0.9), seedH + 1.05);
+  const amberHex = oklabToneHex(0.72, Math.max(0.12, seedC), seedH + 0.85);
+  const skyHex = oklabToneHex(0.76, seedC * 0.88, seedH - 2.25);
+  const oceanHex = oklabToneHex(0.56, seedC * 0.92, seedH - 2.05);
+  const lilacHex = oklabToneHex(0.8, seedC * 0.72, seedH - 0.95);
+  const plumHex = oklabToneHex(0.58, seedC * 0.82, seedH - 0.75);
+
+  return {
+    id,
+    label,
+    colors: [
+      'transparent',
+      oklabToneHex(0.24, 0.045, seedH - 0.8), // 1: Deep cool-ink outline
+      oklabToneHex(0.97, 0.02, 1.55), // 2: Warm paper cream highlight
+      rampHex(3), // 3: Hue-shifted highlight
+      rampHex(2), // 4: Primary seed tone
+      rampHex(0), // 5: Hue-shifted deep shade
+      mintHex, // 6: Cool triad highlight
+      mintShadeHex, // 7: Cool triad shade
+      goldHex, // 8: Warm analogous highlight
+      amberHex, // 9: Warm analogous shade
+      skyHex, // 10: Opposite cool sky highlight
+      oceanHex, // 11: Opposite deep shade
+      lilacHex, // 12: Pastel accent highlight
+      plumHex, // 13: Pastel accent shade
+      oklabToneHex(0.92, Math.max(0.1, seedC * 0.85), seedH + 0.65), // 14: Emissive core
+      oklabToneHex(0.78, Math.max(0.12, seedC), seedH), // 15: Emissive halo
+    ],
+    emissive14: 0.95,
+    emissive15: 0.85,
+  };
 }
 
 export type BuiltinSpriteId =

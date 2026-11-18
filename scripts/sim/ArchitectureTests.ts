@@ -398,6 +398,7 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   let capturedFilterMode = -1;
   let capturedCamFracX = 0;
   let capturedCamFracY = 0;
+  let capturedSkyMid: [number, number, number] | undefined;
   let uploadCalls = 0;
   let uploadedLut = false;
 
@@ -412,6 +413,7 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
       capturedFilterMode = sky.filterMode;
       capturedCamFracX = sky.camFracX ?? 0;
       capturedCamFracY = sky.camFracY ?? 0;
+      capturedSkyMid = sky.mid;
       for (let i = 0; i < alphaCount; i++) {
         const base = i * FLOATS_PER_INSTANCE;
         capturedModesAlpha.push(alphaItems[base + 13]);
@@ -444,6 +446,10 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
 
   check(uploadCalls === 1 && uploadedLut, 'GpuEngine.flush should upload dirty dynamic atlas + indexPixels + paletteLut');
   check(capturedGlow === params.glowIntensity && capturedFilterMode === 2, 'SceneGpuBridge/GpuEngine must forward glowIntensity and filterMode');
+  check(
+    capturedSkyMid !== undefined && capturedSkyMid.every((c) => Number.isFinite(c) && c >= 0 && c <= 1),
+    'GpuEngine must compute and forward perceptual Oklab sky.mid color',
+  );
   check(capturedModesAlpha.includes(3), 'SceneGpuBridge must emit Mode 3 analytical soft elliptical shadows');
   check(capturedModesAlpha.includes(4), 'SceneGpuBridge must emit Mode 4 normal-lit beveled masonry/earth/astral walls');
   check(capturedModesAlpha.includes(5), 'SceneGpuBridge must emit Mode 5 smooth atmospheric haze/vignette gradients');
@@ -494,13 +500,26 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
       wgslSrc.includes('fsComposite') &&
       wgslSrc.includes('OVERSCAN_PAD') &&
       wgslSrc.includes('uPost.params2') &&
+      wgslSrc.includes('uSky.extra.yzw') &&
+      wgslSrc.includes('bayer4x4') &&
+      wgslSrc.includes('karisWeight') &&
+      wgslSrc.includes('acesFilmic') &&
+      wgslSrc.includes('bitcast<u32>') &&
+      wgslSrc.includes('srgbToLin') &&
       glslSrc.includes('uIndexAtlas') &&
       glslSrc.includes('uPaletteLut') &&
       glslSrc.includes('COMPOSITE_FS') &&
       glslSrc.includes('uCamFrac') &&
       glslSrc.includes('OVERSCAN_PAD') &&
-      glslSrc.includes('uViewSize'),
-    'WebGpuShaders and WebGl2Shaders must maintain LUT + Bloom + Dynamic Overscan Composite parity',
+      glslSrc.includes('uViewSize') &&
+      glslSrc.includes('uMidColor') &&
+      glslSrc.includes('precision highp int;') &&
+      glslSrc.includes('bayer4x4') &&
+      glslSrc.includes('karisWeight') &&
+      glslSrc.includes('acesFilmic') &&
+      glslSrc.includes('uint(ip.x)') &&
+      glslSrc.includes('srgbToLin'),
+    'WebGpuShaders and WebGl2Shaders must maintain LUT + Karis Bloom + ACES + Bayer Dither + Integer Hash + Sky Midpoint parity',
   );
 
   console.log('[SIM OK] Upgraded GPU Art Pipeline (20-float LUT/Skew + 3-Pass Bloom/Post + Overscan) verified');

@@ -105,10 +105,11 @@ export class WebGl2Backend implements IGpuBackend {
   private targets: GlRenderTargets | null = null;
 
   private uTopLoc: WebGLUniformLocation | null;
+  private uMidLoc: WebGLUniformLocation | null;
   private uBottomLoc: WebGLUniformLocation | null;
   private uCozyLoc: WebGLUniformLocation | null;
   private uTimeLoc: WebGLUniformLocation | null;
-  private uSkyViewHLoc: WebGLUniformLocation | null;
+  private uSkyViewSizeLoc: WebGLUniformLocation | null;
   private uSpriteViewSizeLoc: WebGLUniformLocation | null;
   private uPaletteRowsLoc: WebGLUniformLocation | null;
   private uDownOffsetLoc: WebGLUniformLocation | null;
@@ -143,10 +144,11 @@ export class WebGl2Backend implements IGpuBackend {
     this.compositeProg = linkProgram(gl, POST_VS, COMPOSITE_FS);
 
     this.uTopLoc = gl.getUniformLocation(this.skyProg, 'uTopColor');
+    this.uMidLoc = gl.getUniformLocation(this.skyProg, 'uMidColor');
     this.uBottomLoc = gl.getUniformLocation(this.skyProg, 'uBottomColor');
     this.uCozyLoc = gl.getUniformLocation(this.skyProg, 'uCozyFilter');
     this.uTimeLoc = gl.getUniformLocation(this.skyProg, 'uTimeSec');
-    this.uSkyViewHLoc = gl.getUniformLocation(this.skyProg, 'uViewH');
+    this.uSkyViewSizeLoc = gl.getUniformLocation(this.skyProg, 'uViewSize');
 
     gl.useProgram(this.spriteProg);
     const uAtlasLoc = gl.getUniformLocation(this.spriteProg, 'uAtlas');
@@ -398,11 +400,18 @@ export class WebGl2Backend implements IGpuBackend {
     gl.disable(gl.BLEND);
     gl.useProgram(this.skyProg);
     gl.bindVertexArray(this.skyVao);
+    const mid = sky.mid;
     gl.uniform3f(this.uTopLoc, sky.top[0], sky.top[1], sky.top[2]);
+    gl.uniform3f(
+      this.uMidLoc,
+      mid ? mid[0] : (sky.top[0] + sky.bottom[0]) * 0.5,
+      mid ? mid[1] : (sky.top[1] + sky.bottom[1]) * 0.5,
+      mid ? mid[2] : (sky.top[2] + sky.bottom[2]) * 0.5,
+    );
     gl.uniform3f(this.uBottomLoc, sky.bottom[0], sky.bottom[1], sky.bottom[2]);
     gl.uniform1f(this.uCozyLoc, sky.cozyFilter ? 1 : 0);
     gl.uniform1f(this.uTimeLoc, timeSec);
-    gl.uniform1f(this.uSkyViewHLoc, vh);
+    gl.uniform2f(this.uSkyViewSizeLoc, vw, vh);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
     gl.useProgram(this.spriteProg);

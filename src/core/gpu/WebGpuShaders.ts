@@ -1,11 +1,41 @@
 import { OVERSCAN_PAD } from './GpuTypes.ts';
 
+const WGSL_COLOR_TRANSFER = /* wgsl */ `
+fn srgbToLin(c: vec3f) -> vec3f {
+  let sc = max(c, vec3f(0.0));
+  let lo = sc * (1.0 / 12.92);
+  let hi = pow(max(sc + vec3f(0.055), vec3f(0.09545)) * (1.0 / 1.055), vec3f(2.4));
+  return select(hi, lo, sc <= vec3f(0.04045));
+}
+
+fn linToSrgb(c: vec3f) -> vec3f {
+  let lc = max(c, vec3f(0.0));
+  let lo = lc * 12.92;
+  let hi = 1.055 * pow(max(lc, vec3f(0.0031308)), vec3f(1.0 / 2.4)) - vec3f(0.055);
+  return select(hi, lo, lc <= vec3f(0.0031308));
+}
+`;
+
+const WGSL_BAYER4X4 = /* wgsl */ `
+fn bayer4x4(coord: vec2f) -> f32 {
+  let x = u32(floor(max(0.0, coord.x)));
+  let y = u32(floor(max(0.0, coord.y)));
+  let x0 = x & 1u;
+  let y0 = y & 1u;
+  let x1 = (x >> 1u) & 1u;
+  let y1 = (y >> 1u) & 1u;
+  let fine = (((x0 ^ y0) << 1u) | y0) << 2u;
+  let coarse = ((x1 ^ y1) << 1u) | y1;
+  return (f32(fine | coarse) + 0.5) * 0.0625 - 0.5;
+}
+`;
+
 export const WGSL_CODE = /* wgsl */ `
 struct SkyUniforms {
   topColor: vec4f,
   bottomColor: vec4f,
   params: vec4f, // x: timeSec, y: cozyFilter (1 or 0), z: viewW, w: viewH
-  extra: vec4f,  // x: paletteRows
+  extra: vec4f,  // x: paletteRows, yzw: precomputed Oklab midColor RGB
 };
 
 @group(0) @binding(0) var<uniform> uSky: SkyUniforms;
@@ -24,6 +54,9 @@ struct SceneOut {
   @location(1) emissive: vec4f,
 };
 
+${WGSL_COLOR_TRANSFER}
+${WGSL_BAYER4X4}
+
 @vertex
 fn vsSky(@builtin(vertex_index) vid: u32) -> SkyOut {
   var corners = array<vec2f, 6>(
@@ -40,14 +73,22 @@ fn vsSky(@builtin(vertex_index) vid: u32) -> SkyOut {
 @fragment
 fn fsSky(in: SkyOut) -> SceneOut {
   let y = clamp(in.uv.y, 0.0, 1.0);
-  let horizonGlow = pow(y, 2.4) * 0.045 * (0.85 + 0.15 * sin(uSky.params.x * 0.7 + in.uv.x * 3.14159));
-  var col = mix(uSky.topColor.rgb, uSky.bottomColor.rgb, y) + uSky.bottomColor.rgb * horizonGlow;
+  let viewSize = max(vec2f(1.0), uSky.params.zw);
+  let horizonGlow = pow(max(y, 1e-4), 2.4) * 0.045 * (0.85 + 0.15 * sin(uSky.params.x * 0.7 + in.uv.x * 3.14159));
+  let topLin = srgbToLin(uSky.topColor.rgb);
+  let midLin = srgbToLin(uSky.extra.yzw);
+  let botLin = srgbToLin(uSky.bottomColor.rgb);
+  let upper = mix(topLin, midLin, clamp(y * 2.0, 0.0, 1.0));
+  let lower = mix(midLin, botLin, clamp((y - 0.5) * 2.0, 0.0, 1.0));
+  let skyLin = select(upper, lower, y >= 0.5) + botLin * horizonGlow;
+  var col = linToSrgb(skyLin);
+  col += vec3f(bayer4x4(in.uv * viewSize) * (1.75 / 255.0));
   if (uSky.params.y > 0.5) {
-    let gridY = 0.985 + 0.015 * sin(in.uv.y * max(1.0, uSky.params.w) * 6.28318);
+    let gridY = 0.985 + 0.015 * sin(in.uv.y * viewSize.y * 6.28318);
     col *= gridY;
   }
   var out: SceneOut;
-  out.color = vec4f(col, 1.0);
+  out.color = vec4f(clamp(col, vec3f(0.0), vec3f(1.0)), 1.0);
   out.emissive = vec4f(0.0, 0.0, 0.0, 1.0);
   return out;
 }
@@ -72,8 +113,14 @@ struct SpriteOut {
   @location(7) paletteRow: f32,
 };
 
+// Branchless 32-bit unsigned integer xxHash32-style mix (eliminates mobile FP16 sin() banding)
 fn hash21(p: vec2f) -> f32 {
-  return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453123);
+  let ip = vec2<i32>(floor(p * 8.0 + 0.5));
+  var h = bitcast<u32>(ip.x) * 374761393u + bitcast<u32>(ip.y) * 668265263u + 1442695041u;
+  h = (h ^ (h >> 15u)) * 2246822519u;
+  h = (h ^ (h >> 13u)) * 3266489917u;
+  h = h ^ (h >> 16u);
+  return f32(h & 0x00ffffffu) * (1.0 / 16777216.0);
 }
 
 @vertex
@@ -125,9 +172,9 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     let pwr = max(0.35, in.param);
     var fade = 0.0;
     if (dir < 0.5) {
-      fade = pow(clamp(1.0 - in.localUv.y, 0.0, 1.0), pwr);
+      fade = pow(clamp(1.0 - in.localUv.y, 1e-4, 1.0), pwr);
     } else if (dir < 1.5) {
-      fade = pow(clamp(in.localUv.y, 0.0, 1.0), pwr);
+      fade = pow(clamp(in.localUv.y, 1e-4, 1.0), pwr);
     } else {
       let d = length((in.localUv - vec2f(0.5)) * vec2f(1.5, 1.9));
       fade = smoothstep(0.45, 1.25, d);
@@ -330,6 +377,23 @@ struct PostOut {
   @location(0) uv: vec2f,
 };
 
+${WGSL_COLOR_TRANSFER}
+${WGSL_BAYER4X4}
+
+fn karisWeight(col: vec3f) -> f32 {
+  let luma = dot(max(col, vec3f(0.0)), vec3f(0.2126, 0.7152, 0.0722));
+  return 1.0 / (1.0 + luma);
+}
+
+fn acesFilmic(x: vec3f) -> vec3f {
+  let a = 2.51;
+  let b = 0.03;
+  let c = 2.43;
+  let d = 0.59;
+  let e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3f(0.0), vec3f(1.0));
+}
+
 @vertex
 fn vsPost(@builtin(vertex_index) vid: u32) -> PostOut {
   var corners = array<vec2f, 6>(
@@ -346,26 +410,50 @@ fn vsPost(@builtin(vertex_index) vid: u32) -> PostOut {
 @fragment
 fn fsBloomDown(in: PostOut) -> @location(0) vec4f {
   let off = uPost.params0.xy;
-  let c0 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off.x, -off.y), 0.0).rgb;
-  let c1 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off.x, -off.y), 0.0).rgb;
-  let c2 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off.x, off.y), 0.0).rgb;
-  let c3 = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off.x, off.y), 0.0).rgb;
-  let avg = (c0 + c1 + c2 + c3) * 0.25;
-  let knee = max(avg - vec3f(0.08), vec3f(0.0));
-  return vec4f(knee, 1.0);
+  let off2 = off * 2.0;
+  let a = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off2.x, -off2.y), 0.0).rgb;
+  let b = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(0.0, -off2.y), 0.0).rgb;
+  let c = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off2.x, -off2.y), 0.0).rgb;
+  let d = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off2.x, 0.0), 0.0).rgb;
+  let e = textureSampleLevel(uTexA, uLinearSamp, in.uv, 0.0).rgb;
+  let f = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off2.x, 0.0), 0.0).rgb;
+  let g = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off2.x, off2.y), 0.0).rgb;
+  let h = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(0.0, off2.y), 0.0).rgb;
+  let i = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off2.x, off2.y), 0.0).rgb;
+  let j = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off.x, -off.y), 0.0).rgb;
+  let k = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off.x, -off.y), 0.0).rgb;
+  let l = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(-off.x, off.y), 0.0).rgb;
+  let m = textureSampleLevel(uTexA, uLinearSamp, in.uv + vec2f(off.x, off.y), 0.0).rgb;
+
+  let g0 = (j + k + l + m) * 0.25;
+  let g1 = (a + b + d + e) * 0.25;
+  let g2 = (b + c + e + f) * 0.25;
+  let g3 = (d + e + g + h) * 0.25;
+  let g4 = (e + f + h + i) * 0.25;
+
+  let kw0 = 0.5 * karisWeight(g0);
+  let kw1 = 0.125 * karisWeight(g1);
+  let kw2 = 0.125 * karisWeight(g2);
+  let kw3 = 0.125 * karisWeight(g3);
+  let kw4 = 0.125 * karisWeight(g4);
+  let avg = (g0 * kw0 + g1 * kw1 + g2 * kw2 + g3 * kw3 + g4 * kw4) / max(kw0 + kw1 + kw2 + kw3 + kw4, 1e-5);
+
+  let br = max(avg.r, max(avg.g, avg.b));
+  let soft = clamp(br - 0.02, 0.0, 0.08);
+  let contrib = max(br - 0.06, (soft * soft) / 0.16) / max(br, 1e-4);
+  return vec4f(max(avg * contrib, vec3f(0.0)), 1.0);
 }
 
 @fragment
 fn fsBloomBlur(in: PostOut) -> @location(0) vec4f {
   let step = uPost.params0.xy;
-  let w0 = 0.38774;
-  let w1 = 0.24477;
-  let w2 = 0.06136;
-  var acc = textureSampleLevel(uTexA, uLinearSamp, in.uv, 0.0).rgb * w0;
-  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv - step, 0.0).rgb * w1;
-  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv + step, 0.0).rgb * w1;
-  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv - step * 2.0, 0.0).rgb * w2;
-  acc += textureSampleLevel(uTexA, uLinearSamp, in.uv + step * 2.0, 0.0).rgb * w2;
+  let o1 = step * 1.38461538;
+  let o2 = step * 3.23076923;
+  var acc = textureSampleLevel(uTexA, uLinearSamp, in.uv, 0.0).rgb * 0.22702703;
+  acc += (textureSampleLevel(uTexA, uLinearSamp, in.uv + o1, 0.0).rgb
+        + textureSampleLevel(uTexA, uLinearSamp, in.uv - o1, 0.0).rgb) * 0.31621622;
+  acc += (textureSampleLevel(uTexA, uLinearSamp, in.uv + o2, 0.0).rgb
+        + textureSampleLevel(uTexA, uLinearSamp, in.uv - o2, 0.0).rgb) * 0.07027027;
   return vec4f(acc, 1.0);
 }
 
@@ -380,8 +468,14 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
 
   if (glow > 0.01) {
     let bloom = textureSampleLevel(uTexB, uLinearSamp, sceneUv, 0.0).rgb;
-    let bloomTerm = bloom * glow * 0.72;
-    col = sceneCol + bloomTerm * (vec3f(1.0) - sceneCol * 0.28);
+    let sceneLin = srgbToLin(sceneCol);
+    let bloomLin = srgbToLin(bloom) * glow * 1.15;
+    let hdrLin = sceneLin + bloomLin;
+    let bloomEnergy = max(bloomLin.r, max(bloomLin.g, bloomLin.b));
+    let toneMapped = acesFilmic(hdrLin * 1.2) / acesFilmic(vec3f(3.6));
+    let toneBlend = smoothstep(0.0, 0.45, bloomEnergy);
+    let outLin = mix(clamp(hdrLin, vec3f(0.0), vec3f(1.0)), toneMapped, toneBlend);
+    col = linToSrgb(outLin);
   }
 
   let mode = uPost.params0.w;
@@ -410,7 +504,7 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
     col *= vig;
   }
 
+  col += vec3f(bayer4x4(in.pos.xy) * (1.0 / 255.0));
   return vec4f(clamp(col, vec3f(0.0), vec3f(1.0)), 1.0);
 }
 `;
-

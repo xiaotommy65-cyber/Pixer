@@ -1,5 +1,35 @@
 import { OVERSCAN_PAD } from './GpuTypes.ts';
 
+const GLSL_COLOR_TRANSFER = `
+vec3 srgbToLin(vec3 c) {
+  vec3 sc = max(c, vec3(0.0));
+  vec3 lo = sc * (1.0 / 12.92);
+  vec3 hi = pow(max(sc + vec3(0.055), vec3(0.09545)) * (1.0 / 1.055), vec3(2.4));
+  return mix(lo, hi, step(vec3(0.04045), sc));
+}
+
+vec3 linToSrgb(vec3 c) {
+  vec3 lc = max(c, vec3(0.0));
+  vec3 lo = lc * 12.92;
+  vec3 hi = 1.055 * pow(max(lc, vec3(0.0031308)), vec3(1.0 / 2.4)) - vec3(0.055);
+  return mix(lo, hi, step(vec3(0.0031308), lc));
+}
+`;
+
+const GLSL_BAYER4X4 = `
+float bayer4x4(vec2 coord) {
+  uint x = uint(floor(max(0.0, coord.x)));
+  uint y = uint(floor(max(0.0, coord.y)));
+  uint x0 = x & 1u;
+  uint y0 = y & 1u;
+  uint x1 = (x >> 1u) & 1u;
+  uint y1 = (y >> 1u) & 1u;
+  uint fine = (((x0 ^ y0) << 1u) | y0) << 2u;
+  uint coarse = ((x1 ^ y1) << 1u) | y1;
+  return (float(fine | coarse) + 0.5) * 0.0625 - 0.5;
+}
+`;
+
 export const SKY_VS = `#version 300 es
 out vec2 vUv;
 void main() {
@@ -14,22 +44,34 @@ void main() {
 
 export const SKY_FS = `#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vUv;
 uniform vec3 uTopColor;
+uniform vec3 uMidColor;
 uniform vec3 uBottomColor;
 uniform float uCozyFilter;
 uniform float uTimeSec;
-uniform float uViewH;
+uniform vec2 uViewSize;
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
+${GLSL_COLOR_TRANSFER}
+${GLSL_BAYER4X4}
 void main() {
   float y = clamp(vUv.y, 0.0, 1.0);
-  float horizonGlow = pow(y, 2.4) * 0.045 * (0.85 + 0.15 * sin(uTimeSec * 0.7 + vUv.x * 3.14159));
-  vec3 col = mix(uTopColor, uBottomColor, y) + uBottomColor * horizonGlow;
+  vec2 viewSize = max(vec2(1.0), uViewSize);
+  float horizonGlow = pow(max(y, 1e-4), 2.4) * 0.045 * (0.85 + 0.15 * sin(uTimeSec * 0.7 + vUv.x * 3.14159));
+  vec3 topLin = srgbToLin(uTopColor);
+  vec3 midLin = srgbToLin(uMidColor);
+  vec3 botLin = srgbToLin(uBottomColor);
+  vec3 upper = mix(topLin, midLin, clamp(y * 2.0, 0.0, 1.0));
+  vec3 lower = mix(midLin, botLin, clamp((y - 0.5) * 2.0, 0.0, 1.0));
+  vec3 skyLin = mix(upper, lower, step(0.5, y)) + botLin * horizonGlow;
+  vec3 col = linToSrgb(skyLin);
+  col += vec3(bayer4x4(vUv * viewSize) * (1.75 / 255.0));
   if (uCozyFilter > 0.5) {
-    col *= 0.985 + 0.015 * sin(vUv.y * max(1.0, uViewH) * 6.28318);
+    col *= 0.985 + 0.015 * sin(vUv.y * viewSize.y * 6.28318);
   }
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(clamp(col, vec3(0.0), vec3(1.0)), 1.0);
   fragEmissive = vec4(0.0, 0.0, 0.0, 1.0);
 }`;
 
@@ -84,6 +126,7 @@ void main() {
 
 export const SPRITE_FS = `#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vTexUv;
 in vec2 vLocalUv;
 in vec4 vTint;
@@ -101,8 +144,14 @@ uniform float uPaletteRows;
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
 
+// Branchless 32-bit unsigned integer xxHash32-style mix (eliminates mobile FP16 sin() banding)
 float hash21(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  ivec2 ip = ivec2(floor(p * 8.0 + 0.5));
+  uint h = uint(ip.x) * 374761393u + uint(ip.y) * 668265263u + 1442695041u;
+  h = (h ^ (h >> 15u)) * 2246822519u;
+  h = (h ^ (h >> 13u)) * 3266489917u;
+  h = h ^ (h >> 16u);
+  return float(h & 0x00ffffffu) * (1.0 / 16777216.0);
 }
 
 void main() {
@@ -112,9 +161,9 @@ void main() {
     float pwr = max(0.35, vParam);
     float fade = 0.0;
     if (dir < 0.5) {
-      fade = pow(clamp(1.0 - vLocalUv.y, 0.0, 1.0), pwr);
+      fade = pow(clamp(1.0 - vLocalUv.y, 1e-4, 1.0), pwr);
     } else if (dir < 1.5) {
-      fade = pow(clamp(vLocalUv.y, 0.0, 1.0), pwr);
+      fade = pow(clamp(vLocalUv.y, 1e-4, 1.0), pwr);
     } else {
       float d = length((vLocalUv - vec2(0.5)) * vec2(1.5, 1.9));
       fade = smoothstep(0.45, 1.25, d);
@@ -307,13 +356,44 @@ in vec2 vUv;
 uniform sampler2D uTexA;
 uniform vec2 uTexelOffset;
 out vec4 fragColor;
+float karisWeight(vec3 col) {
+  float luma = dot(max(col, vec3(0.0)), vec3(0.2126, 0.7152, 0.0722));
+  return 1.0 / (1.0 + luma);
+}
 void main() {
-  vec3 c0 = texture(uTexA, vUv + vec2(-uTexelOffset.x, -uTexelOffset.y)).rgb;
-  vec3 c1 = texture(uTexA, vUv + vec2(uTexelOffset.x, -uTexelOffset.y)).rgb;
-  vec3 c2 = texture(uTexA, vUv + vec2(-uTexelOffset.x, uTexelOffset.y)).rgb;
-  vec3 c3 = texture(uTexA, vUv + vec2(uTexelOffset.x, uTexelOffset.y)).rgb;
-  vec3 avg = (c0 + c1 + c2 + c3) * 0.25;
-  fragColor = vec4(max(avg - vec3(0.08), vec3(0.0)), 1.0);
+  vec2 off = uTexelOffset;
+  vec2 off2 = off * 2.0;
+  vec3 a = texture(uTexA, vUv + vec2(-off2.x, -off2.y)).rgb;
+  vec3 b = texture(uTexA, vUv + vec2(0.0, -off2.y)).rgb;
+  vec3 c = texture(uTexA, vUv + vec2(off2.x, -off2.y)).rgb;
+  vec3 d = texture(uTexA, vUv + vec2(-off2.x, 0.0)).rgb;
+  vec3 e = texture(uTexA, vUv).rgb;
+  vec3 f = texture(uTexA, vUv + vec2(off2.x, 0.0)).rgb;
+  vec3 g = texture(uTexA, vUv + vec2(-off2.x, off2.y)).rgb;
+  vec3 h = texture(uTexA, vUv + vec2(0.0, off2.y)).rgb;
+  vec3 i = texture(uTexA, vUv + vec2(off2.x, off2.y)).rgb;
+  vec3 j = texture(uTexA, vUv + vec2(-off.x, -off.y)).rgb;
+  vec3 k = texture(uTexA, vUv + vec2(off.x, -off.y)).rgb;
+  vec3 l = texture(uTexA, vUv + vec2(-off.x, off.y)).rgb;
+  vec3 m = texture(uTexA, vUv + vec2(off.x, off.y)).rgb;
+
+  vec3 g0 = (j + k + l + m) * 0.25;
+  vec3 g1 = (a + b + d + e) * 0.25;
+  vec3 g2 = (b + c + e + f) * 0.25;
+  vec3 g3 = (d + e + g + h) * 0.25;
+  vec3 g4 = (e + f + h + i) * 0.25;
+
+  float kw0 = 0.5 * karisWeight(g0);
+  float kw1 = 0.125 * karisWeight(g1);
+  float kw2 = 0.125 * karisWeight(g2);
+  float kw3 = 0.125 * karisWeight(g3);
+  float kw4 = 0.125 * karisWeight(g4);
+  vec3 avg = (g0 * kw0 + g1 * kw1 + g2 * kw2 + g3 * kw3 + g4 * kw4) / max(kw0 + kw1 + kw2 + kw3 + kw4, 1e-5);
+
+  float br = max(avg.r, max(avg.g, avg.b));
+  float soft = clamp(br - 0.02, 0.0, 0.08);
+  float contrib = max(br - 0.06, (soft * soft) / 0.16) / max(br, 1e-4);
+  fragColor = vec4(max(avg * contrib, vec3(0.0)), 1.0);
 }`;
 
 export const BLOOM_BLUR_FS = `#version 300 es
@@ -323,19 +403,17 @@ uniform sampler2D uTexA;
 uniform vec2 uBlurStep;
 out vec4 fragColor;
 void main() {
-  float w0 = 0.38774;
-  float w1 = 0.24477;
-  float w2 = 0.06136;
-  vec3 acc = texture(uTexA, vUv).rgb * w0;
-  acc += texture(uTexA, vUv - uBlurStep).rgb * w1;
-  acc += texture(uTexA, vUv + uBlurStep).rgb * w1;
-  acc += texture(uTexA, vUv - uBlurStep * 2.0).rgb * w2;
-  acc += texture(uTexA, vUv + uBlurStep * 2.0).rgb * w2;
+  vec2 o1 = uBlurStep * 1.38461538;
+  vec2 o2 = uBlurStep * 3.23076923;
+  vec3 acc = texture(uTexA, vUv).rgb * 0.22702703;
+  acc += (texture(uTexA, vUv + o1).rgb + texture(uTexA, vUv - o1).rgb) * 0.31621622;
+  acc += (texture(uTexA, vUv + o2).rgb + texture(uTexA, vUv - o2).rgb) * 0.07027027;
   fragColor = vec4(acc, 1.0);
 }`;
 
 export const COMPOSITE_FS = `#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vUv;
 uniform sampler2D uSceneTex;
 uniform sampler2D uBloomTex;
@@ -345,6 +423,16 @@ uniform float uCozyFilter;
 uniform vec2 uCamFrac;
 uniform vec2 uViewSize;
 out vec4 fragColor;
+${GLSL_COLOR_TRANSFER}
+${GLSL_BAYER4X4}
+vec3 acesFilmic(vec3 x) {
+  float a = 2.51;
+  float b = 0.03;
+  float c = 2.43;
+  float d = 0.59;
+  float e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), vec3(0.0), vec3(1.0));
+}
 void main() {
   vec2 viewSize = max(vec2(1.0), uViewSize);
   vec2 osSize = viewSize + vec2(${OVERSCAN_PAD}.0 * 2.0);
@@ -357,8 +445,14 @@ void main() {
 
   if (uGlowIntensity > 0.01) {
     vec3 bloom = texture(uBloomTex, sceneUv).rgb;
-    vec3 bloomTerm = bloom * uGlowIntensity * 0.72;
-    col = sceneCol + bloomTerm * (vec3(1.0) - sceneCol * 0.28);
+    vec3 sceneLin = srgbToLin(sceneCol);
+    vec3 bloomLin = srgbToLin(bloom) * uGlowIntensity * 1.15;
+    vec3 hdrLin = sceneLin + bloomLin;
+    float bloomEnergy = max(bloomLin.r, max(bloomLin.g, bloomLin.b));
+    vec3 toneMapped = acesFilmic(hdrLin * 1.2) / acesFilmic(vec3(3.6));
+    float toneBlend = smoothstep(0.0, 0.45, bloomEnergy);
+    vec3 outLin = mix(clamp(hdrLin, vec3(0.0), vec3(1.0)), toneMapped, toneBlend);
+    col = linToSrgb(outLin);
   }
 
   vec2 centered = vUv - vec2(0.5);
@@ -384,5 +478,6 @@ void main() {
     col *= vig;
   }
 
+  col += vec3(bayer4x4(gl_FragCoord.xy) * (1.0 / 255.0));
   fragColor = vec4(clamp(col, vec3(0.0), vec3(1.0)), 1.0);
 }`;

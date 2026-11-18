@@ -1,4 +1,5 @@
 import { TextureAtlas, type SpriteId } from '../../assets/TextureAtlas.ts';
+import { mixOklabRgb01 } from '../math/ColorMath.ts';
 import { appLogger } from '../runtime/AppLogger.ts';
 import { Canvas2DBackend } from './Canvas2DBackend.ts';
 import {
@@ -47,9 +48,12 @@ export class GpuEngine {
   private lightTotal = 0;
   private viewW = 320;
   private viewH = 180;
+  private lastSkyTopPacked = -1;
+  private lastSkyBotPacked = -1;
   private currentSky: SkyGradient = {
     top: hexToRgb01('#8ed4ff'),
     bottom: hexToRgb01('#fff2df'),
+    mid: [0.81, 0.91, 0.94],
     cozyFilter: true,
     glowIntensity: 1.0,
     filterMode: 0,
@@ -264,6 +268,22 @@ export class GpuEngine {
     this.currentSky.bottom[0] = ((botPacked >> 16) & 255) * INV_255;
     this.currentSky.bottom[1] = ((botPacked >> 8) & 255) * INV_255;
     this.currentSky.bottom[2] = (botPacked & 255) * INV_255;
+
+    if (topPacked !== this.lastSkyTopPacked || botPacked !== this.lastSkyBotPacked) {
+      this.lastSkyTopPacked = topPacked;
+      this.lastSkyBotPacked = botPacked;
+      if (!this.currentSky.mid) this.currentSky.mid = [0, 0, 0];
+      mixOklabRgb01(
+        this.currentSky.top[0],
+        this.currentSky.top[1],
+        this.currentSky.top[2],
+        this.currentSky.bottom[0],
+        this.currentSky.bottom[1],
+        this.currentSky.bottom[2],
+        0.5,
+        this.currentSky.mid,
+      );
+    }
 
     this.currentSky.cozyFilter = cozyFilter;
     this.currentSky.glowIntensity = Math.max(0, Math.min(2.0, glowIntensity));
