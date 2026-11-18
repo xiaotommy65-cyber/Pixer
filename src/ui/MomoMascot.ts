@@ -42,12 +42,29 @@ export function drawIndexBufferToCanvas(
   canvas: HTMLCanvasElement,
   w = TILE_PX,
   h = TILE_PX,
+  paletteHex?: readonly string[],
 ): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const img = ctx.createImageData(w, h);
   for (let i = 0; i < w * h; i++) {
-    const [r, g, b, a] = PALETTE_RGB[buf[i]] ?? [0, 0, 0, 0];
+    const idx = buf[i] ?? 0;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let a = 0;
+    if (idx > 0) {
+      const hex = paletteHex?.[idx];
+      if (hex && hex.startsWith('#')) {
+        const n = parseInt(hex.slice(1), 16);
+        r = (n >> 16) & 255;
+        g = (n >> 8) & 255;
+        b = n & 255;
+        a = 255;
+      } else {
+        [r, g, b, a] = PALETTE_RGB[idx] ?? [0, 0, 0, 0];
+      }
+    }
     const p = i * 4;
     img.data[p] = r;
     img.data[p + 1] = g;

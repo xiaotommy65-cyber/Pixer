@@ -1,4 +1,5 @@
 import { SANDBOX_DEFAULT_SCRIPT } from '../../assets/WorkshopRecipes.ts';
+import type { CartridgeJsonV1 } from '../sim/CartridgeSchema.ts';
 import type {
   AiCapabilityFlag,
   CartridgeControlProfile,
@@ -20,6 +21,7 @@ export type CartridgeFactory = (ctx: CartridgeLaunchContext) => CartridgeInstanc
 export interface CartridgePluginDefinition {
   meta: CartridgeMeta;
   factory: CartridgeFactory;
+  cartridgeJson?: CartridgeJsonV1;
   aiCapabilities?: readonly AiCapabilityFlag[];
   resolveControlProfile?: (snap?: RenderSceneSnapshot) => CartridgeControlProfile;
 }
@@ -94,6 +96,10 @@ export function registerCartridgeFactory(id: CartridgeId, factory: CartridgeFact
 
 export function getCartridgePlugin(id: CartridgeId): CartridgePluginDefinition | undefined {
   return PLUGIN_REGISTRY.get(id);
+}
+
+export function getCartridgeJson(id: CartridgeId): CartridgeJsonV1 | undefined {
+  return PLUGIN_REGISTRY.get(id)?.cartridgeJson;
 }
 
 export function listCartridgeIds(): CartridgeId[] {

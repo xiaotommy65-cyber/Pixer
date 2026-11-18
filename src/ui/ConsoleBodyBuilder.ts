@@ -88,6 +88,9 @@ export function buildConsoleBodyDom(opts: {
   card.append(resultTitle, resultDesc, resultActions);
   resultOverlay.appendChild(card);
 
+  const glassSheen = el('div', 'glass-sheen');
+  glassSheen.setAttribute('aria-hidden', 'true');
+
   screenFrame.append(
     canvas,
     opts.rpgOverlay.element,
@@ -95,6 +98,7 @@ export function buildConsoleBodyDom(opts: {
     opts.chronicleOverlay.element,
     resultOverlay,
     screenFilterLayer,
+    glassSheen,
   );
 
   const statusHintEl = el('div', 'screen-status-hint', '開機喚醒中…');

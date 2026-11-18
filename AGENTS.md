@@ -23,9 +23,9 @@
   - `Canvas2DBackend.ts` (software fallback)
   - `GpuTypes.ts` (`GAME_W=320`, `GAME_H=180`, `FLOATS_PER_INSTANCE=16`, `MAX_INSTANCES_PER_PASS`, `RenderPerformanceProfile`)
 - `src/core/runtime/` — Engine orchestration, lifecycle & persistence:
-  - `EngineHost.ts` — **Sole facade** for UI views (never access `.runner` directly from `src/ui/`).
+  - `EngineHost.ts` — **Sole facade** for UI views (`loadCartridge`, `mount`, `getSnapshot`; never access `.runner` from `src/ui/`).
   - `CartridgeRunner.ts` — Fixed-timestep (`STEP_DT = 1/60`) simulation loop, cartridge switching, SRAM serialize/hydrate, 1,150+ sprite benchmark.
-  - `CartridgeRegistry.ts` — Cartridge plugin registry (`registerCartridgePlugin`, `getCartridgeMeta`, `listCartridgeIds`).
+  - `CartridgeRegistry.ts` & `CartridgePngCodec.ts` — Cartridge plugin registry (`registerCartridgePlugin`, `getCartridgeJson`) & Polaroid PNG `iTXt` (`pixer-cartridge-v1`) lossless codec with Bomb/CRC guards.
   - `SceneGpuBridge.ts` — Projects `RenderSceneSnapshot` (HD-2D Y-depth sorting, mode 1/3/4/5 shader primitives) into `GpuEngine`.
   - `DisplayThermalGovernor.ts` — Integer resolution scaling (`1x–3x`) & idle frame pacing (30fps/20fps).
   - `SaveService.ts` — `localStorage` + in-memory fallback for records, SRAM, hero sprites, shell/input/perf settings.
@@ -51,7 +51,7 @@
 
 ### `src/ui/` & `src/styles/` — Handheld OS Shell & Editors
 - Shell & Routing: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`.
-- Lobby & Overlays: `BootBlinkOverlay.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `TransitionMascot.ts`, `MomoMascot.ts`, `CardArt.ts`.
+- Lobby & Overlays: `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `TransitionMascot.ts`, `MomoMascot.ts`, `CardArt.ts`.
 - Cartridge HUDs & Studios: `ShmupOverlayView.ts`, `RpgOverlayView.ts`, `ChronicleOverlayView.ts`, `ChronicleModalViews.ts`, `StudioWorkbenchView.ts`, `SpriteAtelierView.ts`, `WorkshopView.ts`.
 - System, Input & Native: `SystemSettingsDrawerView.ts`, `SettingsDrawerTypes.ts`, `SystemLogPanelView.ts`, `VirtualGamepadInput.ts`, `TouchControlsBuilder.ts`, `TouchStateMerger.ts`, `GamepadHardwareBridge.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `dom.ts`.
 - Styles: `src/styles/atelier.css`, `src/styles/switch.css`, `src/styles/lobby.css`.

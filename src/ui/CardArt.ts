@@ -1,3 +1,6 @@
+import { getCartridgeJson } from '../core/runtime/CartridgeRegistry.ts';
+import { embedCartridgeIntoPng } from '../core/runtime/CartridgePngCodec.ts';
+import type { CartridgeJsonV1 } from '../core/sim/CartridgeSchema.ts';
 import type { CartridgeId, CartridgeMeta } from '../core/types/WorldTypes.ts';
 import type { SpriteId, TextureAtlas } from '../assets/TextureAtlas.ts';
 import { atlasSpriteToCanvas } from './MomoMascot.ts';
@@ -73,9 +76,22 @@ const ART: Record<string, ArtSpec> = {
 const W = 80;
 const H = 50;
 
-/** Paints a tiny pixel-art cartridge label from live atlas sprites (so the painted hero shows up). */
+/** Paints a tiny pixel-art cartridge label from live atlas sprites (so the painted hero or custom cartridge shows up). */
 export function renderCardArt(atlas: TextureAtlas, id: CartridgeId): string {
-  const spec = ART[id] ?? ART['sandbox-toybox'];
+  const customJson = !ART[id] ? getCartridgeJson(id) : undefined;
+  const st0 = customJson?.stages[0];
+  const spec: ArtSpec = ART[id] ?? {
+    top: st0?.skyTop ?? '#8fd8ff',
+    bottom: st0?.skyBottom ?? '#fff4df',
+    ground: st0?.groundTop ?? 'grass',
+    sprites: [
+      { id: 'cloud_l', x: 46, y: 6, scale: 1 },
+      { id: customJson?.archetypes?.star?.sprite ?? 'star_a', x: 58, y: 8, scale: 1.2 },
+      { id: customJson?.archetypes?.slime?.sprite ?? 'slime_a', x: 56, y: 28, scale: 1.25, flip: true },
+      { id: customJson?.player.sprite ?? 'hero_a', x: 12, y: 18, scale: 1.85 },
+    ],
+  };
+
   const c = document.createElement('canvas');
   c.width = W;
   c.height = H;
@@ -116,6 +132,50 @@ export function renderCardArt(atlas: TextureAtlas, id: CartridgeId): string {
   return c.toDataURL('image/png');
 }
 
+/** Renders a 320x180 pixel cover preview from a CartridgeJsonV1 stage for Workshop Polaroid PNG exports. */
+export function renderCartridgeCoverCanvas(atlas: TextureAtlas, cartridge: CartridgeJsonV1): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 180;
+  const ctx = c.getContext('2d');
+  if (!ctx) return c;
+  ctx.imageSmoothingEnabled = false;
+
+  const st = cartridge.stages[0];
+  const grad = ctx.createLinearGradient(0, 0, 0, c.height);
+  grad.addColorStop(0, st?.skyTop ?? '#76c7ff');
+  grad.addColorStop(1, st?.skyBottom ?? '#fff3df');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  if (st?.tileGrid) {
+    const { cols, rows, tiles, spriteMap } = st.tileGrid;
+    for (let r = 0; r < rows && r < 12; r++) {
+      for (let col = 0; col < cols && col < 20; col++) {
+        const tid = tiles[r * cols + col] ?? 0;
+        if (tid === 0) continue;
+        const sid = spriteMap[String(tid)] ?? 'stone';
+        const spr = atlasSpriteToCanvas(atlas, sid);
+        ctx.drawImage(spr, col * 16, r * 16 - 12, 16, 16);
+      }
+    }
+  }
+
+  for (const sp of st?.spawns ?? []) {
+    if (sp.x >= 320) continue;
+    const arch = cartridge.archetypes[sp.archetype];
+    if (!arch) continue;
+    const spr = atlasSpriteToCanvas(atlas, arch.sprite);
+    ctx.drawImage(spr, sp.x, sp.y - 12, arch.w, arch.h);
+  }
+
+  if (st?.spawn) {
+    const heroSpr = atlasSpriteToCanvas(atlas, cartridge.player.sprite);
+    ctx.drawImage(heroSpr, st.spawn.x, st.spawn.y - 12, cartridge.player.w, cartridge.player.h);
+  }
+  return c;
+}
+
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -137,32 +197,28 @@ function drawRoundedRect(
   ctx.closePath();
 }
 
-/**
- * Composites a PICO-8 inspired collectible cartridge frame around the live GPU canvas screenshot.
- */
-export function exportCartridgeCardPng(
+function buildPolaroidCanvas(
   gameCanvas: HTMLCanvasElement,
   meta: CartridgeMeta | null,
   score: number,
   starsCollected: number,
   starsTotal: number,
-): string {
+  hasCartridgePayload = false,
+): HTMLCanvasElement {
   const cardW = 520;
   const cardH = 382;
   const c = document.createElement('canvas');
   c.width = cardW;
   c.height = cardH;
   const ctx = c.getContext('2d');
-  if (!ctx) return gameCanvas.toDataURL('image/png');
+  if (!ctx) return gameCanvas;
 
   const accent = meta?.accentHex ?? '#ff8fa8';
   const ink = '#382820';
 
-  // Soft warm backdrop
   ctx.fillStyle = '#f8f1e4';
   ctx.fillRect(0, 0, cardW, cardH);
 
-  // Outer collectible cartridge silhouette with chamfered top-right corner
   const pad = 12;
   const bx = pad;
   const by = pad;
@@ -185,15 +241,12 @@ export function exportCartridgeCardPng(
   ctx.fill();
   ctx.clip();
 
-  // Accent top cartridge header strip
   ctx.fillStyle = accent;
   ctx.fillRect(bx, by, bw, 56);
   ctx.fillStyle = ink;
   ctx.fillRect(bx, by + 56, bw, 4);
-
   ctx.restore();
 
-  // Cartridge outline
   ctx.beginPath();
   ctx.moveTo(bx + 18, by);
   ctx.lineTo(bx + bw - 38, by);
@@ -209,12 +262,10 @@ export function exportCartridgeCardPng(
   ctx.strokeStyle = ink;
   ctx.stroke();
 
-  // Header text
   ctx.fillStyle = '#fffdf8';
   ctx.font = 'bold 20px "JetBrains Mono", monospace';
   ctx.fillText(meta ? `${meta.code} · ${meta.title}` : 'PIXEL ATELIER · HOME', bx + 20, by + 36);
 
-  // Gameplay frame inside bezel
   const scrX = bx + 22;
   const scrY = by + 72;
   const scrW = bw - 44;
@@ -231,16 +282,63 @@ export function exportCartridgeCardPng(
   ctx.drawImage(gameCanvas, scrX, scrY, scrW, scrH);
   ctx.restore();
 
-  // Footer metadata
   const footY = scrY + scrH + 30;
   ctx.fillStyle = ink;
   ctx.font = 'bold 15px "JetBrains Mono", monospace';
-  ctx.fillText('PIXEL ATELIER · GPU CARD', bx + 22, footY);
+  ctx.fillText(hasCartridgePayload ? 'PIXER POLAROID · PLAYABLE PNG' : 'PIXEL ATELIER · GPU CARD', bx + 22, footY);
 
   const statText = meta ? `SCORE ${score}  ★ ${starsCollected}/${starsTotal}` : 'MOMO IDLE HOME';
   const metrics = ctx.measureText(statText);
   ctx.fillStyle = '#755c4e';
   ctx.fillText(statText, bx + bw - 22 - metrics.width, footY);
+  return c;
+}
 
-  return c.toDataURL('image/png');
+function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Canvas PNG blob conversion failed'));
+        return;
+      }
+      void blob.arrayBuffer().then((buf) => resolve(new Uint8Array(buf)), reject);
+    }, 'image/png');
+  });
+}
+
+function bytesToPngDataUrl(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return `data:image/png;base64,${btoa(binary)}`;
+}
+
+/**
+ * Composites a Polaroid cartridge frame around the live GPU canvas screenshot and embeds
+ * CartridgeJsonV1 via lossless PNG iTXt (`pixer-cartridge-v1`) whenever cartridgeJson is present.
+ */
+export async function exportCartridgeCardPngDataUrl(
+  gameCanvas: HTMLCanvasElement,
+  meta: CartridgeMeta | null,
+  score: number,
+  starsCollected: number,
+  starsTotal: number,
+  cartridgeJson?: CartridgeJsonV1,
+): Promise<string> {
+  const cardCanvas = buildPolaroidCanvas(
+    gameCanvas,
+    meta,
+    score,
+    starsCollected,
+    starsTotal,
+    Boolean(cartridgeJson),
+  );
+  if (!cartridgeJson) {
+    return cardCanvas.toDataURL('image/png');
+  }
+  const rawBytes = await canvasToPngBytes(cardCanvas);
+  const embedded = await embedCartridgeIntoPng(rawBytes, cartridgeJson);
+  return bytesToPngDataUrl(embedded);
 }

@@ -1,10 +1,13 @@
 import type { EngineHost } from '../core/runtime/EngineHost.ts';
 import { el } from './dom.ts';
 
+export type BootPickupStage = 'standby' | 'picking' | 'holding' | 'awake';
+
 /**
- * Cold-boot / wake 1.3s pixel eye-blink sequence:
- * 220ms left eye open (left-panned tick) -> 380ms right eye open (right-panned tick)
- * -> 740ms joyful blink -> 1100ms fade out -> 1300ms HOME_LOBBY handoff.
+ * 3-Step Boot Pickup & Pixel Eye-Blink Sequence (~1.42s after user wake tap):
+ * 1) Standby: console rests tilted on dark desk showing [ 點擊喚醒 ]
+ * 2) Picking (0-360ms): unlocks Web Audio + SVG rounded hands slide up to cradle Joy-Cons
+ * 3) Holding -> Awake (360-1420ms): console zooms upright, eyes open/blink with stereo ticks, enters HOME Lobby
  */
 export class BootBlinkOverlay {
   public readonly element: HTMLElement;
@@ -15,12 +18,16 @@ export class BootBlinkOverlay {
   private readonly eyeLeft: HTMLElement;
   private readonly eyeRight: HTMLElement;
   private readonly wordmark: HTMLElement;
+  private readonly wakePrompt: HTMLElement;
+  private stage: BootPickupStage = 'standby';
   private finished = false;
   private onComplete?: () => void;
+  private onStageChange?: (stage: BootPickupStage) => void;
 
-  constructor(host: EngineHost) {
+  constructor(host: EngineHost, onStageChange?: (stage: BootPickupStage) => void) {
     this.host = host;
-    this.element = el('div', 'boot-blink-overlay');
+    this.onStageChange = onStageChange;
+    this.element = el('div', 'boot-blink-overlay is-standby');
     this.element.setAttribute('aria-label', 'Pixel Atelier 開機畫面');
 
     const eyesRow = el('div', 'boot-eyes-row');
@@ -29,26 +36,56 @@ export class BootBlinkOverlay {
     eyesRow.append(this.eyeLeft, this.eyeRight);
 
     this.wordmark = el('span', 'boot-wordmark', 'PIXEL ATELIER OS');
-    this.element.append(eyesRow, this.wordmark);
+    this.wakePrompt = el('span', 'boot-wake-prompt', '[ 點擊喚醒 ]');
+    this.element.append(eyesRow, this.wordmark, this.wakePrompt);
 
     this.element.addEventListener(
       'click',
       () => {
         this.host.unlockAudio();
-        this.finishNow();
+        if (this.stage === 'standby') {
+          this.triggerPickupSequence();
+        } else {
+          this.finishNow();
+        }
       },
       { signal: this.ac.signal },
     );
+  }
+
+  public getStage(): BootPickupStage {
+    return this.stage;
+  }
+
+  public wakeIfStandby(): void {
+    if (this.stage === 'standby' && !this.finished) {
+      this.host.unlockAudio();
+      this.triggerPickupSequence();
+    }
   }
 
   public play(onComplete: () => void): void {
     this.clearTimers();
     this.finished = false;
     this.onComplete = onComplete;
+    this.stage = 'standby';
+    this.onStageChange?.('standby');
+
     this.element.classList.remove('panel-hidden', 'is-fading');
+    this.element.classList.add('is-standby');
     this.eyeLeft.classList.remove('is-open', 'is-blinking');
     this.eyeRight.classList.remove('is-open', 'is-blinking');
     this.wordmark.classList.remove('is-visible');
+  }
+
+  private triggerPickupSequence(): void {
+    if (this.finished || this.stage !== 'standby') return;
+    this.clearTimers();
+
+    this.element.classList.remove('is-standby');
+    this.stage = 'picking';
+    this.onStageChange?.('picking');
+    this.host.playStereoTick(260, 0, 0.22);
 
     const reducedMotion =
       typeof window !== 'undefined' &&
@@ -56,50 +93,60 @@ export class BootBlinkOverlay {
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     if (reducedMotion) {
+      this.stage = 'holding';
+      this.onStageChange?.('holding');
       this.eyeLeft.classList.add('is-open');
       this.eyeRight.classList.add('is-open');
       this.wordmark.classList.add('is-visible');
-      this.schedule(() => this.finishNow(), 250);
+      this.schedule(() => this.finishNow(), 220);
       return;
     }
 
     this.schedule(() => {
+      this.stage = 'holding';
+      this.onStageChange?.('holding');
+    }, 360);
+
+    this.schedule(() => {
       this.eyeLeft.classList.add('is-open');
       this.host.playStereoTick(620, -0.48, 0.2);
-    }, 220);
+    }, 520);
 
     this.schedule(() => {
       this.eyeRight.classList.add('is-open');
       this.wordmark.classList.add('is-visible');
       this.host.playStereoTick(700, 0.48, 0.2);
-    }, 380);
+    }, 660);
 
     this.schedule(() => {
       this.eyeLeft.classList.add('is-blinking');
       this.eyeRight.classList.add('is-blinking');
-    }, 740);
+    }, 940);
 
     this.schedule(() => {
       this.eyeLeft.classList.remove('is-blinking');
       this.eyeRight.classList.remove('is-blinking');
       this.host.playStereoTick(880, 0, 0.16);
-    }, 870);
+    }, 1070);
 
     this.schedule(() => {
       this.element.classList.add('is-fading');
-    }, 1080);
+      this.host.playIrisChord('out');
+    }, 1200);
 
     this.schedule(() => {
       this.finishNow();
-    }, 1300);
+    }, 1420);
   }
 
   public finishNow(): void {
     if (this.finished) return;
     this.finished = true;
     this.clearTimers();
+    this.stage = 'awake';
+    this.onStageChange?.('awake');
     this.element.classList.add('panel-hidden');
-    this.element.classList.remove('is-fading');
+    this.element.classList.remove('is-fading', 'is-standby');
     const cb = this.onComplete;
     this.onComplete = undefined;
     cb?.();
@@ -119,5 +166,6 @@ export class BootBlinkOverlay {
     this.clearTimers();
     this.ac.abort();
     this.onComplete = undefined;
+    this.onStageChange = undefined;
   }
 }

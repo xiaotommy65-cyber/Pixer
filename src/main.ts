@@ -8,7 +8,9 @@ import {
   createHandheldOrientationController,
   createOsUtilityBar,
   exportCaptureScreenshot,
+  importCartridgeFileWithPrompt,
   installGlobalErrorHandlers,
+  installPolaroidDropHandler,
   recoverFromFrameError,
   renderStartupCrashFallback,
 } from './AppShellHelpers.ts';
@@ -99,10 +101,13 @@ export function createApp(): AppHandle | null {
     host.playTactile(profile, phase),
   );
 
-  window.__PIXEL_ATELIER_AGENT__ = createAgentBridge(runner, host.ai);
+  window.__PIXEL_ATELIER_AGENT__ = createAgentBridge(runner, host.ai, (rawJson, opts) =>
+    host.loadCartridge(rawJson, opts),
+  );
 
   const atlas = new TextureAtlas();
   host.bindAtlas(atlas);
+  host.hydrateSavedCustomCartridges();
 
   const irisWipe = new IrisWipeTransition(host, atlas);
   let drawerView: SystemSettingsDrawerView | null = null;
@@ -222,15 +227,51 @@ export function createApp(): AppHandle | null {
   syncGovernorResolution();
 
   const spriteAtelierView = new SpriteAtelierView(gpuEngine, synth, save, () => host.reactMomo());
-  const workshopView = new WorkshopView(host, (targetId: CartridgeId = 'sandbox-toybox') => {
-    exitEditorToHandheld(undefined, targetId);
-  });
+  let workshopView: WorkshopView;
+  workshopView = new WorkshopView(
+    host,
+    atlas,
+    (targetId: CartridgeId = 'sandbox-toybox') => {
+      exitEditorToHandheld(undefined, targetId);
+    },
+    {
+      getStudioSprites: () => ({
+        sprites: spriteAtelierView.exportCartridgeSprites(),
+        paletteRow: spriteAtelierView.getSelectedPaletteRow(),
+      }),
+      onImportCartridgeFile: (file) =>
+        importCartridgeFileWithPrompt({
+          file,
+          shell,
+          host,
+          consoleView,
+          mountAfterImport: false,
+          onImported: (id, cart) => {
+            workshopView.loadIntoEditor(cart, id);
+          },
+        }),
+    },
+  );
   studioWorkbench = new StudioWorkbenchView(
     spriteAtelierView,
     workshopView,
     (originEl) => exitEditorToHandheld(originEl),
     (freqHz) => host.playStereoTick(freqHz, 0, 0.2),
   );
+
+  installPolaroidDropHandler({
+    shell,
+    host,
+    consoleView,
+    signal,
+    onImported: (id, cart) => {
+      workshopView.loadIntoEditor(cart, id);
+      workshopView.refreshSavedCartridges();
+      if (studioWorkbench?.isOpen()) {
+        exitEditorToHandheld(undefined, id);
+      }
+    },
+  });
 
   drawerView = new SystemSettingsDrawerView({
     getState: () => {

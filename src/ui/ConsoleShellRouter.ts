@@ -8,7 +8,7 @@ import {
   type ScreenFilterMode,
 } from '../core/types/WorldTypes.ts';
 import { AngledSystemMenuView } from './AngledSystemMenuView.ts';
-import { BootBlinkOverlay } from './BootBlinkOverlay.ts';
+import { BootBlinkOverlay, type BootPickupStage } from './BootBlinkOverlay.ts';
 import { CartridgeDrawerView } from './CartridgeDrawerView.ts';
 import { HomeLobbyView } from './HomeLobbyView.ts';
 
@@ -38,6 +38,8 @@ export interface ConsoleShellRouterCallbacks {
   onSyncHudIdle: () => void;
   onToast: (msg: string) => void;
   onFilterChange?: (mode: ScreenFilterMode) => void;
+  onBootStageChange?: (stage: BootPickupStage) => void;
+  onShellPhaseChange?: (phase: ShellPhase) => void;
 }
 
 /**
@@ -64,7 +66,7 @@ export class ConsoleShellRouter {
     this.cb.screenFilterLayer.dataset.filter = this.screenFilter;
     this.cb.onFilterChange?.(this.screenFilter);
 
-    this.bootBlink = new BootBlinkOverlay(host);
+    this.bootBlink = new BootBlinkOverlay(host, (stage) => this.cb.onBootStageChange?.(stage));
     this.homeLobby = new HomeLobbyView(host, atlas, {
       onFocusCartridge: (meta) => this.cb.onFocusLobbyCartridge(meta),
       onLaunchCartridge: (id, forceFresh) => this.launchCartridge(id, forceFresh),
@@ -103,8 +105,13 @@ export class ConsoleShellRouter {
     this.cb.shellRootEl.append(this.cartridgeDrawer.element, this.angledMenu.element);
   }
 
+  private setShellPhase(next: ShellPhase): void {
+    this.shellPhase = next;
+    this.cb.onShellPhaseChange?.(next);
+  }
+
   public startBootSequence(): void {
-    this.shellPhase = 'BOOT_BLINK';
+    this.setShellPhase('BOOT_BLINK');
     this.homeLobby.hide();
     this.syncPauseState();
     this.bootBlink.play(() => {
@@ -112,6 +119,12 @@ export class ConsoleShellRouter {
         this.returnToHomeLobby();
       }
     });
+  }
+
+  public wakeFromStandby(): void {
+    if (this.shellPhase === 'BOOT_BLINK') {
+      this.bootBlink.wakeIfStandby();
+    }
   }
 
   public getShellPhase(): ShellPhase {
@@ -152,11 +165,11 @@ export class ConsoleShellRouter {
       }
       this.angledMenu.close();
       this.cartridgeDrawer.close();
-      this.shellPhase = 'IN_EDITOR';
+      this.setShellPhase('IN_EDITOR');
       this.cb.shellRootEl.classList.add('panel-hidden');
     } else {
       this.cb.shellRootEl.classList.remove('panel-hidden');
-      this.shellPhase = this.returnPhaseFromEditor;
+      this.setShellPhase(this.returnPhaseFromEditor);
       if (this.shellPhase === 'HOME_LOBBY') {
         this.homeLobby.show(this.host.activeCartridge);
       }
@@ -169,7 +182,7 @@ export class ConsoleShellRouter {
     this.homeLobby.hide();
     this.angledMenu.close();
     this.cartridgeDrawer.close();
-    this.shellPhase = 'IN_GAME';
+    this.setShellPhase('IN_GAME');
     this.cb.onLaunchCartridge(id, forceFresh);
     this.syncPauseState();
   }
@@ -178,7 +191,7 @@ export class ConsoleShellRouter {
     this.bootBlink.finishNow();
     this.angledMenu.close();
     this.cartridgeDrawer.close();
-    this.shellPhase = 'HOME_LOBBY';
+    this.setShellPhase('HOME_LOBBY');
     this.homeLobby.show(this.host.activeCartridge);
     this.cb.onSyncHudIdle();
     this.syncPauseState();
@@ -194,7 +207,8 @@ export class ConsoleShellRouter {
   public handleHomeButton(): void {
     this.host.unlockAudio();
     if (this.shellPhase === 'BOOT_BLINK') {
-      this.bootBlink.finishNow();
+      if (this.bootBlink.getStage() === 'standby') this.bootBlink.wakeIfStandby();
+      else this.bootBlink.finishNow();
       return;
     }
     if (this.cartridgeDrawer.isOpen()) {
@@ -224,6 +238,11 @@ export class ConsoleShellRouter {
   }
 
   public triggerConfirmKey(): boolean {
+    if (this.shellPhase === 'BOOT_BLINK') {
+      if (this.bootBlink.getStage() === 'standby') this.bootBlink.wakeIfStandby();
+      else this.bootBlink.finishNow();
+      return true;
+    }
     return this.shellPhase === 'HOME_LOBBY' ? this.homeLobby.triggerConfirm() : false;
   }
 

@@ -4,6 +4,9 @@ import {
   type CartridgePluginDefinition,
 } from '../runtime/CartridgeRegistry.ts';
 import type { CartridgeRunner } from '../runtime/CartridgeRunner.ts';
+import type { LoadCartridgeOptions, LoadCartridgeResult } from '../runtime/EngineHost.ts';
+import { validateCartridgeJson } from '../sim/CartridgeSchema.ts';
+import { DataCartridgeRuntime } from '../sim/DataCartridgeRuntime.ts';
 import {
   createEmptyInputState,
   isTurnCapableCartridge,
@@ -26,6 +29,7 @@ export interface PixelAtelierAgentApi {
   stepAction(actionId: string): RenderSceneSnapshot;
   autoPlaySteps(steps: number): { stepsExecuted: number; snapshot: RenderSceneSnapshot };
   loadDndModuleJson(jsonSource: string): string | null;
+  loadCartridge(rawJson: unknown, opts?: LoadCartridgeOptions): LoadCartridgeResult;
   adviseAction(): Promise<TacticalAdviceResult>;
   registerPlugin(def: CartridgePluginDefinition): () => void;
 }
@@ -37,6 +41,7 @@ export interface PixelAtelierAgentApi {
 export function createAgentBridge(
   runner: CartridgeRunner,
   aiDirector: HybridAiDirector = new HybridAiDirector(runner.events),
+  onLoadCartridge?: (rawJson: unknown, opts?: LoadCartridgeOptions) => LoadCartridgeResult,
 ): PixelAtelierAgentApi {
   const getTurnKernel = (): TurnKernelContract | null => {
     const inst = runner.getInstance();
@@ -87,6 +92,40 @@ export function createAgentBridge(
       return { stepsExecuted: executed, snapshot: runner.getSnapshot() };
     },
     loadDndModuleJson: (jsonSource) => runner.applyDndModuleJson(jsonSource),
+    loadCartridge: (rawJson, opts) => {
+      if (onLoadCartridge) return onLoadCartridge(rawJson, opts);
+      let parsed: unknown = rawJson;
+      if (typeof rawJson === 'string') {
+        try {
+          parsed = JSON.parse(rawJson);
+        } catch {
+          return { ok: false, errors: ['JSON 語法解析失敗'] };
+        }
+      }
+      const valid = validateCartridgeJson(parsed);
+      if (!valid.ok) return { ok: false, errors: valid.errors };
+      const id = opts?.customId ?? (valid.data.meta.id.startsWith('custom-') ? valid.data.meta.id : `custom-${valid.data.meta.id}`);
+      const cartridge = JSON.parse(JSON.stringify(valid.data));
+      cartridge.meta.id = id;
+      registerCartridgePlugin({
+        meta: {
+          id,
+          code: cartridge.meta.code || 'CUS',
+          title: cartridge.meta.title,
+          subtitle: cartridge.meta.subtitle ?? '自訂平台冒險',
+          genre: cartridge.meta.genre === 'shmup' ? '自製射擊' : '自製平台',
+          accentHex: opts?.accentHex ?? '#ff708d',
+          badgeText: '自製 / Polaroid 卡匣',
+          controlsHint: '方向移動 · B 跳躍 · A 動作 · L 重試',
+          goalHint: cartridge.meta.title,
+          defaultScript: '',
+        },
+        cartridgeJson: cartridge,
+        factory: () => new DataCartridgeRuntime(cartridge),
+      });
+      if (opts?.mount !== false) runner.switchCartridge(id);
+      return { ok: true, id, title: cartridge.meta.title, cartridge };
+    },
     adviseAction: () =>
       aiDirector.adviseTacticalAction({
         observation: serializeCartridgeObservation(runner),

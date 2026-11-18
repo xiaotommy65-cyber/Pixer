@@ -1,9 +1,12 @@
 import type { GpuEngine } from './core/gpu/GpuEngine.ts';
 import type { GpuBackendKind, RenderPerformanceProfile } from './core/gpu/GpuTypes.ts';
-import { getCartridgeMeta } from './core/runtime/CartridgeRegistry.ts';
 import { appLogger } from './core/runtime/AppLogger.ts';
+import { extractCartridgeFromPng, MAX_DECOMPRESSED_JSON_BYTES, MAX_PNG_FILE_BYTES } from './core/runtime/CartridgePngCodec.ts';
+import { getCartridgeMeta } from './core/runtime/CartridgeRegistry.ts';
 import type { EngineHost } from './core/runtime/EngineHost.ts';
-import { exportCartridgeCardPng } from './ui/CardArt.ts';
+import { validateCartridgeJson, type CartridgeJsonV1 } from './core/sim/CartridgeSchema.ts';
+import type { CartridgeId } from './core/types/WorldTypes.ts';
+import { exportCartridgeCardPngDataUrl } from './ui/CardArt.ts';
 import type { ConsoleView } from './ui/ConsoleView.ts';
 import type { StudioWorkbenchView } from './ui/StudioWorkbenchView.ts';
 import type { ShellTheme, SystemSettingsDrawerView } from './ui/SystemSettingsDrawerView.ts';
@@ -137,18 +140,20 @@ export function createHandheldOrientationController(params: {
 export async function exportCaptureScreenshot(consoleView: ConsoleView, host: EngineHost): Promise<void> {
   const insertedId = consoleView.getInserted();
   const meta = insertedId ? getCartridgeMeta(insertedId) : null;
+  const cartridgeJson = insertedId ? host.getCartridgeJson(insertedId) : undefined;
   const t0 = performance.now();
 
   // Guard canvas readback and Blob/DataURL download: tainted canvases or blocked
   // popups/downloads must be caught and logged without interrupting the 60fps loop.
   try {
     const snap = host.getSnapshot();
-    const dataUrl = exportCartridgeCardPng(
+    const dataUrl = await exportCartridgeCardPngDataUrl(
       consoleView.canvas,
       meta,
       snap.score,
       snap.starsCollected,
       snap.starsTotal,
+      cartridgeJson,
     );
     const filename = `pixel-atelier-${meta?.code.toLowerCase() ?? 'home'}-${Date.now()}.png`;
     if (host.hal.isNativeHost()) {
@@ -159,13 +164,13 @@ export async function exportCaptureScreenshot(consoleView: ConsoleView, host: En
       );
       if (shared) {
         consoleView.showCaptureToast(
-          meta ? `📤 已開啟「${meta.code}」紀念圖卡系統分享！` : '📤 已開啟主畫面圖卡系統分享！',
+          meta ? `📤 已開啟「${meta.code}」拍立得卡匣分享！` : '📤 已開啟主畫面圖卡系統分享！',
         );
         appLogger.success(
           'ui',
           'capture.nativeSharePng',
           `已透過原生系統分享紀念圖卡 (${filename})`,
-          { cartridgeId: insertedId ?? 'home', filename },
+          { cartridgeId: insertedId ?? 'home', filename, embeddedCartridge: Boolean(cartridgeJson) },
           performance.now() - t0,
         );
         return;
@@ -177,13 +182,17 @@ export async function exportCaptureScreenshot(consoleView: ConsoleView, host: En
     link.download = filename;
     link.click();
     consoleView.showCaptureToast(
-      meta ? `📸 已匯出「${meta.code}」紀念卡匣截圖！` : '📸 已匯出主畫面紀念圖卡！',
+      meta
+        ? cartridgeJson
+          ? `📸 已匯出「${meta.code}」可玩拍立得 PNG 卡匣！`
+          : `📸 已匯出「${meta.code}」紀念卡匣截圖！`
+        : '📸 已匯出主畫面紀念圖卡！',
     );
     appLogger.success(
       'ui',
       'capture.exportPng',
       `已匯出紀念卡匣截圖 (${filename})`,
-      { cartridgeId: insertedId ?? 'home', filename },
+      { cartridgeId: insertedId ?? 'home', filename, embeddedCartridge: Boolean(cartridgeJson) },
       performance.now() - t0,
     );
   } catch (err) {
@@ -192,6 +201,185 @@ export async function exportCaptureScreenshot(consoleView: ConsoleView, host: En
     });
     consoleView.showCaptureToast('⚠ 截圖匯出失敗，請檢視系統診斷日誌');
   }
+}
+
+function promptDuplicateCartridgeAction(
+  shell: HTMLElement,
+  title: string,
+  id: string,
+): Promise<'overwrite' | 'remix' | 'cancel'> {
+  return new Promise((resolve) => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'polaroid-prompt-backdrop';
+    const card = document.createElement('div');
+    card.className = 'polaroid-prompt-card';
+
+    const h = document.createElement('h3');
+    h.textContent = '🎴 偵測到重複卡匣 ID';
+    const p = document.createElement('p');
+    p.textContent = `卡匣「${title}」（${id}）已存在於本機庫中，請選擇匯入方式：`;
+
+    const row = document.createElement('div');
+    row.className = 'tool-row';
+    const finish = (choice: 'overwrite' | 'remix' | 'cancel') => {
+      backdrop.remove();
+      resolve(choice);
+    };
+
+    const mkBtn = (cls: string, label: string, choice: 'overwrite' | 'remix' | 'cancel') => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = cls;
+      b.textContent = label;
+      b.addEventListener('click', () => finish(choice));
+      return b;
+    };
+
+    row.append(
+      mkBtn('toy-btn is-primary', '♻️ 覆蓋更新', 'overwrite'),
+      mkBtn('toy-btn is-mint', '🧬 另存 Remix 副本', 'remix'),
+      mkBtn('toy-btn', '✕ 取消', 'cancel'),
+    );
+    card.append(h, p, row);
+    backdrop.appendChild(card);
+    shell.appendChild(backdrop);
+  });
+}
+
+export async function importCartridgeFileWithPrompt(params: {
+  file: File;
+  shell: HTMLElement;
+  host: EngineHost;
+  consoleView: ConsoleView;
+  mountAfterImport: boolean;
+  onImported?: (id: CartridgeId, cartridge: CartridgeJsonV1) => void;
+}): Promise<void> {
+  const { file, shell, host, consoleView, mountAfterImport, onImported } = params;
+  const lower = file.name.toLowerCase();
+  const isPng = lower.endsWith('.png') || file.type === 'image/png';
+
+  let parsedCartridge: CartridgeJsonV1;
+  if (isPng) {
+    if (file.size > MAX_PNG_FILE_BYTES) {
+      consoleView.showCaptureToast('⚠ PNG 檔案超過 4MB 上限');
+      return;
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const decoded = await extractCartridgeFromPng(bytes);
+    if (!decoded.ok) {
+      consoleView.showCaptureToast(`⚠ ${decoded.error}`);
+      return;
+    }
+    parsedCartridge = decoded.data;
+  } else {
+    if (file.size > MAX_DECOMPRESSED_JSON_BYTES) {
+      consoleView.showCaptureToast('⚠ JSON 檔案超過 512KB 上限');
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      consoleView.showCaptureToast('⚠ 卡匣 JSON 語法解析失敗');
+      return;
+    }
+    const valid = validateCartridgeJson(parsed);
+    if (!valid.ok) {
+      consoleView.showCaptureToast(`⚠ ${valid.errors[0] ?? '卡匣格式無效'}`);
+      return;
+    }
+    parsedCartridge = valid.data;
+  }
+
+  const rawId = parsedCartridge.meta.id.trim().replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'untitled';
+  let targetId = rawId.startsWith('custom-') ? rawId : `custom-${rawId}`;
+  let cartToLoad = parsedCartridge;
+
+  if (host.hasCustomCartridge(targetId)) {
+    const choice = await promptDuplicateCartridgeAction(shell, parsedCartridge.meta.title, targetId);
+    if (choice === 'cancel') return;
+    if (choice === 'remix') {
+      targetId = `${targetId}-remix-${Date.now().toString(36)}`;
+      cartToLoad = JSON.parse(JSON.stringify(parsedCartridge)) as CartridgeJsonV1;
+      cartToLoad.meta.title = `${cartToLoad.meta.title} Remix`;
+    }
+  }
+
+  const res = host.loadCartridge(cartToLoad, {
+    save: true,
+    mount: mountAfterImport,
+    customId: targetId,
+    overwrite: true,
+  });
+  if (!res.ok) {
+    consoleView.showCaptureToast(`⚠ ${res.errors[0] ?? '載入卡匣失敗'}`);
+    return;
+  }
+
+  host.playUiSound('key');
+  onImported?.(res.id, res.cartridge);
+  if (mountAfterImport) {
+    consoleView.launchCartridge(res.id, true);
+  }
+  consoleView.showCaptureToast(`🎴 已讀取拍立得卡匣「${res.title}」！`);
+}
+
+export function installPolaroidDropHandler(params: {
+  shell: HTMLElement;
+  host: EngineHost;
+  consoleView: ConsoleView;
+  signal: AbortSignal;
+  onImported?: (id: CartridgeId, cartridge: CartridgeJsonV1) => void;
+}): void {
+  const { shell, host, consoleView, signal, onImported } = params;
+  let dragDepth = 0;
+
+  shell.addEventListener(
+    'dragenter',
+    (e) => {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      dragDepth++;
+      shell.classList.add('polaroid-drop-active');
+    },
+    { signal },
+  );
+  shell.addEventListener(
+    'dragover',
+    (e) => {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    },
+    { signal },
+  );
+  shell.addEventListener(
+    'dragleave',
+    () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) shell.classList.remove('polaroid-drop-active');
+    },
+    { signal },
+  );
+  shell.addEventListener(
+    'drop',
+    (e) => {
+      dragDepth = 0;
+      shell.classList.remove('polaroid-drop-active');
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      e.preventDefault();
+      void importCartridgeFileWithPrompt({
+        file,
+        shell,
+        host,
+        consoleView,
+        mountAfterImport: true,
+        onImported,
+      });
+    },
+    { signal },
+  );
 }
 
 export function renderStartupCrashFallback(err: unknown, onRetry: () => void): void {

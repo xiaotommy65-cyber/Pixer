@@ -896,3 +896,437 @@ body[data-perf='eco'] .home-lobby-overlay {
   background: rgba(246, 239, 227, 0.94);
 }
 
+/* ---------- 2.5D Hardware Glass Sheen, Inner Recess & Clean Lobby Telemetry ---------- */
+.screen-frame {
+  box-shadow: inset 0 4px 10px rgba(0, 0, 0, 0.22);
+}
+
+.glass-sheen {
+  position: absolute;
+  inset: -12%;
+  z-index: 8;
+  pointer-events: none;
+  background: linear-gradient(
+    118deg,
+    transparent 24%,
+    rgba(255, 255, 255, 0.16) 38%,
+    rgba(255, 255, 255, 0.04) 48%,
+    transparent 62%
+  );
+  transform: translate3d(calc(var(--px, 0) * 24px), calc(var(--py, 0) * 16px), 0);
+  transition: transform 120ms ease-out;
+}
+
+.console-body.is-lobby-clean .screen-topbar .metric-tag {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- Desk Grid World & Warm Lamp Glow (Parallax Layer -14px) ---------- */
+.desk-world-bg {
+  position: fixed;
+  inset: -24px;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(56, 40, 32, 0.065) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 40, 32, 0.065) 1px, transparent 1px);
+  background-size: 28px 28px;
+  transform: translate3d(calc(var(--px, 0) * -14px), calc(var(--py, 0) * -10px), 0);
+  transition: filter 420ms ease, opacity 320ms ease, background-color 420ms ease;
+}
+
+.desk-lamp-glow {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 34%, rgba(255, 226, 170, 0.34), transparent 64%);
+}
+
+.switch-stage[data-boot-stage='standby'] .desk-world-bg {
+  background-color: rgba(18, 14, 24, 0.62);
+}
+
+.switch-stage[data-boot-stage='holding'] .desk-world-bg {
+  filter: blur(5px);
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .desk-world-bg {
+  filter: blur(6px);
+  opacity: 0.55;
+}
+
+/* ---------- 3-Step Boot Pickup (Standby Tilt -> SVG Hands -> Upright Awake) ---------- */
+.desk-console-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  perspective: 1100px;
+}
+
+.switch-console {
+  transform-style: preserve-3d;
+  transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1), filter 380ms ease;
+}
+
+.switch-stage[data-boot-stage='standby'] .switch-console {
+  transform: translateY(14px) rotateX(26deg) rotateZ(-3deg) scale(0.74);
+  filter: drop-shadow(0 28px 34px rgba(10, 8, 16, 0.5)) brightness(0.94);
+  cursor: pointer;
+}
+
+.switch-stage[data-boot-stage='holding'] .switch-console {
+  transform: translateY(0) rotateX(0deg) rotateZ(0deg) scale(1.04);
+}
+
+.switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .switch-console {
+  transform: rotateX(calc(var(--py, 0) * -4deg)) rotateY(calc(var(--px, 0) * 5deg)) scale(1);
+  transition: transform 160ms ease-out, filter 320ms ease;
+}
+
+.switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .cart-slot {
+  transform: translate3d(calc(var(--px, 0) * 6px), calc(var(--py, 0) * 4px), 0);
+}
+
+.boot-wake-prompt {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #ffd88a;
+  background: rgba(255, 250, 232, 0.1);
+  border: 1.5px solid rgba(255, 216, 138, 0.5);
+  border-radius: 999px;
+  padding: 4px 12px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+
+.boot-blink-overlay.is-standby .boot-wake-prompt {
+  opacity: 1;
+  transform: translateY(0);
+  animation: wakePulse 1.8s ease-in-out infinite;
+}
+
+.boot-blink-overlay.is-standby .pixel-eye {
+  opacity: 0.35;
+  transform: scaleY(0.14);
+}
+
+@keyframes wakePulse {
+  0%, 100% { opacity: 0.72; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+.boot-pickup-hands {
+  position: absolute;
+  left: 50%;
+  bottom: -24px;
+  width: min(104%, 760px);
+  transform: translateX(-50%) translateY(120px);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 12;
+  transition: transform 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease;
+}
+
+.boot-hands-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.switch-stage[data-boot-stage='picking'] .boot-pickup-hands {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.switch-stage[data-boot-stage='holding'] .boot-pickup-hands {
+  opacity: 0.9;
+  transform: translateX(-50%) translateY(22px);
+}
+
+.switch-stage[data-boot-stage='awake'] .boot-pickup-hands {
+  opacity: 0;
+  transform: translateX(-50%) translateY(90px);
+}
+
+/* ---------- Spatial Track: Desktop Desk Props + Mobile Portrait 3-Page Scroll-Snap ---------- */
+.desk-spatial-track {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 204px minmax(0, 880px) 204px;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.desk-prop {
+  position: relative;
+  background: rgba(255, 253, 248, 0.88);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px;
+  padding: 12px;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.85),
+    0 6px 0 var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: opacity 280ms ease, filter 280ms ease, transform 240ms var(--ease-bounce);
+}
+
+.switch-stage[data-boot-stage='standby'] .desk-prop {
+  opacity: 0.52;
+  filter: brightness(0.84);
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .desk-prop {
+  opacity: 0.32;
+  filter: blur(4px);
+  pointer-events: none;
+}
+
+.notebook-spiral {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 6px;
+}
+
+.notebook-spiral span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: #d8cfc1;
+}
+
+.notebook-head,
+.desk-tray-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.notebook-momo {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 2px solid var(--ink);
+  background: var(--bg-well);
+  image-rendering: pixelated;
+  flex-shrink: 0;
+}
+
+.notebook-title-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.notebook-title-col strong {
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.desk-prop-kicker {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+  letter-spacing: 0.08em;
+}
+
+.desk-prop-desc,
+.desk-drop-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+.desk-prop-cta {
+  width: 100%;
+  justify-content: center;
+}
+
+.desk-tray-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.desk-tray-card {
+  appearance: none;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: #fffdf8;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  cursor: pointer;
+  box-shadow: 0 2.5px 0 var(--ink);
+  text-align: left;
+  min-width: 0;
+  transition: transform 130ms var(--ease-bounce);
+}
+
+.desk-tray-card:hover {
+  transform: translateY(-2px);
+}
+
+.desk-tray-art {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: 6px;
+  border: 1.5px solid var(--ink);
+  object-fit: cover;
+  image-rendering: pixelated;
+  background: var(--tray-accent, #7fdcb4);
+}
+
+.desk-tray-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  font-weight: 900;
+  color: var(--ink-soft);
+}
+
+.desk-tray-name {
+  width: 100%;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.portrait-desk-pager {
+  display: none;
+}
+
+/* Tablet / medium desktop: keep focus cleanly on console */
+@media (max-width: 1179px) and (min-width: 761px) {
+  .desk-spatial-track {
+    grid-template-columns: minmax(0, 920px);
+  }
+
+  .desk-prop {
+    display: none;
+  }
+}
+
+/* Mobile Portrait: NDS Split Console (center) + 3-page native scroll-snap desk */
+@media (max-width: 760px) and (orientation: portrait) {
+  .desk-spatial-track {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: visible;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+  }
+
+  .desk-spatial-track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .switch-stage[data-shell-phase='IN_GAME'] .desk-spatial-track,
+  .switch-stage[data-shell-phase='BOOT_BLINK'] .desk-spatial-track {
+    overflow-x: hidden;
+  }
+
+  .desk-prop,
+  .desk-console-slot {
+    flex: 0 0 100%;
+    width: 100%;
+    scroll-snap-align: center;
+    scroll-snap-stop: always;
+  }
+
+  .desk-prop {
+    max-width: 94%;
+    margin: 0 auto;
+  }
+
+  .switch-stage[data-shell-phase='HOME_LOBBY'] .portrait-desk-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 6px;
+    z-index: 4;
+  }
+
+  .portrait-pager-btn {
+    appearance: none;
+    border: 2px solid var(--ink);
+    border-radius: 999px;
+    background: rgba(255, 253, 248, 0.85);
+    color: var(--ink);
+    font-size: 0.68rem;
+    font-weight: 800;
+    padding: 3px 10px;
+    min-height: 28px;
+    cursor: pointer;
+    box-shadow: 0 2px 0 var(--ink);
+  }
+
+  .portrait-pager-btn.is-active {
+    background: var(--accent-honey);
+  }
+}
+
+/* Mobile Landscape / Handheld Fullscreen Lock: hide all desk props */
+.atelier-shell.is-handheld-landscape .desk-prop,
+.atelier-shell.is-handheld-landscape .portrait-desk-pager,
+.atelier-shell.is-handheld-landscape .desk-world-bg {
+  display: none !important;
+}
+
+.atelier-shell.is-handheld-landscape .desk-spatial-track {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (orientation: landscape) and (max-height: 620px),
+  (orientation: landscape) and (pointer: coarse) and (max-width: 960px) {
+  .desk-prop,
+  .portrait-desk-pager,
+  .desk-world-bg {
+    display: none !important;
+  }
+
+  .desk-spatial-track {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+body[data-perf='eco'] .glass-sheen,
+body[data-perf='eco'] .desk-world-bg {
+  transition: none !important;
+  transform: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-console,
+  .boot-pickup-hands,
+  .glass-sheen,
+  .desk-world-bg,
+  .boot-wake-prompt {
+    transition-duration: 1ms !important;
+    animation: none !important;
+  }
+}

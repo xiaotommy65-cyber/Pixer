@@ -4,6 +4,7 @@ import {
   registerCartridgePlugin,
   type CartridgePluginDefinition,
 } from '../core/runtime/CartridgeRegistry.ts';
+import type { CartridgeJsonV1 } from '../core/sim/CartridgeSchema.ts';
 import { DataCartridgeRuntime } from '../core/sim/DataCartridgeRuntime.ts';
 import { AstralChroniclesGame } from './astralChronicles/AstralChroniclesGame.ts';
 import cloudberryJson from './cloudberry/cloudberry.cartridge.json' with { type: 'json' };
@@ -28,6 +29,7 @@ export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
       goalHint: '跨越 4 大空島 8 關卡收集 24 顆星，擊敗巨大史萊姆王！',
       defaultScript: SANDBOX_DEFAULT_SCRIPT,
     },
+    cartridgeJson: cloudberryJson as unknown as CartridgeJsonV1,
     aiCapabilities: ['tactical-advisor'],
     factory: () => new DataCartridgeRuntime(cloudberryJson),
     resolveControlProfile: () => ({
@@ -55,6 +57,7 @@ export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
       defaultScript: SANDBOX_DEFAULT_SCRIPT,
       preserveActionHold: true,
     },
+    cartridgeJson: sugarStarlightJson as unknown as CartridgeJsonV1,
     aiCapabilities: ['tactical-advisor'],
     factory: () => new DataCartridgeRuntime(sugarStarlightJson),
     resolveControlProfile: (snap) => {

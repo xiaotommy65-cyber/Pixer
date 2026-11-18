@@ -2,6 +2,7 @@ import { normalizePerformanceProfile, type RenderPerformanceProfile } from '../g
 import type { HapticLevel } from '../hal/HapticEngine.ts';
 import { type ErgonomicGripMode, normalizeGripMode, normalizeHapticLevel } from '../hal/SystemHal.ts';
 import type { StickCurveMode } from '../input/InputPipeline.ts';
+import type { CartridgeJsonV1 } from '../sim/CartridgeSchema.ts';
 import type { CartridgeId, RenderSceneSnapshot, ScreenFilterMode } from '../types/WorldTypes.ts';
 import { appLogger } from './AppLogger.ts';
 
@@ -11,8 +12,11 @@ export interface CardRecord {
   starsTotal: number;
 }
 
+export const MAX_CUSTOM_CARTRIDGES = 16;
+
 const RECORDS_KEY = 'pixel-atelier-records-v1';
 const SRAM_KEY = 'pixel-atelier-sram-v1';
+const CUSTOM_CARTRIDGES_KEY = 'pixel-atelier-custom-cartridges-v1';
 const SHELL_KEY = 'pixel-atelier-shell-v1';
 const HERO_KEY = 'pixel-atelier-hero-v1';
 const GRIP_KEY = 'pixel-atelier-grip-v1';
@@ -31,6 +35,12 @@ export interface CartridgeSramEnvelope {
   data: unknown;
 }
 
+export interface CustomCartridgeEntry {
+  id: string;
+  updatedAt: number;
+  cartridge: CartridgeJsonV1;
+}
+
 export interface HeroSpriteSave {
   a?: number[];
   b?: number[];
@@ -45,10 +55,12 @@ export class SaveService {
   private readonly lastLoggedSramStage = new Map<CartridgeId, string>();
   private records: Partial<Record<CartridgeId, CardRecord>>;
   private sram: Partial<Record<CartridgeId, CartridgeSramEnvelope>>;
+  private customCartridges: Record<string, CustomCartridgeEntry>;
 
   constructor() {
     this.records = this.readJson<Partial<Record<CartridgeId, CardRecord>>>(RECORDS_KEY) ?? {};
     this.sram = this.readJson<Partial<Record<CartridgeId, CartridgeSramEnvelope>>>(SRAM_KEY) ?? {};
+    this.customCartridges = this.readJson<Record<string, CustomCartridgeEntry>>(CUSTOM_CARTRIDGES_KEY) ?? {};
   }
 
   private readRaw(key: string): string | null {
@@ -278,5 +290,59 @@ export class SaveService {
 
   public savePerformanceProfile(profile: RenderPerformanceProfile): void {
     this.writeRaw(PERF_PROFILE_KEY, profile);
+  }
+
+  public listCustomCartridges(): CustomCartridgeEntry[] {
+    return Object.values(this.customCartridges)
+      .filter((entry) => Boolean(entry && typeof entry.id === 'string' && entry.cartridge))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  public getCustomCartridge(id: string): CustomCartridgeEntry | undefined {
+    return this.customCartridges[id];
+  }
+
+  public saveCustomCartridge(
+    id: string,
+    cartridge: CartridgeJsonV1,
+    overwrite = true,
+  ): { ok: true; entry: CustomCartridgeEntry } | { ok: false; error: string } {
+    const exists = Boolean(this.customCartridges[id]);
+    if (exists && !overwrite) {
+      return { ok: false, error: `自訂卡匣「${id}」已存在` };
+    }
+    if (!exists && Object.keys(this.customCartridges).length >= MAX_CUSTOM_CARTRIDGES) {
+      return {
+        ok: false,
+        error: `已達自訂卡匣上限（${MAX_CUSTOM_CARTRIDGES} 張），請先於工坊刪除舊卡匣`,
+      };
+    }
+    const entry: CustomCartridgeEntry = {
+      id,
+      updatedAt: Date.now(),
+      cartridge,
+    };
+    const prev = this.customCartridges[id];
+    this.customCartridges[id] = entry;
+    if (!this.writeJson(CUSTOM_CARTRIDGES_KEY, this.customCartridges)) {
+      if (prev) this.customCartridges[id] = prev;
+      else delete this.customCartridges[id];
+      return { ok: false, error: '瀏覽器本機空間不足，無法寫入自訂卡匣' };
+    }
+    appLogger.success('storage', 'save.customCartridge', `已儲存自訂卡匣 (${id})`, { cartridgeId: id });
+    return { ok: true, entry };
+  }
+
+  public deleteCustomCartridge(id: string): boolean {
+    if (!this.customCartridges[id]) return false;
+    delete this.customCartridges[id];
+    this.clearCartridgeSram(id);
+    if (this.records[id]) {
+      delete this.records[id];
+      this.writeJson(RECORDS_KEY, this.records);
+    }
+    this.writeJson(CUSTOM_CARTRIDGES_KEY, this.customCartridges);
+    appLogger.info('storage', 'save.deleteCustomCartridge', `已刪除自訂卡匣 (${id})`, { cartridgeId: id });
+    return true;
   }
 }

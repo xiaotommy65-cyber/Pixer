@@ -8,11 +8,18 @@ import { GpuEngine } from '../../src/core/gpu/GpuEngine.ts';
 import { FLOATS_PER_INSTANCE, type IGpuBackend } from '../../src/core/gpu/GpuTypes.ts';
 import { InputPipeline } from '../../src/core/input/InputPipeline.ts';
 import { AppLogger, appLogger } from '../../src/core/runtime/AppLogger.ts';
+import {
+  embedCartridgeIntoPng,
+  extractCartridgeFromPng,
+  MAX_DECOMPRESSED_JSON_BYTES,
+  MAX_PNG_FILE_BYTES,
+} from '../../src/core/runtime/CartridgePngCodec.ts';
 import { CartridgeRunner } from '../../src/core/runtime/CartridgeRunner.ts';
 import { EngineHost } from '../../src/core/runtime/EngineHost.ts';
 import { parseJsonlEntries, serializeEntriesToJsonl } from '../../src/core/runtime/LogPersistence.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
 import { buildDepthDrawOrder, SceneGpuBridge } from '../../src/core/runtime/SceneGpuBridge.ts';
+import type { CartridgeJsonV1 } from '../../src/core/sim/CartridgeSchema.ts';
 import { AstralChroniclesGame } from '../../src/game/astralChronicles/AstralChroniclesGame.ts';
 import { parseDungeonModuleJson } from '../../src/game/emberkeep/TurnGridSave.ts';
 import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
@@ -506,4 +513,156 @@ export async function testStructuredLoggingAndErrorRecovery(): Promise<void> {
   check(appLogger.getEntries({ category: 'network', level: 'warn' }).some((e) => e.operation === 'ai.director.fallback'), 'HybridAiDirector must record structured fallback warning');
 
   console.log('[SIM OK] Comprehensive error handling, JSONL structured logging & fallback recovery verified');
+}
+
+export async function testM3LoadCartridgeAndPngCodec(): Promise<void> {
+  const atlas = new TextureAtlas();
+  const runner = new CartridgeRunner('cloudberry-hop');
+  const save = new SaveService();
+  const host = new EngineHost(runner, new ToySynth(), save);
+  host.bindAtlas(atlas);
+  host.mount('cloudberry-hop');
+  host.stepFrame(1 / 60, { ...emptyInput(), right: true });
+  host.saveActiveSram();
+  check(host.hasSram('cloudberry-hop'), 'Active cloudberry-hop SRAM should exist before invalid loadCartridge test');
+
+  // Bad JSON / bad schema must reject without disturbing active cartridge or SRAM
+  const badSyntax = host.loadCartridge('{ bad json');
+  check(!badSyntax.ok && host.activeCartridge === 'cloudberry-hop' && host.hasSram('cloudberry-hop'), 'Invalid JSON string must reject without side effects');
+  const badSchema = host.loadCartridge({ version: 1, meta: { id: 'x' } });
+  check(!badSchema.ok && host.activeCartridge === 'cloudberry-hop', 'Invalid schema must reject without altering active cartridge');
+
+  // Valid custom cartridge with dynamic sprite grid (uses index 14 for bloom LUT)
+  const customCartridge: CartridgeJsonV1 = {
+    version: 1,
+    meta: { id: 'custom-m3-test', code: 'M3', title: 'M3 測試卡匣', genre: 'platformer', paletteRow: 1 },
+    sprites: {
+      custom_gem: [
+        '................',
+        '......eeee......',
+        '.....e2222e.....',
+        '....e2ffff2e....',
+        '....eeeeeeee....',
+        '.....eeeeee.....',
+        '......eeee......',
+        '.......ee.......',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+      ],
+    },
+    player: { controller: 'platformer', sprite: 'hero_a', spriteB: 'hero_b', w: 16, h: 16, maxHearts: 3 },
+    archetypes: {
+      star: { sprite: 'custom_gem', w: 16, h: 16, tags: ['collectible', 'star'], scoreValue: 100 },
+      gate: { sprite: 'gate_closed', w: 16, h: 16, tags: ['gate'] },
+    },
+    stages: [
+      {
+        id: 'st-1',
+        name: '1-1 測試',
+        worldWidth: 320,
+        skyTop: '#76c7ff',
+        skyBottom: '#fff3df',
+        bgmTheme: 'meadow',
+        hint: '收集寶石',
+        spawn: { x: 24, y: 120 },
+        groundTop: 'grass',
+        groundFill: 'dirt',
+        spawns: [
+          { archetype: 'star', x: 96, y: 120 },
+          { archetype: 'gate', x: 240, y: 128 },
+        ],
+      },
+    ],
+  };
+
+  const loaded = host.loadCartridge(customCartridge, { save: true, mount: true });
+  check(loaded.ok && loaded.id === 'custom-m3-test' && host.activeCartridge === 'custom-m3-test', 'Valid loadCartridge must register, save, and mount custom-* cartridge');
+  check(host.hasCustomCartridge('custom-m3-test') && host.getCartridgeJson('custom-m3-test')?.meta.title === 'M3 測試卡匣', 'Saved custom cartridge must be queryable via EngineHost');
+
+  const gemRect = atlas.getRect('custom_gem');
+  const gemX = Math.floor(gemRect.u0 * ATLAS_SIZE) + 6;
+  const gemY = Math.floor(gemRect.v0 * ATLAS_SIZE) + 1;
+  check(gemRect.v0 >= 128 / ATLAS_SIZE && atlas.indexPixels[gemY * ATLAS_SIZE + gemX] === 14, 'Custom grid sprite must write palette index 14 into dynamic >=128px atlas region');
+
+  // Minimal valid 1x1 PNG + iTXt roundtrip
+  const minimalPng = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+  ]);
+  const encodedPng = await embedCartridgeIntoPng(minimalPng, customCartridge);
+  const decoded = await extractCartridgeFromPng(encodedPng);
+  check(decoded.ok && decoded.data.meta.title === 'M3 測試卡匣' && decoded.data.stages.length === 1, 'PNG iTXt embed/extract must roundtrip CartridgeJsonV1');
+
+  // Corrupt CRC must fail
+  const tampered = new Uint8Array(encodedPng);
+  tampered[tampered.length - 20] ^= 0xff;
+  const badCrc = await extractCartridgeFromPng(tampered);
+  check(!badCrc.ok, 'Corrupted PNG iTXt chunk must fail CRC check');
+
+  // Oversized PNG file (>4MB) must reject
+  const oversized = new Uint8Array(MAX_PNG_FILE_BYTES + 1);
+  oversized.set(minimalPng.subarray(0, 8), 0);
+  const tooBig = await extractCartridgeFromPng(oversized);
+  check(!tooBig.ok, 'PNG exceeding 4MB limit must be rejected');
+
+  // Decompression bomb (>512KB uncompressed JSON) must be stopped by streaming cap
+  const bigStr = JSON.stringify({ pad: 'A'.repeat(MAX_DECOMPRESSED_JSON_BYTES + 4096) });
+  const bombBytes = new TextEncoder().encode(bigStr);
+  const cs = new CompressionStream('deflate');
+  const writer = cs.writable.getWriter();
+  const wp = writer.write(bombBytes).then(() => writer.close());
+  const compBomb = new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  await wp;
+  const keyBytes = new TextEncoder().encode('pixer-cartridge-v1');
+  const itxtData = new Uint8Array(keyBytes.length + 5 + compBomb.length);
+  itxtData.set(keyBytes, 0);
+  itxtData[keyBytes.length + 1] = 1;
+  itxtData.set(compBomb, keyBytes.length + 5);
+  const bombChunk = new Uint8Array(12 + itxtData.length);
+  const dv = new DataView(bombChunk.buffer);
+  dv.setUint32(0, itxtData.length, false);
+  bombChunk.set([0x69, 0x54, 0x58, 0x74], 4);
+  bombChunk.set(itxtData, 8);
+  // Compute CRC for bomb chunk
+  let crc = 0xffffffff;
+  for (let i = 4; i < 8 + itxtData.length; i++) {
+    crc ^= bombChunk[i];
+    for (let b = 0; b < 8; b++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  }
+  dv.setUint32(8 + itxtData.length, (crc ^ 0xffffffff) >>> 0, false);
+  const bombPng = new Uint8Array(minimalPng.length + bombChunk.length);
+  bombPng.set(minimalPng.subarray(0, minimalPng.length - 12), 0);
+  bombPng.set(bombChunk, minimalPng.length - 12);
+  bombPng.set(minimalPng.subarray(minimalPng.length - 12), minimalPng.length - 12 + bombChunk.length);
+  const bombRes = await extractCartridgeFromPng(bombPng);
+  check(!bombRes.ok, 'Decompression bomb exceeding 512KB JSON limit must be aborted and rejected');
+
+  const pa01Json = host.getCartridgeJson('cloudberry-hop');
+  check(Boolean(pa01Json), 'Built-in PA-01 cloudberry-hop must expose CartridgeJsonV1 for Polaroid PNG export');
+  if (pa01Json) {
+    const pa01Png = await embedCartridgeIntoPng(minimalPng, pa01Json);
+    const pa01Decoded = await extractCartridgeFromPng(pa01Png);
+    check(pa01Decoded.ok, 'Built-in PA-01 Polaroid PNG must decode cleanly');
+    if (pa01Decoded.ok) {
+      const remixed = host.loadCartridge(pa01Decoded.data, { save: true, mount: false });
+      check(
+        remixed.ok && remixed.id === 'custom-cloudberry-hop' && host.getCartridgeJson('cloudberry-hop')?.meta.id === 'cloudberry-hop',
+        'Imported PA-01 Polaroid PNG must register as custom-cloudberry-hop without mutating built-in PA-01',
+      );
+      host.deleteCustomCartridge('custom-cloudberry-hop');
+    }
+  }
+
+  check(host.deleteCustomCartridge('custom-m3-test') && !host.hasCustomCartridge('custom-m3-test'), 'deleteCustomCartridge must cleanly remove saved cartridge and registry entry');
+  host.destroy();
+  console.log('[SIM OK] M3 EngineHost.loadCartridge & Polaroid PNG iTXt Codec (with Bomb/CRC guards) verified');
 }

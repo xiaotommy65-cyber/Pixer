@@ -86,9 +86,7 @@ export class TextureAtlas {
     return this.pixelUv(col * TILE_PX, row * TILE_PX, spanCols * TILE_PX, spanRows * TILE_PX);
   }
 
-  private blitIndexBuffer(col: number, row: number, buf: Uint8Array, w = TILE_PX, h = TILE_PX): void {
-    const startX = col * TILE_PX;
-    const startY = row * TILE_PX;
+  private blitIndexBufferAt(startX: number, startY: number, buf: Uint8Array, w = TILE_PX, h = TILE_PX): void {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const idx = buf[y * w + x] ?? 0;
@@ -102,6 +100,10 @@ export class TextureAtlas {
         this.pixels[px + 3] = a;
       }
     }
+  }
+
+  private blitIndexBuffer(col: number, row: number, buf: Uint8Array, w = TILE_PX, h = TILE_PX): void {
+    this.blitIndexBufferAt(col * TILE_PX, row * TILE_PX, buf, w, h);
   }
 
   private blitRgbaBuffer(startX: number, startY: number, w: number, h: number, rgba: Uint8Array): void {
@@ -262,20 +264,27 @@ export class TextureAtlas {
     return rect;
   }
 
-  /** Registers or updates a palette-indexed pixel grid dynamically at runtime. */
+  /** Registers or updates a palette-indexed pixel grid dynamically at runtime (>=128px dynamic region). */
   public registerDynamicGridSprite(id: string, grid: readonly string[]): SpriteRect {
-    const h = grid.length;
-    const w = grid[0]?.length ?? TILE_PX;
+    const safeH = Math.max(1, Math.min(128, grid.length));
+    const safeW = Math.max(1, Math.min(128, grid[0]?.length ?? TILE_PX));
     const indices = parseGridToIndices(grid);
-    const rgba = new Uint8Array(w * h * 4);
-    for (let i = 0; i < w * h; i++) {
-      const [r, g, b, a] = PALETTE_RGB[indices[i] ?? 0] ?? [0, 0, 0, 0];
-      rgba[i * 4] = r;
-      rgba[i * 4 + 1] = g;
-      rgba[i * 4 + 2] = b;
-      rgba[i * 4 + 3] = a;
+    const existing = this.rects.get(id);
+    if (existing && existing.w === safeW && existing.h === safeH) {
+      const startX = Math.floor(existing.u0 * ATLAS_SIZE);
+      const startY = Math.floor(existing.v0 * ATLAS_SIZE);
+      if (startY >= DYNAMIC_START_Y) {
+        this.blitIndexBufferAt(startX, startY, indices, safeW, safeH);
+        this.dirty = true;
+        return existing;
+      }
     }
-    return this.registerDynamicRgbaSprite(id, w, h, rgba);
+    const { x, y } = this.allocateDynamicRegion(safeW, safeH);
+    this.blitIndexBufferAt(x, y, indices, safeW, safeH);
+    const rect = this.pixelUv(x, y, safeW, safeH);
+    this.rects.set(id, rect);
+    this.dirty = true;
+    return rect;
   }
 
   public hasSprite(id: SpriteId): boolean {

@@ -3,6 +3,7 @@ import { registerBuiltinCartridges } from '../src/game/BuiltinCartridges.ts';
 import {
   testArchitectureBoundariesAndLifecycle,
   testHd2dDepthPipeline,
+  testM3LoadCartridgeAndPngCodec,
   testStructuredLoggingAndErrorRecovery,
   testUpgradedGpuPipelineAndAtlas,
 } from './sim/ArchitectureTests.ts';
@@ -46,6 +47,7 @@ async function runAll() {
   await testExtensibilityAndAiSpis();
   testUpgradedGpuPipelineAndAtlas();
   await testStructuredLoggingAndErrorRecovery();
+  await testM3LoadCartridgeAndPngCodec();
   console.log('[SIM ALL PASSED] Pixel Atelier Engine 2.0 & All 5 Cartridges (PA-01..PA-05) Passed!');
 }
 

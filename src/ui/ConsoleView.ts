@@ -12,6 +12,7 @@ import { buildConsoleBodyDom } from './ConsoleBodyBuilder.ts';
 import { ConsoleHudPresenter } from './ConsoleHudPresenter.ts';
 import { buildJoyconsAndAuxRail } from './ConsoleJoyconBuilder.ts';
 import { ConsoleShellRouter, type ShellPhase } from './ConsoleShellRouter.ts';
+import { DeskWorldView } from './DeskWorldView.ts';
 import { RpgOverlayView } from './RpgOverlayView.ts';
 import { ShmupOverlayView } from './ShmupOverlayView.ts';
 import { VirtualGamepadInput } from './VirtualGamepadInput.ts';
@@ -33,7 +34,7 @@ export interface ConsoleViewOptions {
 
 /**
  * Switch-style handheld OS shell: Joy-Con (L) | screen body | Joy-Con (R),
- * composing VirtualGamepadInput, CartridgeSlotController, ConsoleHudPresenter, and ConsoleShellRouter.
+ * composing DeskWorldView, VirtualGamepadInput, CartridgeSlotController, ConsoleHudPresenter, and ConsoleShellRouter.
  */
 export class ConsoleView {
   public readonly element: HTMLElement;
@@ -43,11 +44,13 @@ export class ConsoleView {
   private captureRequested = false;
 
   private readonly consoleEl: HTMLElement;
+  private readonly spatialTrackEl: HTMLElement;
   private readonly bodyEl: HTMLElement;
   private readonly leftJoyconEl: HTMLElement;
   private readonly rightJoyconEl: HTMLElement;
   private readonly auxRailEl: HTMLElement;
   private readonly screenFrame: HTMLElement;
+  private readonly deskWorld: DeskWorldView;
   private readonly ac = new AbortController();
   private readonly activeTimers = new Set<number>();
   private readonly recoilTimers = new WeakMap<HTMLElement, number>();
@@ -61,6 +64,7 @@ export class ConsoleView {
   private hwGamepadConnected = false;
   private hwGamepadLabel: string | null = null;
   private debugHitboxesOn = false;
+  private lastParallaxMs = 0;
 
   constructor(host: EngineHost, atlas: TextureAtlas, onExitLandscape: (() => void) | undefined, opts: ConsoleViewOptions) {
     this.host = host;
@@ -147,7 +151,19 @@ export class ConsoleView {
     this.canvas = body.canvas;
 
     this.consoleEl.append(rig.portraitRailBridge, this.auxRailEl, this.leftJoyconEl, this.bodyEl, this.rightJoyconEl);
-    this.element.appendChild(this.consoleEl);
+
+    this.deskWorld = new DeskWorldView(host, atlas, {
+      onOpenEditor: (originEl) => opts.onOpenEditor(originEl),
+      onSelectCartridge: (id) => this.router.launchCartridge(id, false),
+      onRequestCapture: () => this.requestCapture(),
+      onScrollToPage: (pageIdx) => this.scrollToDeskPage(pageIdx, true),
+    });
+
+    this.spatialTrackEl = el('div', 'desk-spatial-track');
+    const consoleSlot = el('div', 'desk-console-slot');
+    consoleSlot.append(this.consoleEl, this.deskWorld.handsOverlayEl);
+    this.spatialTrackEl.append(this.deskWorld.notebookPropEl, consoleSlot, this.deskWorld.trayPropEl);
+    this.element.append(this.deskWorld.deskBgEl, this.spatialTrackEl, this.deskWorld.portraitPagerEl);
 
     this.hud = new ConsoleHudPresenter(
       host,
@@ -229,19 +245,106 @@ export class ConsoleView {
       onSyncHudIdle: () => this.hud.updateControlLabels(null),
       onToast: (msg) => this.showCaptureToast(msg),
       onFilterChange: opts.onFilterChange,
+      onBootStageChange: (stage) => {
+        this.element.dataset.bootStage = stage;
+      },
+      onShellPhaseChange: (phase) => {
+        this.element.dataset.shellPhase = phase;
+        this.bodyEl.classList.toggle('is-lobby-clean', phase !== 'IN_GAME');
+        if (phase === 'IN_GAME' || phase === 'BOOT_BLINK') {
+          this.scrollToDeskPage(1, false);
+          this.setParallax(0, 0);
+        }
+      },
     });
+
+    this.consoleEl.addEventListener(
+      'click',
+      () => {
+        if (this.element.dataset.bootStage === 'standby') {
+          this.router.wakeFromStandby();
+        }
+      },
+      { signal: this.ac.signal },
+    );
+
+    this.spatialTrackEl.addEventListener(
+      'scroll',
+      () => {
+        const w = this.spatialTrackEl.clientWidth;
+        if (w <= 0) return;
+        const idx = Math.max(0, Math.min(2, Math.round(this.spatialTrackEl.scrollLeft / w))) as 0 | 1 | 2;
+        this.deskWorld.setActivePage(idx);
+      },
+      { passive: true, signal: this.ac.signal },
+    );
+
+    this.element.addEventListener(
+      'pointermove',
+      (e) => {
+        if (e.pointerType !== 'mouse') return;
+        const phase = this.router.getShellPhase();
+        if (phase === 'IN_EDITOR' || phase === 'IN_GAME') return;
+        const now = performance.now();
+        if (now - this.lastParallaxMs < 24) return;
+        this.lastParallaxMs = now;
+        const rect = this.element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const nx = Math.max(-1, Math.min(1, ((e.clientX - rect.left) / rect.width - 0.5) * 2));
+        const ny = Math.max(-1, Math.min(1, ((e.clientY - rect.top) / rect.height - 0.5) * 2));
+        this.setParallax(nx, ny);
+      },
+      { passive: true, signal: this.ac.signal },
+    );
+    this.element.addEventListener('pointerleave', () => this.setParallax(0, 0), { signal: this.ac.signal });
+
+    window.addEventListener(
+      'deviceorientation',
+      (ev) => {
+        const phase = this.router.getShellPhase();
+        if (phase === 'IN_EDITOR' || phase === 'IN_GAME') return;
+        if (ev.gamma === null || ev.beta === null) return;
+        const nx = Math.max(-1, Math.min(1, ev.gamma / 30));
+        const ny = Math.max(-1, Math.min(1, (ev.beta - 35) / 30));
+        this.setParallax(nx, ny);
+      },
+      { passive: true, signal: this.ac.signal },
+    );
 
     this.applyGripMode(this.host.hal.getGripMode());
     this.hud.updateControlLabels(null);
 
     this.busUnsubs.push(
-      this.host.events.on('plugin:registered', () => this.router.refreshCards()),
-      this.host.events.on('sprite:registered', () => this.router.refreshCardArt()),
+      this.host.events.on('plugin:registered', () => {
+        this.router.refreshCards();
+        this.deskWorld.rebuildTray();
+      }),
+      this.host.events.on('sprite:registered', () => {
+        this.router.refreshCardArt();
+        this.deskWorld.rebuildTray();
+      }),
     );
+  }
+
+  private setParallax(nx: number, ny: number): void {
+    this.element.style.setProperty('--px', nx.toFixed(3));
+    this.element.style.setProperty('--py', ny.toFixed(3));
+  }
+
+  private scrollToDeskPage(pageIdx: 0 | 1 | 2, smooth: boolean): void {
+    const w = this.spatialTrackEl.clientWidth;
+    if (w > 0) {
+      this.spatialTrackEl.scrollTo({
+        left: w * pageIdx,
+        behavior: smooth ? 'smooth' : 'auto',
+      });
+    }
+    this.deskWorld.setActivePage(pageIdx);
   }
 
   public startBootSequence(): void {
     this.router.startBootSequence();
+    requestAnimationFrame(() => this.scrollToDeskPage(1, false));
   }
   public getShellPhase(): ShellPhase {
     return this.router.getShellPhase();
@@ -315,6 +418,7 @@ export class ConsoleView {
     this.hud.resetOverlays();
     for (const off of this.busUnsubs) off();
     this.busUnsubs.length = 0;
+    this.deskWorld.destroy();
     this.router.destroy();
     this.slots.destroy();
     this.gamepad.destroy();
@@ -377,6 +481,7 @@ export class ConsoleView {
 
   public refreshCardArt(): void {
     this.router.refreshCardArt();
+    this.deskWorld.rebuildTray();
   }
 
   public insertCartridge(id: CartridgeId, instant = false, skipSplash = false): void {
