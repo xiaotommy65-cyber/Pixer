@@ -93,8 +93,11 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   const coreFiles = collectTsFiles(path.join(rootDir, 'src/core'));
   const assetFiles = collectTsFiles(path.join(rootDir, 'src/assets'));
   const gameFiles = collectTsFiles(path.join(rootDir, 'src/game'));
-  const pureCoreDirs = ['ai', 'hal', 'input', 'runtime', 'sim', 'types'];
-  const pureCoreFiles = pureCoreDirs.flatMap((sub) => collectTsFiles(path.join(rootDir, 'src/core', sub)));
+  const pureCoreDirs = ['ai', 'hal', 'input', 'math', 'runtime', 'sim', 'types'];
+  const pureCoreFiles = pureCoreDirs.flatMap((sub) => {
+    const dir = path.join(rootDir, 'src/core', sub);
+    return fs.existsSync(dir) ? collectTsFiles(dir) : [];
+  });
 
   for (const file of [...coreFiles, ...assetFiles]) {
     const src = fs.readFileSync(file, 'utf8');

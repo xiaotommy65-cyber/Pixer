@@ -39,6 +39,7 @@
 - `src/core/input/` — Input DSP & hardware gamepad (`InputPipeline.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `InputMap.ts`, `WebGamepadSampler.ts`).
 - `src/core/hal/` — Hardware Abstraction Layer (`SystemHal.ts`, `HapticEngine.ts` stereo dual-rumble & acoustic fallback).
 - `src/core/ai/` — AI & Agent Bridge (`AgentBridge.ts`, `HybridAiDirector.ts`, `LocalAiProvider.ts`, `RemoteAiProvider.ts`, `ObservationSerializer.ts`, `AiTypes.ts`).
+- `src/core/math/` — Reserved pure zero-GC math/algorithm primitives (`ColorMath`, `NoiseMath`, `SpringDynamics`, `SpatialHash`, `Visibility2D`; follow `.agents/rules/algorithm-shader-protocol.md`).
 - `src/core/types/` — Shared contracts (`WorldTypes.ts`, `CartridgeTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `SceneTypes.ts`).
 
 ### `src/assets/` — Procedural Sprites, Atlas & Audio Data (DOM-free, never import `ui/` or `game/`)
@@ -68,7 +69,7 @@
 - **Core / Edition separation (One Core, Two Shells)**: Keep `src/core/`, `src/assets/`, and `src/game/` 100% UI-agnostic and free of `@capacitor/*` imports; expose edition capabilities via clean config/feature flags (`enableCRT`, `enableAdvancedBlocks`, `showPerfTelemetry`, `allowedBlockIds`) when needed so Arcade and future Edu shells share one core.
 - **Layer & security boundaries** (enforced by `ArchitectureTests.ts`):
   - `src/core/` & `src/assets/` MUST NOT import `src/ui/`, `src/game/`, `@capacitor`, or `virtual:pwa-register`.
-  - `src/core/{ai,hal,input,runtime,sim,types}/`, `src/assets/`, and `src/game/` MUST remain 100% DOM-free and `@capacitor`-free.
+  - `src/core/{ai,hal,input,math,runtime,sim,types}/`, `src/assets/`, and `src/game/` MUST remain 100% DOM-free and `@capacitor`-free.
   - `src/ui/` MUST use `EngineHost` (never `.runner`), manage listeners with `AbortController`, and expose `public destroy()`.
   - `src/` MUST NOT use `eval()` or `new Function()`.
 - **Tooling**: If `codegraph_explore` MCP is available locally, use it before broad `grep`; in cloud sandboxes, jump directly via the File Guide Map above.
