@@ -101,7 +101,7 @@ export function buildConsoleBodyDom(opts: {
     glassSheen,
   );
 
-  const statusHintEl = el('div', 'screen-status-hint', '開機喚醒中…');
+  const statusHintEl = el('div', 'screen-status-hint', '');
   const footer = el('div', 'body-footer');
   const speakerL = el('div', 'speaker');
   const speakerR = el('div', 'speaker');

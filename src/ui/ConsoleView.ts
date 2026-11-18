@@ -251,6 +251,8 @@ export class ConsoleView {
       onShellPhaseChange: (phase) => {
         this.element.dataset.shellPhase = phase;
         this.bodyEl.classList.toggle('is-lobby-clean', phase !== 'IN_GAME');
+        this.screenFrame.scrollLeft = 0;
+        this.screenFrame.scrollTop = 0;
         if (phase === 'IN_GAME' || phase === 'BOOT_BLINK') {
           this.scrollToDeskPage(1, false);
           this.setParallax(0, 0);

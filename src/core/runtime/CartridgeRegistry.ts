@@ -34,7 +34,7 @@ export const HOME_CONTROL_PROFILE: CartridgeControlProfile = {
   l: '上頁',
   r: '下頁',
   rightStick: '預覽',
-  legend: '點選或拖曳下方遊戲卡匣插入主機 · 可用實體手把 / 觸控滑按 / 鍵盤操作',
+  legend: '方向鍵選卡 · A 插入啟動 · 左右滑動切換筆記本與卡匣托盤',
 };
 
 export const DEFAULT_PLUGIN_CONTROL_PROFILE: CartridgeControlProfile = {

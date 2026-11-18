@@ -922,6 +922,10 @@ body[data-perf='eco'] .home-lobby-overlay {
   pointer-events: none;
 }
 
+.console-body.is-lobby-clean .screen-status-hint {
+  display: none;
+}
+
 /* ---------- Desk Grid World & Warm Lamp Glow (Parallax Layer -14px) ---------- */
 .desk-world-bg {
   position: fixed;
@@ -933,7 +937,7 @@ body[data-perf='eco'] .home-lobby-overlay {
     linear-gradient(90deg, rgba(56, 40, 32, 0.065) 1px, transparent 1px);
   background-size: 28px 28px;
   transform: translate3d(calc(var(--px, 0) * -14px), calc(var(--py, 0) * -10px), 0);
-  transition: filter 420ms ease, opacity 320ms ease, background-color 420ms ease;
+  transition: opacity 320ms ease, background-color 420ms ease;
 }
 
 .desk-lamp-glow {
@@ -947,12 +951,11 @@ body[data-perf='eco'] .home-lobby-overlay {
 }
 
 .switch-stage[data-boot-stage='holding'] .desk-world-bg {
-  filter: blur(5px);
+  opacity: 0.72;
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .desk-world-bg {
-  filter: blur(6px);
-  opacity: 0.55;
+  opacity: 0.42;
 }
 
 /* ---------- 3-Step Boot Pickup (Standby Tilt -> SVG Hands -> Upright Awake) ---------- */
@@ -963,12 +966,20 @@ body[data-perf='eco'] .home-lobby-overlay {
   align-items: center;
   justify-content: center;
   width: 100%;
-  perspective: 1100px;
+  perspective: none;
 }
 
 .switch-console {
-  transform-style: preserve-3d;
+  transform-style: flat;
   transition: transform 480ms cubic-bezier(0.22, 1, 0.36, 1), filter 380ms ease;
+}
+
+.switch-stage[data-shell-phase='BOOT_BLINK'] .desk-console-slot {
+  perspective: 1100px;
+}
+
+.switch-stage[data-shell-phase='BOOT_BLINK'] .switch-console {
+  transform-style: preserve-3d;
 }
 
 .switch-stage[data-boot-stage='standby'] .switch-console {
@@ -981,13 +992,20 @@ body[data-perf='eco'] .home-lobby-overlay {
   transform: translateY(0) rotateX(0deg) rotateZ(0deg) scale(1.04);
 }
 
-.switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .switch-console {
-  transform: rotateX(calc(var(--py, 0) * -4deg)) rotateY(calc(var(--px, 0) * 5deg)) scale(1);
-  transition: transform 160ms ease-out, filter 320ms ease;
-}
+@media (min-width: 761px) and (hover: hover) {
+  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .desk-console-slot {
+    perspective: 1100px;
+  }
 
-.switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .cart-slot {
-  transform: translate3d(calc(var(--px, 0) * 6px), calc(var(--py, 0) * 4px), 0);
+  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .switch-console {
+    transform-style: preserve-3d;
+    transform: rotateX(calc(var(--py, 0) * -4deg)) rotateY(calc(var(--px, 0) * 5deg)) scale(1);
+    transition: transform 160ms ease-out, filter 320ms ease;
+  }
+
+  .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'] .cart-slot {
+    transform: translate3d(calc(var(--px, 0) * 6px), calc(var(--py, 0) * 4px), 0);
+  }
 }
 
 .boot-wake-prompt {
@@ -1068,7 +1086,7 @@ body[data-perf='eco'] .home-lobby-overlay {
 
 .desk-prop {
   position: relative;
-  background: rgba(255, 253, 248, 0.88);
+  background: rgba(255, 253, 248, 0.92);
   border: 2.5px solid var(--ink);
   border-radius: 18px;
   padding: 12px;
@@ -1078,17 +1096,15 @@ body[data-perf='eco'] .home-lobby-overlay {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: opacity 280ms ease, filter 280ms ease, transform 240ms var(--ease-bounce);
+  transition: opacity 260ms ease, transform 240ms var(--ease-bounce);
 }
 
 .switch-stage[data-boot-stage='standby'] .desk-prop {
   opacity: 0.52;
-  filter: brightness(0.84);
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .desk-prop {
-  opacity: 0.32;
-  filter: blur(4px);
+  opacity: 0.28;
   pointer-events: none;
 }
 
@@ -1249,17 +1265,55 @@ body[data-perf='eco'] .home-lobby-overlay {
     overflow-x: hidden;
   }
 
-  .desk-prop,
+  .switch-stage[data-shell-phase='IN_GAME'] .desk-prop {
+    visibility: hidden;
+  }
+
   .desk-console-slot {
     flex: 0 0 100%;
     width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+    padding: 0 4px;
+    box-sizing: border-box;
+    overflow: hidden;
     scroll-snap-align: center;
     scroll-snap-stop: always;
   }
 
   .desk-prop {
-    max-width: 94%;
-    margin: 0 auto;
+    flex: 0 0 calc(100% - 20px);
+    width: calc(100% - 20px);
+    min-width: calc(100% - 20px);
+    max-width: calc(100% - 20px);
+    margin: 0 10px;
+    box-sizing: border-box;
+    scroll-snap-align: center;
+    scroll-snap-stop: always;
+  }
+
+  .screen-topbar {
+    flex-wrap: nowrap;
+    overflow: hidden;
+    font-size: 0.58rem;
+    gap: 4px;
+  }
+
+  .screen-metrics {
+    flex-wrap: nowrap;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .metric-tag {
+    white-space: nowrap;
+    padding: 1px 5px;
+  }
+
+  .metric-tag.is-stage {
+    max-width: 34vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .switch-stage[data-shell-phase='HOME_LOBBY'] .portrait-desk-pager {
@@ -1275,7 +1329,7 @@ body[data-perf='eco'] .home-lobby-overlay {
     appearance: none;
     border: 2px solid var(--ink);
     border-radius: 999px;
-    background: rgba(255, 253, 248, 0.85);
+    background: rgba(255, 253, 248, 0.92);
     color: var(--ink);
     font-size: 0.68rem;
     font-weight: 800;
@@ -1287,6 +1341,33 @@ body[data-perf='eco'] .home-lobby-overlay {
 
   .portrait-pager-btn.is-active {
     background: var(--accent-honey);
+  }
+}
+
+/* Mobile / Coarse Pointer GPU Performance Guard: skip expensive real-time backdrop blur */
+@media (max-width: 960px), (pointer: coarse) {
+  .console-os-pill-btn,
+  .home-lobby-overlay,
+  .angled-menu-backdrop,
+  .angled-menu-panel,
+  .cartridge-drawer-backdrop,
+  .cartridge-drawer-sheet,
+  .studio-workbench-bar,
+  .app-crash-card {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .console-os-pill-btn,
+  .angled-menu-panel,
+  .cartridge-drawer-sheet,
+  .studio-workbench-bar,
+  .app-crash-card {
+    background: #fffdf8;
+  }
+
+  .home-lobby-overlay {
+    background: linear-gradient(180deg, rgba(255, 252, 245, 0.96) 0%, rgba(246, 236, 218, 0.98) 100%);
   }
 }
 
