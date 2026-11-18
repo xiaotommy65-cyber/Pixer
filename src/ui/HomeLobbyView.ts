@@ -3,7 +3,8 @@ import type { EngineHost } from '../core/runtime/EngineHost.ts';
 import type { CartridgeId, CartridgeMeta } from '../core/types/WorldTypes.ts';
 import { renderCardArt } from './CardArt.ts';
 import { drawAtlasSpriteToCanvas } from './MomoMascot.ts';
-import { btn, el } from './dom.ts';
+import { setElementIconLabel } from './PixelIcons.ts';
+import { el, iconBtn } from './dom.ts';
 
 export interface HomeLobbyCallbacks {
   onFocusCartridge: (meta: CartridgeMeta) => void;
@@ -80,9 +81,10 @@ export class HomeLobbyView {
     this.hintLineEl = el('span', 'lobby-hint-line', '◀ ▶ 選卡匣 · A 啟動／續玩 · ▼ 創作與設定');
     const dock = el('div', 'lobby-dock');
 
-    this.editorBtn = btn(
+    this.editorBtn = iconBtn(
       'lobby-dock-btn is-primary',
-      '🎨 進入編輯器',
+      'palette',
+      '進入編輯器',
       '展開全螢幕雙工坊編輯器（精靈畫室＋積木工房）',
       () => {
         this.focusRow = 'dock';
@@ -96,9 +98,10 @@ export class HomeLobbyView {
       this.ac.signal,
     );
 
-    this.settingsBtn = btn(
+    this.settingsBtn = iconBtn(
       'lobby-dock-btn',
-      '⚙ 設定',
+      'gear',
+      '設定',
       '開啟進階手感與系統設定',
       () => {
         this.focusRow = 'dock';
@@ -315,17 +318,19 @@ export class HomeLobbyView {
     this.focusedTitleEl.textContent = `${meta.code} · ${meta.title}`;
     const isPlaying = this.host.activeCartridge === meta.id;
     const hasSram = this.host.hasSram(meta.id);
-    this.focusedMetaEl.textContent = isPlaying
-      ? '● 遊玩中（按 A 續玩 / X 重開）'
-      : hasSram
-        ? '💾 存檔待續（按 A 繼續 / X 重開）'
-        : meta.genre;
+    if (isPlaying) {
+      setElementIconLabel(this.focusedMetaEl, 'play', '遊玩中（A 續玩 / X 重開）');
+    } else if (hasSram) {
+      setElementIconLabel(this.focusedMetaEl, 'save', '存檔待續（A 繼續 / X 重開）');
+    } else {
+      this.focusedMetaEl.textContent = meta.genre;
+    }
     this.hintLineEl.textContent =
       this.focusRow === 'dock'
-        ? '▲ 回卡匣列 · A 確認執行 Dock 功能'
+        ? '▲ 回卡匣 · A 確認'
         : isPlaying
-          ? 'A 無縫續玩 · X 卸載重開 · ▼ 進入編輯器／設定'
-          : '◀ ▶ 選卡匣 · A 插入啟動 · ▼ 進入編輯器／設定';
+          ? 'A 續玩 · X 重開 · ▼ 功能列'
+          : '◀ ▶ 選卡 · A 啟動';
 
     const focusedCard = this.cardEls[this.focusedCardIdx];
     if (focusedCard && this.visible) {

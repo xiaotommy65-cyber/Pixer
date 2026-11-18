@@ -1,4 +1,5 @@
 import type { VirtualGamepadInput, TouchButtonKey } from './VirtualGamepadInput.ts';
+import { createPixelIcon } from './PixelIcons.ts';
 import { btn, el } from './dom.ts';
 
 export interface JoyconRigRefs {
@@ -75,10 +76,9 @@ export function buildJoyconsAndAuxRail(
   const lStick = gamepad.buildLeftStick();
   const dirs = gamepad.buildSlideDpad();
   const lBottom = el('div', 'jc-row');
-  lBottom.append(
-    makeLeds(),
-    btn('jc-sys-btn is-square', '◉', '截圖：儲存 PICO-8 風紀念卡匣 PNG', callbacks.onRequestCapture),
-  );
+  const captureBtn = btn('jc-sys-btn is-square', '', '截圖：儲存 PICO-8 風紀念卡匣 PNG', callbacks.onRequestCapture);
+  captureBtn.appendChild(createPixelIcon('camera', 'is-hw'));
+  lBottom.append(makeLeds(), captureBtn);
   left.append(lBumper.button, lTop, lStick, dirs, lBottom);
 
   // ---------- Joy-Con R ----------
@@ -106,10 +106,9 @@ export function buildJoyconsAndAuxRail(
 
   const rStick = gamepad.buildRightStick();
   const rBottom = el('div', 'jc-row');
-  rBottom.append(
-    btn('jc-sys-btn is-home', '⌂', 'HOME：開啟斜角系統選單', callbacks.onHomeButton),
-    makeLeds(),
-  );
+  const homeBtn = btn('jc-sys-btn is-home', '', 'HOME：開啟斜角系統選單', callbacks.onHomeButton);
+  homeBtn.appendChild(createPixelIcon('home', 'is-hw'));
+  rBottom.append(homeBtn, makeLeds());
   right.append(rBumper.button, rTop, abxy, rStick, rBottom);
 
   const portraitRailBridge = el('div', 'portrait-rail-bridge');
@@ -122,8 +121,10 @@ export function buildJoyconsAndAuxRail(
   const auxR = makeShoulderHold('aux-sys-btn is-shoulder', 'R', '特技', 'shoulderR', 'R 肩鍵', 'right');
   const auxMinus = btn('aux-sys-btn', '−', '− 開啟換片抽屜', callbacks.onOpenDrawer);
   const auxPlus = btn('aux-sys-btn', '+', '+ 暫停 / 出擊', callbacks.onPlusAction);
-  const auxCam = btn('aux-sys-btn', '◉', '截圖：紀念卡匣 PNG', callbacks.onRequestCapture);
-  const auxHome = btn('aux-sys-btn is-home', '⌂', 'HOME：系統選單', callbacks.onHomeButton);
+  const auxCam = btn('aux-sys-btn', '', '截圖：紀念卡匣 PNG', callbacks.onRequestCapture);
+  auxCam.appendChild(createPixelIcon('camera', 'is-hw'));
+  const auxHome = btn('aux-sys-btn is-home', '', 'HOME：系統選單', callbacks.onHomeButton);
+  auxHome.appendChild(createPixelIcon('home', 'is-hw'));
   auxRail.append(auxL.button, auxR.button, auxMinus, auxPlus, auxCam, auxHome);
 
   return {

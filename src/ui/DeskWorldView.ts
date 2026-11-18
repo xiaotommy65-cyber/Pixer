@@ -3,7 +3,8 @@ import type { EngineHost } from '../core/runtime/EngineHost.ts';
 import type { CartridgeId } from '../core/types/WorldTypes.ts';
 import { renderCardArt } from './CardArt.ts';
 import { drawAtlasSpriteToCanvas } from './MomoMascot.ts';
-import { btn, el } from './dom.ts';
+import { setElementIconLabel } from './PixelIcons.ts';
+import { btn, el, iconBtn } from './dom.ts';
 
 export interface DeskWorldCallbacks {
   onOpenEditor: (originEl: HTMLElement) => void;
@@ -83,9 +84,10 @@ export class DeskWorldView {
       'desk-prop-desc',
       '手繪 16×16 精靈動畫、排布 40–80 格平台關卡，並將作品封裝成可遊玩拍立得 PNG。',
     );
-    const openEditorBtn = btn(
+    const openEditorBtn = iconBtn(
       'toy-btn is-primary desk-prop-cta',
-      '🎨 翻開筆記本（編輯器）',
+      'palette',
+      '翻開筆記本（編輯器）',
       '以虹膜轉場開啟精靈畫室與積木工坊',
       undefined,
       this.ac.signal,
@@ -99,9 +101,10 @@ export class DeskWorldView {
     const trayHead = el('div', 'desk-tray-head');
     const trayTitleCol = el('div', 'notebook-title-col');
     trayTitleCol.append(el('span', 'desk-prop-kicker', 'DESK RACK'), el('strong', undefined, '卡匣托盤＆拍立得'));
-    const snapBtn = btn(
+    const snapBtn = iconBtn(
       'toy-btn is-honey',
-      '📸 拍照存卡',
+      'camera',
+      '拍照存卡',
       '將目前畫面與卡匣封裝為 Polaroid PNG',
       () => this.cb.onRequestCapture(),
       this.ac.signal,
@@ -109,7 +112,8 @@ export class DeskWorldView {
     trayHead.append(trayTitleCol, snapBtn);
 
     this.trayGridEl = el('div', 'desk-tray-grid');
-    const dropHint = el('div', 'desk-drop-hint', '🎴 支援將任意 Pixer Polaroid PNG 直接拖放讀卡');
+    const dropHint = el('div', 'desk-drop-hint');
+    setElementIconLabel(dropHint, 'cartridge', '支援將任意 Pixer Polaroid PNG 直接拖放讀卡');
     this.trayPropEl.append(trayHead, this.trayGridEl, dropHint);
     this.rebuildTray();
 

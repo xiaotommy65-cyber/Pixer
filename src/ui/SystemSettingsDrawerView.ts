@@ -10,7 +10,8 @@ import {
   type SystemSettingsDrawerState,
 } from './SettingsDrawerTypes.ts';
 import { SystemLogPanelView } from './SystemLogPanelView.ts';
-import { btn, createSegmentedControl, el } from './dom.ts';
+import { setElementIconLabel } from './PixelIcons.ts';
+import { btn, createSegmentedControl, el, iconBtn } from './dom.ts';
 
 export { SHELL_THEMES };
 export type { ShellTheme, SystemSettingsDrawerCallbacks, SystemSettingsDrawerState };
@@ -66,7 +67,8 @@ export class SystemSettingsDrawerView {
     drawerEl.setAttribute('aria-label', '系統與手感設定');
 
     const drawerHead = el('div', 'sys-drawer-head');
-    const drawerTitle = el('h2', 'sys-drawer-title', '⚙ 系統與手感設定');
+    const drawerTitle = el('h2', 'sys-drawer-title');
+    setElementIconLabel(drawerTitle, 'gear', '系統與手感設定');
     this.closeBtn = btn('toy-btn sys-drawer-close', '✕', undefined, () => this.close(), signal);
     this.closeBtn.setAttribute('aria-label', '關閉系統設定');
     drawerHead.append(drawerTitle, this.closeBtn);
@@ -78,8 +80,8 @@ export class SystemSettingsDrawerView {
       initialValue: 'settings',
       signal,
       options: [
-        { value: 'settings', label: '⚙ 手感設定', title: '調整握持佈局、觸控回饋與卡匣工具' },
-        { value: 'logs', label: '📋 系統日誌', title: '檢視結構化執行成功、錯誤日誌與匯出 JSONL' },
+        { value: 'settings', label: '手感設定', title: '調整握持佈局、觸控回饋與卡匣工具' },
+        { value: 'logs', label: '系統日誌', title: '檢視結構化執行成功、錯誤日誌與匯出 JSONL' },
       ],
       onSelect: (tab) => this.switchTab(tab),
     });
@@ -88,16 +90,16 @@ export class SystemSettingsDrawerView {
 
     // Section 1: Grip & Shell
     const secGrip = el('section', 'sys-drawer-section');
-    secGrip.appendChild(el('div', 'sys-drawer-label', '🎮 握持佈局與主機外殼'));
+    secGrip.appendChild(el('div', 'sys-drawer-label', '握持佈局與主機外殼'));
 
     const gripCtrl = createSegmentedControl<ErgonomicGripMode>({
       ariaLabel: '掌機握持佈局模式',
       initialValue: initial.gripMode,
       signal,
       options: [
-        { value: 'one-left', label: '👈 左單', title: '左手單手拇指模式' },
-        { value: 'both', label: '🙌 雙手', title: '雙手標準掌機模式' },
-        { value: 'one-right', label: '👉 右單', title: '右手單手拇指模式' },
+        { value: 'one-left', label: '左單手', title: '左手單手拇指模式' },
+        { value: 'both', label: '雙手標準', title: '雙手標準掌機模式' },
+        { value: 'one-right', label: '右單手', title: '右手單手拇指模式' },
       ],
       onSelect: (mode) => {
         this.cb.onSelectGrip(mode);
@@ -125,7 +127,7 @@ export class SystemSettingsDrawerView {
     const gripRow = el('div', 'sys-drawer-row');
     gripRow.append(gripCtrl.element, swatchBox);
 
-    this.landscapeBtn = btn('toy-btn is-mint', '⛶ 切換橫屏掌機');
+    this.landscapeBtn = iconBtn('toy-btn is-mint', 'expand', '切換橫屏掌機');
     this.landscapeBtn.addEventListener(
       'click',
       () => {
@@ -234,23 +236,23 @@ export class SystemSettingsDrawerView {
 
     // Section 3: Cartridge & Save Tools
     const secCart = el('section', 'sys-drawer-section');
-    secCart.appendChild(el('div', 'sys-drawer-label', '💾 卡匣與存檔工具'));
+    secCart.appendChild(el('div', 'sys-drawer-label', '卡匣與存檔工具'));
 
-    const captureBtn = btn('toy-btn', '📸 紀念截圖 PNG', undefined, () => {
+    const captureBtn = iconBtn('toy-btn', 'camera', '紀念截圖 PNG', undefined, () => {
       this.close();
       this.cb.onCapture();
     }, signal);
-    this.retryBtn = btn('toy-btn', '↺ 重試當前關卡', undefined, () => {
+    this.retryBtn = iconBtn('toy-btn', 'refresh', '重試當前關卡', undefined, () => {
       if (!this.cb.getState().hasCartridge) return;
       this.close();
       this.cb.onRetryStage();
     }, signal);
-    this.clearSaveBtn = btn('toy-btn is-danger-soft', '🗑 清除電池存檔', undefined, () => {
+    this.clearSaveBtn = iconBtn('toy-btn is-danger-soft', 'trash', '清除電池存檔', undefined, () => {
       if (!this.cb.getState().hasCartridge) return;
       this.cb.onClearSave();
       this.syncState();
     }, signal);
-    this.ejectBtn = btn('toy-btn', '⏏ 退出卡匣', undefined, () => {
+    this.ejectBtn = iconBtn('toy-btn', 'exit', '退出卡匣', undefined, () => {
       if (!this.cb.getState().hasCartridge) return;
       this.close();
       this.cb.onEject();
@@ -262,13 +264,13 @@ export class SystemSettingsDrawerView {
 
     // Section 4: Engine Performance & PWA Install
     const secEngine = el('section', 'sys-drawer-section');
-    secEngine.appendChild(el('div', 'sys-drawer-label', '⚡ 引擎效能測試與安裝'));
+    secEngine.appendChild(el('div', 'sys-drawer-label', '引擎效能測試與安裝'));
 
-    this.benchBtn = btn('toy-btn', '✨ 1,150+ GPU 精靈派對', undefined, () => {
+    this.benchBtn = iconBtn('toy-btn', 'sparkle', '1,150+ GPU 精靈派對', undefined, () => {
       this.cb.onToggleBenchmark();
       this.syncState();
     }, signal);
-    this.hitboxBtn = btn('toy-btn', '🧪 F3 除錯碰撞框', undefined, () => {
+    this.hitboxBtn = iconBtn('toy-btn', 'flask', 'F3 除錯碰撞框', undefined, () => {
       this.cb.onToggleDebugHitboxes();
       this.syncState();
     }, signal);
@@ -401,7 +403,7 @@ export class SystemSettingsDrawerView {
 
   public syncLandscapeState(isLandscape: boolean): void {
     this.landscapeBtn.classList.toggle('is-active', isLandscape);
-    this.landscapeBtn.textContent = isLandscape ? '↩ 離開橫屏掌機' : '⛶ 切換橫屏掌機';
+    setElementIconLabel(this.landscapeBtn, isLandscape ? 'exit' : 'expand', isLandscape ? '離開橫屏掌機' : '切換橫屏掌機');
   }
 
   public syncState(s: SystemSettingsDrawerState = this.cb.getState()): void {
@@ -414,10 +416,10 @@ export class SystemSettingsDrawerView {
     this.hapticBtn.textContent = HAPTIC_LABELS[s.hapticLevel];
     this.hapticBtn.classList.toggle('is-active', s.hapticLevel === 'full');
 
-    this.muteBtn.textContent = s.muted ? '🔇 靜音中' : '🔊 音效開';
+    setElementIconLabel(this.muteBtn, 'speaker', s.muted ? '靜音中' : '音效開');
     this.muteBtn.classList.toggle('is-active', !s.muted);
 
-    this.autofireBtn.textContent = s.autofire ? '🔥 連發輔助：開' : '🔥 連發輔助：關';
+    this.autofireBtn.textContent = s.autofire ? '連發輔助：開' : '連發輔助：關';
     this.autofireBtn.classList.toggle('is-active', s.autofire);
     this.autofireBtn.setAttribute('aria-pressed', String(s.autofire));
 
@@ -431,10 +433,10 @@ export class SystemSettingsDrawerView {
     this.clearSaveBtn.disabled = !s.hasCartridge || !s.hasSram;
 
     this.benchBtn.classList.toggle('is-active', s.benchmarkOn);
-    this.benchBtn.textContent = s.benchmarkOn ? '🎉 派對中 1,150+ 精靈' : '✨ 1,150+ GPU 精靈派對';
+    setElementIconLabel(this.benchBtn, 'sparkle', s.benchmarkOn ? '派對中 1,150+ 精靈' : '1,150+ GPU 精靈派對');
 
     this.hitboxBtn.classList.toggle('is-active', s.debugHitboxesOn);
-    this.hitboxBtn.textContent = s.debugHitboxesOn ? '🧪 碰撞框：開啟中' : '🧪 F3 除錯碰撞框';
+    setElementIconLabel(this.hitboxBtn, 'flask', s.debugHitboxesOn ? '碰撞框：開啟中' : 'F3 除錯碰撞框');
 
     this.syncGamepad(s.gamepadConnected, s.gamepadLabel);
   }

@@ -8,6 +8,7 @@ import { validateCartridgeJson, type CartridgeJsonV1 } from './core/sim/Cartridg
 import type { CartridgeId } from './core/types/WorldTypes.ts';
 import { exportCartridgeCardPngDataUrl } from './ui/CardArt.ts';
 import type { ConsoleView } from './ui/ConsoleView.ts';
+import { setElementIconLabel } from './ui/PixelIcons.ts';
 import type { StudioWorkbenchView } from './ui/StudioWorkbenchView.ts';
 import type { ShellTheme, SystemSettingsDrawerView } from './ui/SystemSettingsDrawerView.ts';
 
@@ -37,7 +38,7 @@ export function createOsUtilityBar(): {
   landscapeBtn.type = 'button';
   landscapeBtn.className = 'console-os-pill-btn';
   landscapeBtn.title = '切換全螢幕橫屏掌機模式';
-  landscapeBtn.textContent = '⛶ 橫屏';
+  setElementIconLabel(landscapeBtn, 'expand', '橫屏');
 
   const settingsBtn = document.createElement('button');
   settingsBtn.type = 'button';
@@ -50,7 +51,8 @@ export function createOsUtilityBar(): {
   settingsGpDot.className = 'settings-gp-dot';
   settingsGpDot.setAttribute('aria-hidden', 'true');
   const settingsText = document.createElement('span');
-  settingsText.textContent = '⚙ 進階設定';
+  settingsText.className = 'os-pill-label';
+  setElementIconLabel(settingsText, 'gear', '進階設定');
   settingsBtn.append(settingsGpDot, settingsText);
 
   utilityBar.append(landscapeBtn, settingsBtn);
@@ -78,7 +80,7 @@ export function createHandheldOrientationController(params: {
     const isPortraitViewport = window.innerHeight > window.innerWidth;
     params.shell.classList.toggle('is-rotated-90', handheldLandscape && isPortraitViewport);
     params.landscapeBtn.classList.toggle('is-active', handheldLandscape);
-    params.landscapeBtn.textContent = handheldLandscape ? '↩ 離開橫屏' : '⛶ 橫屏';
+    setElementIconLabel(params.landscapeBtn, handheldLandscape ? 'exit' : 'expand', handheldLandscape ? '離開橫屏' : '橫屏');
     params.getDrawerView()?.syncLandscapeState(handheldLandscape);
   };
 

@@ -150,6 +150,7 @@ export class ConsoleView {
       chronicleOverlay,
       onReturnHome: () => this.router.returnToHomeLobby(),
       onClearSave: () => this.clearActiveSram(),
+      onOpenSettings: () => opts.onOpenAdvancedSettings(),
       onExitLandscape: () => onExitLandscape?.(),
       onRetryStage: () => this.host.retryStage(),
       onRestartFresh: () => this.host.restartFresh(),

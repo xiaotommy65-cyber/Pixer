@@ -2,7 +2,7 @@ import type { ScreenFilterMode } from '../core/types/WorldTypes.ts';
 import type { ChronicleOverlayView } from './ChronicleOverlayView.ts';
 import type { RpgOverlayView } from './RpgOverlayView.ts';
 import type { ShmupOverlayView } from './ShmupOverlayView.ts';
-import { btn, el } from './dom.ts';
+import { el, iconBtn } from './dom.ts';
 
 export interface ConsoleBodyRefs {
   bodyEl: HTMLElement;
@@ -36,6 +36,7 @@ export function buildConsoleBodyDom(opts: {
   chronicleOverlay: ChronicleOverlayView;
   onReturnHome: () => void;
   onClearSave: () => void;
+  onOpenSettings: () => void;
   onExitLandscape: () => void;
   onRetryStage: () => void;
   onRestartFresh: () => void;
@@ -51,9 +52,9 @@ export function buildConsoleBodyDom(opts: {
   const slotSide = el('div', 'slot-side');
   const slotLed = el('span', 'slot-led');
   slotLed.title = '卡槽狀態指示燈';
-  const slotHint = el('span', 'slot-hint', '◀ 點此切換卡匣');
-  const ejectBtn = btn('eject-btn panel-hidden', '⌂ 回大廳', undefined, opts.onReturnHome);
-  const clearSaveBtn = btn('eject-btn is-clear-save panel-hidden', '🗑 重頭', '清除存檔從第一關重開', opts.onClearSave);
+  const slotHint = el('span', 'slot-hint', '點此切換卡匣');
+  const ejectBtn = iconBtn('eject-btn panel-hidden', 'home', '回大廳', undefined, opts.onReturnHome);
+  const clearSaveBtn = iconBtn('eject-btn is-clear-save panel-hidden', 'trash', '重頭', '清除存檔從第一關重開', opts.onClearSave);
   slotSide.append(slotLed, slotHint, clearSaveBtn, ejectBtn);
 
   const topbar = el('div', 'screen-topbar');
@@ -66,8 +67,9 @@ export function buildConsoleBodyDom(opts: {
   const mRight = el('div', 'screen-metrics');
   const spriteStatTag = el('span', 'metric-tag', '精靈 0 · 0 draws');
   const fpsTag = el('span', 'metric-tag', '60 FPS');
-  const exitLandscapeBtn = btn('handheld-exit-btn', '↩ 離開橫屏', '離開全螢幕橫屏掌機模式', opts.onExitLandscape);
-  mRight.append(spriteStatTag, fpsTag, exitLandscapeBtn);
+  const handheldSettingsBtn = iconBtn('handheld-settings-btn', 'gear', '設定', '開啟進階手感與系統設定', opts.onOpenSettings);
+  const exitLandscapeBtn = iconBtn('handheld-exit-btn', 'exit', '離開橫屏', '離開全螢幕橫屏掌機模式', opts.onExitLandscape);
+  mRight.append(spriteStatTag, fpsTag, handheldSettingsBtn, exitLandscapeBtn);
   topbar.append(mLeft, mRight);
 
   const screenFrame = el('div', 'screen-frame');
@@ -87,8 +89,8 @@ export function buildConsoleBodyDom(opts: {
   const resultDesc = el('p');
   const resultActions = el('div', 'overlay-actions');
   resultActions.append(
-    btn('toy-btn is-primary', '✨ 重試本關', undefined, opts.onRetryStage),
-    btn('toy-btn', '🔄 從頭開始', undefined, opts.onRestartFresh),
+    iconBtn('toy-btn is-primary', 'sparkle', '重試本關', undefined, opts.onRetryStage),
+    iconBtn('toy-btn', 'refresh', '從頭開始', undefined, opts.onRestartFresh),
   );
   card.append(resultTitle, resultDesc, resultActions);
   resultOverlay.appendChild(card);

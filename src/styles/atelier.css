@@ -290,19 +290,37 @@ select {
   transform: scale(0.86);
 }
 
-/* Tactile Toy Buttons */
+/* Tactile Toy Buttons & Pixel Icons */
+.pixel-icon {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+  vertical-align: -0.16em;
+  flex-shrink: 0;
+}
+
+.jc-sys-btn .pixel-icon.is-hw,
+.aux-sys-btn .pixel-icon.is-hw {
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+}
+
 .toy-btn {
   position: relative;
   appearance: none;
   border: 2px solid var(--ink);
   border-radius: 12px;
-  background: var(--bg-card);
+  background: linear-gradient(180deg, #fffefb 0%, #f4ead8 100%);
   color: var(--ink);
-  font-weight: 700;
+  font-weight: 800;
   font-size: 0.84rem;
   padding: 7px 12px;
   cursor: pointer;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.55), 0 3.5px 0 var(--ink);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -2px 0 rgba(120, 88, 60, 0.16),
+    0 3.5px 0 var(--ink);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -314,7 +332,10 @@ select {
 
 .toy-btn:hover {
   transform: translateY(-1px);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.65), 0 4.5px 0 var(--ink);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -2px 0 rgba(120, 88, 60, 0.18),
+    0 4.5px 0 var(--ink);
 }
 
 .toy-btn:active,
@@ -326,22 +347,34 @@ select {
 }
 
 .toy-btn.is-primary {
-  background: var(--accent-coral);
+  background: linear-gradient(180deg, #ff8ba5 0%, #ff6387 100%);
   color: #fffdf8;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.52),
+    inset 0 -2px 0 rgba(160, 36, 68, 0.34),
+    0 3.5px 0 var(--ink);
 }
 
 .toy-btn.is-mint {
-  background: var(--accent-mint);
+  background: linear-gradient(180deg, #7be6b8 0%, #48c991 100%);
   color: var(--ink);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -2px 0 rgba(36, 128, 86, 0.28),
+    0 3.5px 0 var(--ink);
 }
 
 .toy-btn.is-honey {
-  background: var(--accent-honey);
+  background: linear-gradient(180deg, #ffe270 0%, #f7c12d 100%);
   color: var(--ink);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -2px 0 rgba(168, 108, 12, 0.28),
+    0 3.5px 0 var(--ink);
 }
 
 .toy-btn.is-active {
-  background: var(--accent-honey);
+  background: linear-gradient(180deg, #ffe270 0%, #f7c12d 100%);
 }
 
 /* 3-Station Pill Tabs */
@@ -817,7 +850,7 @@ body.is-handheld-lock {
   width: 100vw;
   height: 100dvh;
   margin: 0;
-  padding: max(4px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(4px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  padding: 0;
   gap: 0;
   z-index: 80;
   background: var(--bg-desk);

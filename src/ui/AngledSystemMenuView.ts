@@ -1,5 +1,6 @@
 import type { EngineHost } from '../core/runtime/EngineHost.ts';
 import type { ScreenFilterMode } from '../core/types/WorldTypes.ts';
+import { setElementIconLabel, type PixelIconName } from './PixelIcons.ts';
 import { btn, el } from './dom.ts';
 
 export interface AngledMenuCallbacks {
@@ -143,11 +144,13 @@ export class AngledSystemMenuView {
     const muted = this.cb.getMuted();
     const debugOn = this.cb.getDebugHitboxes();
 
-    const addItem = (label: string, valText: string, onSelect: () => void) => {
+    const addItem = (icon: PixelIconName, label: string, valText: string, onSelect: () => void) => {
       const idx = this.items.length;
       const itemBtn = btn('angled-menu-item', '');
+      const labelEl = el('span', 'angled-menu-label');
+      setElementIconLabel(labelEl, icon, label);
       itemBtn.append(
-        el('span', undefined, label),
+        labelEl,
         el('span', 'angled-menu-item-val', valText),
       );
       itemBtn.addEventListener(
@@ -172,44 +175,44 @@ export class AngledSystemMenuView {
     };
 
     if (hasCart) {
-      addItem('▶ 繼續遊玩', 'A / ESC', () => {
+      addItem('play', '繼續遊玩', 'A / ESC', () => {
         this.close();
         this.cb.onResume();
       });
-      addItem('↺ 重新開始本關', '重載目前關卡', () => {
+      addItem('refresh', '重新開始本關', '重載目前關卡', () => {
         this.close();
         this.cb.onRestartStage();
       });
     }
 
-    addItem('🎴 切換卡匣', '42% 換片抽屜', () => {
+    addItem('cartridge', '切換卡匣', '換片抽屜', () => {
       this.close();
       this.cb.onOpenCartridgeDrawer();
     });
 
-    addItem('🖥 螢幕濾鏡', FILTER_LABELS[filter], () => {
+    addItem('screen', '螢幕濾鏡', FILTER_LABELS[filter], () => {
       this.cb.onCycleScreenFilter();
       this.host.playStereoTick(860, 0.25, 0.2);
       this.rebuildItems();
     });
 
-    addItem('🔊 音效靜音', muted ? '靜音中' : '開啟', () => {
+    addItem('speaker', '音效靜音', muted ? '靜音中' : '開啟', () => {
       this.cb.onToggleMute();
       this.rebuildItems();
     });
 
-    addItem('🧪 GPU 除錯顯示', debugOn ? '開啟' : '關閉', () => {
+    addItem('flask', 'GPU 除錯顯示', debugOn ? '開啟' : '關閉', () => {
       this.cb.onToggleDebugHitboxes();
       this.rebuildItems();
     });
 
-    addItem('⚙ 進階手感與系統設定', '握持 / 配色 / 震動', () => {
+    addItem('gear', '進階手感與系統設定', '握持 / 配色 / 震動', () => {
       this.close();
       this.cb.onOpenAdvancedSettings();
     });
 
     if (hasCart) {
-      addItem('⌂ 返回 HOME 大廳', '背景掛起保留', () => {
+      addItem('home', '返回 HOME 大廳', '背景掛起保留', () => {
         this.close();
         this.cb.onReturnLobby();
       });

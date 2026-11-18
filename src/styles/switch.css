@@ -653,11 +653,14 @@
   font-size: 0.74rem;
   font-weight: 800;
   color: var(--ink);
-  background: var(--bg-card);
+  background: linear-gradient(180deg, #fffefb 0%, #f3e8d6 100%);
   border: 2px solid var(--ink);
   border-radius: 999px;
   padding: 3px 10px;
-  box-shadow: 0 2px 0 var(--ink);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1.5px 0 rgba(120, 88, 60, 0.16),
+    0 2.5px 0 var(--ink);
   animation: hintBob 1.8s ease-in-out infinite;
 }
 
@@ -670,18 +673,25 @@
   appearance: none;
   border: 2px solid var(--ink);
   border-radius: 999px;
-  background: var(--bg-card);
+  background: linear-gradient(180deg, #fffefb 0%, #f3e8d6 100%);
+  color: var(--ink);
   font-size: 0.74rem;
   font-weight: 800;
   padding: 3px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   cursor: pointer;
   touch-action: manipulation;
-  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.5), 0 2.5px 0 var(--ink);
+  box-shadow:
+    inset 0 1.5px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1.5px 0 rgba(120, 88, 60, 0.16),
+    0 2.5px 0 var(--ink);
   transition: transform 105ms var(--ease-bounce), box-shadow 105ms ease;
 }
 
 .eject-btn.is-clear-save {
-  background: #ffe8ed;
+  background: linear-gradient(180deg, #fff0f4 0%, #ffd9e3 100%);
   color: #9e2645;
 }
 
@@ -708,18 +718,21 @@
 .screen-metrics {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .metric-tag {
-  background: rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(16, 12, 16, 0.28) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   padding: 2px 8px;
   border-radius: 999px;
 }
 
 .metric-tag.is-stage {
-  background: rgba(255, 212, 71, 0.22);
+  background: linear-gradient(180deg, rgba(255, 224, 112, 0.28) 0%, rgba(235, 157, 24, 0.22) 100%);
+  border-color: rgba(255, 212, 71, 0.42);
   color: #ffe788;
   font-weight: 800;
 }
@@ -1424,10 +1437,10 @@
   }
 
   .switch-console {
-    grid-template-columns: clamp(86px, 14vw, 108px) minmax(0, 1fr) clamp(86px, 14vw, 108px);
+    grid-template-columns: minmax(84px, 148px) minmax(0, 1fr) minmax(84px, 148px);
     grid-template-areas: 'left body right';
     gap: 0;
-    margin-top: 28px;
+    margin-top: 34px;
     padding-bottom: 0;
   }
 
@@ -1465,8 +1478,7 @@
   }
 
   .screen-frame {
-    width: 100%;
-    max-width: min(100%, calc((100dvh - 172px) * 16 / 9));
+    width: min(100%, calc((100dvh - 96px) * 16 / 9));
     margin: 0 auto;
   }
 
@@ -1560,36 +1572,50 @@
 }
 
 /* ---------- Handheld Fullscreen / Forced-90 Landscape Mode ---------- */
-.handheld-exit-btn {
+.handheld-exit-btn,
+.handheld-settings-btn {
   display: none;
   appearance: none;
-  border: 1.5px solid #ffd447;
+  border: 2px solid var(--ink);
   border-radius: 999px;
-  background: rgba(255, 212, 71, 0.22);
-  color: #fff6d6;
-  font-size: 0.64rem;
+  font-size: 0.62rem;
   font-weight: 800;
   padding: 2px 8px;
   cursor: pointer;
   touch-action: manipulation;
-  box-shadow: 0 2px 0 rgba(14, 10, 18, 0.85);
   transition: transform 105ms var(--ease-bounce), box-shadow 105ms ease;
 }
 
+.handheld-exit-btn {
+  background: linear-gradient(180deg, #ffe270 0%, #f5be2a 100%);
+  color: var(--ink);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.72), 0 2px 0 rgba(14, 10, 18, 0.9);
+}
+
+.handheld-settings-btn {
+  background: linear-gradient(180deg, #fffefb 0%, #eadec9 100%);
+  color: var(--ink);
+  box-shadow: inset 0 1.5px 0 rgba(255, 255, 255, 0.85), 0 2px 0 rgba(14, 10, 18, 0.9);
+}
+
 .handheld-exit-btn:active,
-.handheld-exit-btn.is-pressed {
+.handheld-exit-btn.is-pressed,
+.handheld-settings-btn:active,
+.handheld-settings-btn.is-pressed {
   transition: transform 12ms linear, box-shadow 12ms linear;
   transform: translateY(2px) scale(0.95);
   box-shadow: 0 0 0 rgba(14, 10, 18, 0.85);
 }
 
-.atelier-shell.is-handheld-landscape .handheld-exit-btn {
+.atelier-shell.is-handheld-landscape .handheld-exit-btn,
+.atelier-shell.is-handheld-landscape .handheld-settings-btn {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 
 .atelier-shell.is-handheld-landscape .switch-stage {
+  width: 100%;
   height: 100%;
   justify-content: center;
   gap: 0;
@@ -1610,8 +1636,9 @@
   width: 100%;
   height: 100%;
   margin-top: 0;
-  grid-template-columns: clamp(84px, 14%, 132px) minmax(0, 1fr) clamp(84px, 14%, 132px);
+  grid-template-columns: minmax(84px, 168px) auto minmax(84px, 168px);
   grid-template-areas: 'left body right';
+  justify-content: center;
   gap: 0;
   align-items: stretch;
 }
@@ -1620,16 +1647,24 @@
   height: 100%;
   min-height: 0;
   border-radius: 10px;
-  padding: 5px 8px;
+  padding: 4px 8px 5px;
+  gap: 3px;
+  justify-content: center;
+  align-items: center;
+}
+
+.atelier-shell.is-handheld-landscape .screen-topbar {
+  width: 100%;
+  font-size: 0.58rem;
   gap: 4px;
-  justify-content: space-between;
+  flex-wrap: nowrap;
 }
 
 .atelier-shell.is-handheld-landscape .screen-frame {
-  width: min(100%, calc((var(--handheld-h, 100dvh) - 68px) * 16 / 9));
+  width: min(calc(var(--handheld-w, 100vw) - 188px), calc((var(--handheld-h, 100dvh) - 38px) * 16 / 9));
   height: auto;
   aspect-ratio: 16 / 9;
-  margin: auto;
+  margin: 0 auto;
 }
 
 .atelier-shell.is-handheld-landscape .joycon {

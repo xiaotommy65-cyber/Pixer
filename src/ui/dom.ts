@@ -1,5 +1,6 @@
 import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ToySynth.ts';
 import type { HapticProfile, HapticSide } from '../core/hal/HapticEngine.ts';
+import { setElementIconLabel, type PixelIconName } from './PixelIcons.ts';
 
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -23,6 +24,19 @@ export function btn(
   node.type = 'button';
   if (title) node.title = title;
   if (onClick) node.addEventListener('click', onClick, signal ? { signal } : undefined);
+  return node;
+}
+
+export function iconBtn(
+  cls: string,
+  icon: PixelIconName,
+  text: string,
+  title?: string,
+  onClick?: (e: MouseEvent) => void,
+  signal?: AbortSignal,
+): HTMLButtonElement {
+  const node = btn(cls, '', title, onClick, signal);
+  setElementIconLabel(node, icon, text);
   return node;
 }
 
@@ -246,12 +260,12 @@ interface TactileTargetSpec {
 }
 
 const TACTILE_SELECTOR =
-  '.jc-sys-btn, .aux-sys-btn, .grip-seg-btn, .eject-btn, .handheld-exit-btn, .rpg-agent-btn, .rpg-act-btn, .shmup-fighter-card, .shmup-weapon-btn, .shmup-bomb-btn, .chr-btn, .chr-tab, .chr-card, .chr-choice, .toy-btn, .station-tab, .shell-swatch, .palette-chip, .momo-badge';
+  '.jc-sys-btn, .aux-sys-btn, .grip-seg-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .rpg-agent-btn, .rpg-act-btn, .shmup-fighter-card, .shmup-weapon-btn, .shmup-bomb-btn, .chr-btn, .chr-tab, .chr-card, .chr-choice, .toy-btn, .station-tab, .shell-swatch, .palette-chip, .momo-badge';
 
 function classifyTactileTarget(node: HTMLElement): TactileTargetSpec | null {
   if ((node as HTMLButtonElement).disabled || node.matches(':disabled')) return null;
   if (node.closest('.diamond, .jc-bumper, .stick')) return null;
-  if (node.matches('.jc-sys-btn, .aux-sys-btn, .eject-btn, .handheld-exit-btn, .rpg-agent-btn')) {
+  if (node.matches('.jc-sys-btn, .aux-sys-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .rpg-agent-btn')) {
     return { profile: 'system', sound: true, hapticMs: 10 };
   }
   return { profile: 'ui', sound: true, hapticMs: 9 };
