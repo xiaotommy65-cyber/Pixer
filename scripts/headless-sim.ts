@@ -26,6 +26,7 @@ import {
   testM2EnginePrimitives,
   testModule1ColorMathAndShaderParity,
   testModule2SpringsAndNoiseOracle,
+  testModule3SpatialVisibilityAndPathfindingOracle,
 } from './sim/CoreSubsystemTests.ts';
 import { testExtensibilityAndAiSpis } from './sim/ExtensibilityAiTests.ts';
 import { testHalAndInputPipeline } from './sim/HalAndInputTests.ts';
@@ -36,6 +37,7 @@ async function runAll() {
   testCoreSubsystems();
   testModule1ColorMathAndShaderParity();
   testModule2SpringsAndNoiseOracle();
+  testModule3SpatialVisibilityAndPathfindingOracle();
   testM2EnginePrimitives();
   testEngine2CameraAndCutscene();
   testDungeonGeneratorSolvability();

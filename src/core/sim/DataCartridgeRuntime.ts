@@ -1,6 +1,7 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import { GAME_H, GAME_W, resolveLogicalViewport, type LogicalViewport } from '../gpu/GpuTypes.ts';
 import { InputMap } from '../input/InputMap.ts';
+import { SpatialHash } from '../math/SpatialHash.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type { ShmupFighterSummary } from '../types/HudTypes.ts';
 import {
@@ -323,6 +324,10 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       squash: { scaleX: 1, scaleY: 1 },
       funnelSlots: new Int16Array(4).fill(-1),
       cachedFighters,
+      targetHash: new SpatialHash(MAX_ENTITIES, 24, 4096, MAX_ENTITIES * 4, 36),
+      targetEnemySlots: new Uint16Array(MAX_ENTITIES),
+      playerBulletSlots: new Uint16Array(MAX_ENTITIES),
+      querySlots: new Int32Array(MAX_ENTITIES),
     };
 
     const starCount = this.def.stages[0]?.bgStarsCount ?? 0;

@@ -1,4 +1,5 @@
 import { GAME_H, GAME_W } from '../gpu/GpuTypes.ts';
+import { SpatialHash } from '../math/SpatialHash.ts';
 import type { InputMap } from '../input/InputMap.ts';
 import type { ShmupFighterSummary, ShmupHudSnapshot } from '../types/HudTypes.ts';
 import { clamp, type RuntimeParams, type SimEvent } from '../types/WorldTypes.ts';
@@ -49,6 +50,10 @@ export interface RuntimeShmupState {
   squash: SquashSpring;
   funnelSlots: Int16Array;
   cachedFighters: readonly ShmupFighterSummary[];
+  targetHash: SpatialHash;
+  targetEnemySlots: Uint16Array;
+  playerBulletSlots: Uint16Array;
+  querySlots: Int32Array;
 }
 
 export interface ShmupRuntimeContext {
@@ -755,6 +760,7 @@ function stepShmupPoolEntities(
   params: RuntimeParams,
 ): void {
   const pool = ctx.pool;
+  const sh = ctx.shmup;
   const px = pool.x[ctx.playerSlot];
   const py = pool.y[ctx.playerSlot];
   const grazeCfg = ctx.def.player.graze;
@@ -764,7 +770,20 @@ function stepShmupPoolEntities(
   const overdriveCost = grazeCfg?.overdriveCost ?? 100;
   const overdriveSec = grazeCfg?.overdriveSec ?? 3.6;
 
-  // Iterate backward over activeIndices; check ALIVE flag because frees swap-pop
+  // Gather active non-bullet target slots once so EF_HOMING avoids O(H * N) full-pool scans
+  let enemyTargetCount = 0;
+  for (let i = 0; i < pool.activeCount; i++) {
+    const t = pool.activeIndices[i];
+    const tf = pool.flags[t];
+    if ((tf & EF_ALIVE) === 0 || (tf & EF_BULLET) !== 0) continue;
+    if ((tf & (EF_ENEMY | EF_BOSS | EF_WEAK_POINT)) !== 0) {
+      sh.targetEnemySlots[enemyTargetCount++] = t;
+    }
+  }
+
+  let playerBulletCount = 0;
+
+  // Pass 1: Move entities, process pickups, enemy-bullet grazing/hits, and enemy AI
   for (let i = pool.activeCount - 1; i >= 0; i--) {
     const s = pool.activeIndices[i];
     if (s === ctx.playerSlot || s === ctx.bossSlot || (pool.flags[s] & EF_ALIVE) === 0) continue;
@@ -772,29 +791,31 @@ function stepShmupPoolEntities(
 
     if ((f & EF_WEAK_POINT) !== 0 || (pool.behaviorMask[s] & BM_ORBIT) !== 0) continue;
 
-    // 1. Homing player bullets
-    if ((f & EF_BULLET) !== 0 && (f & EF_ENEMY) === 0 && (f & EF_HOMING) !== 0) {
-      let bestDist = Infinity;
+    // 1. Homing player bullets (scan compact targetEnemySlots instead of full active pool)
+    if ((f & EF_BULLET) !== 0 && (f & EF_ENEMY) === 0 && (f & EF_HOMING) !== 0 && enemyTargetCount > 0) {
+      let bestDistSq = Infinity;
       let tx = 0;
       let ty = 0;
       let found = false;
-      for (let j = 0; j < pool.activeCount; j++) {
-        const t = pool.activeIndices[j];
-        const tf = pool.flags[t];
-        if ((tf & EF_ALIVE) === 0 || (tf & EF_BULLET) !== 0) continue;
-        if ((tf & (EF_ENEMY | EF_BOSS | EF_WEAK_POINT)) === 0) continue;
+      const sxPos = pool.x[s];
+      const syPos = pool.y[s];
+      for (let j = 0; j < enemyTargetCount; j++) {
+        const t = sh.targetEnemySlots[j];
+        if ((pool.flags[t] & EF_ALIVE) === 0) continue;
         const tcx = pool.x[t] + pool.w[t] * 0.5;
         const tcy = pool.y[t] + pool.h[t] * 0.5;
-        const d = Math.hypot(tcx - pool.x[s], tcy - pool.y[s]);
-        if (d < bestDist) {
-          bestDist = d;
+        const dx = tcx - sxPos;
+        const dy = tcy - syPos;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < bestDistSq) {
+          bestDistSq = dSq;
           tx = tcx;
           ty = tcy;
           found = true;
         }
       }
       if (found) {
-        const desired = Math.atan2(ty - pool.y[s], tx - pool.x[s]);
+        const desired = Math.atan2(ty - syPos, tx - sxPos);
         const cur = Math.atan2(pool.vy[s], pool.vx[s]);
         let diff = desired - cur;
         while (diff > Math.PI) diff -= Math.PI * 2;
@@ -820,7 +841,9 @@ function stepShmupPoolEntities(
         pool.free(s);
         continue;
       }
-      if (Math.hypot(px + 8 - (pool.x[s] + 7), py + 8 - (pool.y[s] + 7)) < 17) {
+      const dxp = px + 8 - (pool.x[s] + 7);
+      const dyp = py + 8 - (pool.y[s] + 7);
+      if (dxp * dxp + dyp * dyp < 17 * 17) {
         const aid = ctx.archetypeMetaByIdx[pool.archetypeIdx[s]]?.id ?? '';
         pool.free(s);
         ctx.starsCollected++;
@@ -860,16 +883,19 @@ function stepShmupPoolEntities(
       }
 
       if ((f & EF_ENEMY) !== 0) {
-        const dist = Math.hypot(px + 8 - bx, py + 8 - by);
-        if (ctx.shmup.overdriveShieldTimer > 0 && dist < grazeR + 4) {
+        const dxe = px + 8 - bx;
+        const dye = py + 8 - by;
+        const distSq = dxe * dxe + dye * dye;
+        const shieldR = grazeR + 4;
+        if (ctx.shmup.overdriveShieldTimer > 0 && distSq < shieldR * shieldR) {
           pool.free(s);
           ctx.score += 15;
           continue;
         }
-        if (ctx.shmup.invulnTimer <= 0 && dist < bulletHitR) {
+        if (ctx.shmup.invulnTimer <= 0 && distSq < bulletHitR * bulletHitR) {
           pool.free(s);
           damagePlayerShip(ctx, events, params);
-        } else if (pool.aiState[s] === 0 && dist < grazeR) {
+        } else if (pool.aiState[s] === 0 && distSq < grazeR * grazeR) {
           pool.aiState[s] = 1;
           ctx.shmup.grazeCount++;
           ctx.shmup.grazeMeter = Math.min(overdriveCost, ctx.shmup.grazeMeter + 10);
@@ -885,63 +911,7 @@ function stepShmupPoolEntities(
         continue;
       }
 
-      // Player bullet clears enemy bullets
-      const piercing = (f & EF_PIERCING) !== 0;
-      const clears = (f & EF_CLEARS_BULLETS) !== 0;
-      if (clears) {
-        for (let k = pool.activeCount - 1; k >= 0; k--) {
-          const eb = pool.activeIndices[k];
-          if (eb === s || (pool.flags[eb] & (EF_BULLET | EF_ENEMY)) !== (EF_BULLET | EF_ENEMY)) continue;
-          if (Math.abs(pool.x[eb] - bx) < 15 && Math.abs(pool.y[eb] - by) < 12) {
-            pool.free(eb);
-            ctx.score += 10;
-          }
-        }
-      }
-
-      // Player bullet vs enemies / weakpoints / boss
-      const dmg = pool.hp[s];
-      const gId = piercing ? Math.floor(pool.paramD[s]) : -1;
-      let hit = false;
-      for (let j = pool.activeCount - 1; j >= 0; j--) {
-        const t = pool.activeIndices[j];
-        const tf = pool.flags[t];
-        if ((tf & EF_ALIVE) === 0 || (tf & EF_BULLET) !== 0) continue;
-        if ((tf & (EF_ENEMY | EF_BOSS | EF_WEAK_POINT)) === 0) continue;
-        if (piercing && ctx.lastHitGroupByTarget[t] === gId) continue;
-        const rad = (tf & EF_BOSS) !== 0 ? 18 : piercing ? 16 : 12;
-        if (Math.hypot(bx - (pool.x[t] + pool.w[t] * 0.5), by - (pool.y[t] + pool.h[t] * 0.5)) < rad) {
-          hit = true;
-          if (piercing) ctx.lastHitGroupByTarget[t] = gId;
-          if ((tf & EF_BOSS) !== 0) {
-            damageShmupBossSlot(ctx, dmg, events, params.sparkleDensity);
-          } else if ((tf & EF_WEAK_POINT) !== 0) {
-            pool.hp[t] = Math.max(0, pool.hp[t] - dmg);
-            pool.flash[t] = 0.18;
-            ctx.score += 30;
-            if (pool.hp[t] === 0) {
-              const wx = pool.x[t] + 8;
-              const wy = pool.y[t] + 8;
-              pool.free(t);
-              ctx.score += 220;
-              ctx.juice.addTrauma(0.45);
-              events.push('explode');
-              ctx.spawnArchetype(ctx.shmup.bombs < ctx.shmup.maxBombs ? 'pickup_bomb' : 'pickup_funnel', wx, wy, -44, 0);
-              damageShmupBossSlot(ctx, 4, events, params.sparkleDensity);
-            }
-          } else {
-            pool.hp[t] -= dmg;
-            pool.flash[t] = 0.16;
-            if (pool.hp[t] <= 0) {
-              destroyShmupEnemySlot(ctx, t, events, params.sparkleDensity);
-            }
-          }
-          if (!piercing) break;
-        }
-      }
-      if (hit && !piercing && (pool.flags[s] & EF_ALIVE) !== 0) {
-        pool.free(s);
-      }
+      sh.playerBulletSlots[playerBulletCount++] = s;
       continue;
     }
 
@@ -985,13 +955,98 @@ function stepShmupPoolEntities(
         pool.free(s);
         continue;
       }
-      if (
-        ctx.shmup.invulnTimer <= 0 &&
-        ctx.shmup.overdriveShieldTimer <= 0 &&
-        Math.hypot(px + 8 - (pool.x[s] + 8), py + 8 - (pool.y[s] + 8)) < enemyHitR
-      ) {
-        damagePlayerShip(ctx, events, params);
+      if (ctx.shmup.invulnTimer <= 0 && ctx.shmup.overdriveShieldTimer <= 0) {
+        const dxShip = px + 8 - (pool.x[s] + 8);
+        const dyShip = py + 8 - (pool.y[s] + 8);
+        if (dxShip * dxShip + dyShip * dyShip < enemyHitR * enemyHitR) {
+          damagePlayerShip(ctx, events, params);
+        }
       }
+    }
+  }
+
+  if (playerBulletCount === 0) return;
+
+  // Pass 2: SpatialHash O(1) broad-phase index over live enemies, weak points, bosses, and enemy bullets
+  const th = sh.targetHash;
+  th.clear();
+  for (let i = 0; i < pool.activeCount; i++) {
+    const t = pool.activeIndices[i];
+    const tf = pool.flags[t];
+    if ((tf & EF_ALIVE) === 0) continue;
+    if ((tf & (EF_ENEMY | EF_BOSS | EF_WEAK_POINT)) !== 0) {
+      th.insertBox(t, pool.x[t], pool.y[t], pool.w[t], pool.h[t]);
+    }
+  }
+
+  for (let bIdx = 0; bIdx < playerBulletCount; bIdx++) {
+    const s = sh.playerBulletSlots[bIdx];
+    const f = pool.flags[s];
+    if ((f & EF_ALIVE) === 0) continue;
+
+    const bx = pool.x[s] + pool.w[s] * 0.5;
+    const by = pool.y[s] + pool.h[s] * 0.5;
+    const hitCount = th.queryRect(bx - 19, by - 19, bx + 19, by + 19, sh.querySlots);
+    if (hitCount === 0) continue;
+
+    const piercing = (f & EF_PIERCING) !== 0;
+    const clears = (f & EF_CLEARS_BULLETS) !== 0;
+
+    if (clears) {
+      for (let k = 0; k < hitCount; k++) {
+        const eb = sh.querySlots[k];
+        if (eb === s || (pool.flags[eb] & (EF_ALIVE | EF_BULLET | EF_ENEMY)) !== (EF_ALIVE | EF_BULLET | EF_ENEMY)) continue;
+        if (Math.abs(pool.x[eb] - bx) < 15 && Math.abs(pool.y[eb] - by) < 12) {
+          pool.free(eb);
+          ctx.score += 10;
+        }
+      }
+    }
+
+    const dmg = pool.hp[s];
+    const gId = piercing ? Math.floor(pool.paramD[s]) : -1;
+    let hit = false;
+    for (let j = 0; j < hitCount; j++) {
+      const t = sh.querySlots[j];
+      const tf = pool.flags[t];
+      if ((tf & EF_ALIVE) === 0 || (tf & EF_BULLET) !== 0) continue;
+      if ((tf & (EF_ENEMY | EF_BOSS | EF_WEAK_POINT)) === 0) continue;
+      if (piercing && ctx.lastHitGroupByTarget[t] === gId) continue;
+
+      const rad = (tf & EF_BOSS) !== 0 ? 18 : piercing ? 16 : 12;
+      const dx = bx - (pool.x[t] + pool.w[t] * 0.5);
+      const dy = by - (pool.y[t] + pool.h[t] * 0.5);
+      if (dx * dx + dy * dy < rad * rad) {
+        hit = true;
+        if (piercing) ctx.lastHitGroupByTarget[t] = gId;
+        if ((tf & EF_BOSS) !== 0) {
+          if (damageShmupBossSlot(ctx, dmg, events, params.sparkleDensity)) return;
+        } else if ((tf & EF_WEAK_POINT) !== 0) {
+          pool.hp[t] = Math.max(0, pool.hp[t] - dmg);
+          pool.flash[t] = 0.18;
+          ctx.score += 30;
+          if (pool.hp[t] === 0) {
+            const wx = pool.x[t] + 8;
+            const wy = pool.y[t] + 8;
+            pool.free(t);
+            ctx.score += 220;
+            ctx.juice.addTrauma(0.45);
+            events.push('explode');
+            ctx.spawnArchetype(ctx.shmup.bombs < ctx.shmup.maxBombs ? 'pickup_bomb' : 'pickup_funnel', wx, wy, -44, 0);
+            if (damageShmupBossSlot(ctx, 4, events, params.sparkleDensity)) return;
+          }
+        } else {
+          pool.hp[t] -= dmg;
+          pool.flash[t] = 0.16;
+          if (pool.hp[t] <= 0) {
+            destroyShmupEnemySlot(ctx, t, events, params.sparkleDensity);
+          }
+        }
+        if (!piercing) break;
+      }
+    }
+    if (hit && !piercing && (pool.flags[s] & EF_ALIVE) !== 0) {
+      pool.free(s);
     }
   }
 }

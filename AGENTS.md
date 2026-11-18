@@ -39,7 +39,7 @@
 - `src/core/input/` — Input DSP & hardware gamepad (`InputPipeline.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `InputMap.ts`, `WebGamepadSampler.ts`).
 - `src/core/hal/` — Hardware Abstraction Layer (`SystemHal.ts`, `HapticEngine.ts` stereo dual-rumble & acoustic fallback).
 - `src/core/ai/` — AI & Agent Bridge (`AgentBridge.ts`, `HybridAiDirector.ts`, `LocalAiProvider.ts`, `RemoteAiProvider.ts`, `ObservationSerializer.ts`, `AiTypes.ts`).
-- `src/core/math/` — Pure zero-GC math/algorithm primitives (`ColorMath.ts`, `NoiseMath.ts`, `SpringDynamics.ts` implemented; `SpatialHash`, `Visibility2D` queued per `.agents/rules/algorithm-shader-protocol.md`).
+- `src/core/math/` — Pure zero-GC math/algorithm primitives (`ColorMath.ts`, `NoiseMath.ts`, `SpringDynamics.ts`, `SpatialHash.ts`, `Visibility2D.ts`).
 - `src/core/types/` — Shared contracts (`WorldTypes.ts`, `CartridgeTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `SceneTypes.ts`).
 
 ### `src/assets/` — Procedural Sprites, Atlas & Audio Data (DOM-free, never import `ui/` or `game/`)

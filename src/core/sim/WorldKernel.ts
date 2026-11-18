@@ -1,6 +1,7 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import { GAME_H, GAME_W, resolveLogicalViewport, type LogicalViewport } from '../gpu/GpuTypes.ts';
 import { InputMap } from '../input/InputMap.ts';
+import { SpatialHash } from '../math/SpatialHash.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type {
   BgmTheme,
@@ -18,6 +19,7 @@ import type {
 import { ARCHETYPE_CATALOG, type ArchetypeId, type TraitTag } from './Archetypes.ts';
 import { JuiceSystem, stepSquashSpring } from './JuiceSystem.ts';
 import { ENTITY_RULE_MATRIX, RuleRegistry, type RuleWorldActions } from './RuleMatrix.ts';
+import { MAX_ENTITIES } from './SoaEntityPool.ts';
 import { detonateInWorld, stepEntitiesInWorld, stepMovingPlatformsInWorld } from './WorldEntitiesStep.ts';
 import {
   handleHeroEntityInteractions,
@@ -49,6 +51,8 @@ export class WorldKernel {
   public readonly juice = new JuiceSystem();
   public readonly rng = new SeededRng(0x20260001);
   public readonly rules = new RuleRegistry(ENTITY_RULE_MATRIX);
+  public readonly entityHash = new SpatialHash(MAX_ENTITIES, 32, 1024, MAX_ENTITIES * 4, 36);
+  public readonly pairQuerySlots = new Int32Array(MAX_ENTITIES);
 
   public cartridgeId: CartridgeId;
   public worldW: number;

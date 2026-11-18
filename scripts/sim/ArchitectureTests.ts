@@ -120,6 +120,16 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     );
   }
 
+  const mathFiles = collectTsFiles(path.join(rootDir, 'src/core/math'));
+  for (const file of mathFiles) {
+    const src = fs.readFileSync(file, 'utf8');
+    const rel = path.relative(rootDir, file);
+    check(
+      !/\bnew\s+(?:Set|Map|WeakSet|WeakMap)\b/.test(src),
+      `Zero-GC invariant violation: ${rel} in src/core/math/ must stay allocation-free (no new Set/Map containers)`,
+    );
+  }
+
   for (const file of gameFiles) {
     const src = fs.readFileSync(file, 'utf8');
     const rel = path.relative(rootDir, file);

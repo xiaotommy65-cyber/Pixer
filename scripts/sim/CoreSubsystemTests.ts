@@ -34,6 +34,13 @@ import {
   VerletChain,
   type Spring1DState,
 } from '../../src/core/math/SpringDynamics.ts';
+import { SpatialHash } from '../../src/core/math/SpatialHash.ts';
+import {
+  computeSymmetricFovInto,
+  createSymmetricFovScratch,
+  hasGridLineOfSight,
+  raycastGrid2DInto,
+} from '../../src/core/math/Visibility2D.ts';
 import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
 import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGovernor.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
@@ -41,6 +48,13 @@ import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
 import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
 import { CutsceneSequencer } from '../../src/core/sim/CutsceneSequencer.ts';
 import { EventActionVm, MAX_VM_OPS_PER_TICK, type VmCollisionPair } from '../../src/core/sim/EventActionVm.ts';
+import {
+  computeFlowFieldInto,
+  createPathfinderWorkspace,
+  findAStarNextCell,
+  findAStarPathInto,
+  findNextStep,
+} from '../../src/core/sim/GridPathfinder.ts';
 import { JuiceSystem, stepSquashSpring, triggerSquash } from '../../src/core/sim/JuiceSystem.ts';
 import { EF_PLAYER, MAX_ENTITIES, SoaEntityPool } from '../../src/core/sim/SoaEntityPool.ts';
 import {
@@ -921,4 +935,542 @@ function runModule2HotBenchmark(): { benchMs: number; heapDeltaKb: number; sink:
   const heapDeltaKb = Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024);
   sink += chain.posX[7];
   return { benchMs, heapDeltaKb, sink };
+}
+
+function oracleWeightedDijkstra(
+  w: number,
+  h: number,
+  gx: number,
+  gy: number,
+  gridWall: Uint8Array,
+  gridCost: Float64Array,
+): Float64Array {
+  const total = w * h;
+  const dist = new Float64Array(total).fill(Infinity);
+  const visited = new Uint8Array(total);
+  const goalKey = gy * w + gx;
+  dist[goalKey] = 0;
+
+  for (let iter = 0; iter < total; iter++) {
+    let best = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < total; i++) {
+      if (visited[i] === 0 && dist[i] < bestDist) {
+        bestDist = dist[i];
+        best = i;
+      }
+    }
+    if (best < 0 || !Number.isFinite(bestDist)) break;
+    visited[best] = 1;
+
+    const cx = best % w;
+    const cy = (best - cx) / w;
+    const enterCost = gridCost[best];
+    const nextDist = bestDist + enterCost;
+
+    if (cy > 0) {
+      const nk = best - w;
+      if (gridWall[nk] === 0 && nextDist < dist[nk]) dist[nk] = nextDist;
+    }
+    if (cx + 1 < w) {
+      const nk = best + 1;
+      if (gridWall[nk] === 0 && nextDist < dist[nk]) dist[nk] = nextDist;
+    }
+    if (cy + 1 < h) {
+      const nk = best + w;
+      if (gridWall[nk] === 0 && nextDist < dist[nk]) dist[nk] = nextDist;
+    }
+    if (cx > 0) {
+      const nk = best - 1;
+      if (gridWall[nk] === 0 && nextDist < dist[nk]) dist[nk] = nextDist;
+    }
+  }
+  return dist;
+}
+
+export function testModule3SpatialVisibilityAndPathfindingOracle(): void {
+  const rng = new SeededRng(0x51a70003);
+
+  // 1. SpatialHash vs Brute-Force O(N^2) AABB Oracle (multi-scale + negative coords + overflow bosses + touching edges)
+  const sh = new SpatialHash(2048, 32, 4096, 2048 * 8, 36);
+  const maxPairs = 16384;
+  const outA = new Int32Array(maxPairs);
+  const outB = new Int32Array(maxPairs);
+  const queryOut = new Int32Array(2048);
+
+  check(!sh.insert(-1, 0, 0, 10, 10) && !sh.insert(0, Number.NaN, 0, 10, 10), 'SpatialHash must reject negative slots and NaN bounds');
+
+  for (const nEntities of [200, 500, 2048]) {
+    const bx = new Float64Array(nEntities);
+    const by = new Float64Array(nEntities);
+    const bw = new Float64Array(nEntities);
+    const bh = new Float64Array(nEntities);
+
+    for (let tick = 0; tick < 3; tick++) {
+      sh.clear();
+      for (let i = 0; i < nEntities; i++) {
+        if (i < 4) {
+          // Giant overflowing boss AABBs covering > maxEntityCells buckets
+          bx[i] = -60 + i * 95 + tick * 7;
+          by[i] = -30 + i * 60;
+          bw[i] = 240;
+          bh[i] = 210;
+        } else if (i < 12) {
+          // Exact shared border touching pair test (must NOT report false overlap on touching cell line)
+          const pairIdx = i - 4;
+          bx[i] = (pairIdx & 1) === 0 ? 0 : 32;
+          by[i] = Math.floor(pairIdx / 2) * 32;
+          bw[i] = 32;
+          bh[i] = 32;
+        } else {
+          bx[i] = -240 + rng.next() * 760;
+          by[i] = -180 + rng.next() * 520;
+          bw[i] = i % 37 === 0 ? 0 : 6 + rng.next() * 22;
+          bh[i] = i % 41 === 0 ? 0 : 6 + rng.next() * 22;
+        }
+        check(sh.insertBox(i, bx[i], by[i], bw[i], bh[i]), `SpatialHash insertBox slot ${i} must succeed`);
+      }
+      check(!sh.insertBox(0, 0, 0, 10, 10), 'SpatialHash must prevent duplicate slot insertion in same frame');
+      check(sh.getActiveCount() === nEntities && sh.getOverflowCount() >= 4, 'SpatialHash active & overflow tracking mismatch');
+
+      const hashCount = sh.collectPairsInto(outA, outB);
+      check(hashCount < maxPairs, `Pair buffer saturated during Oracle comparison (${hashCount})`);
+
+      const hashKeys = new Int32Array(hashCount);
+      for (let p = 0; p < hashCount; p++) {
+        check(outA[p] < outB[p], 'SpatialHash.collectPairsInto must enforce canonical ordering a < b');
+        hashKeys[p] = (outA[p] << 12) | outB[p];
+      }
+      hashKeys.sort();
+      for (let p = 1; p < hashCount; p++) {
+        check(hashKeys[p] !== hashKeys[p - 1], `Duplicate pair reported by SpatialHash at n=${nEntities}`);
+      }
+
+      const oracleKeys: number[] = [];
+      for (let i = 0; i < nEntities; i++) {
+        const ax0 = bx[i];
+        const ay0 = by[i];
+        const ax1 = ax0 + bw[i];
+        const ay1 = ay0 + bh[i];
+        for (let j = i + 1; j < nEntities; j++) {
+          const bx0 = bx[j];
+          const by0 = by[j];
+          if (ax0 < bx0 + bw[j] && ax1 > bx0 && ay0 < by0 + bh[j] && ay1 > by0) {
+            oracleKeys.push((i << 12) | j);
+          }
+        }
+      }
+      check(oracleKeys.length >= 25, `SpatialHash test at n=${nEntities} was too sparse (${oracleKeys.length} pairs)`);
+      check(
+        hashCount === oracleKeys.length,
+        `SpatialHash pair count mismatch at n=${nEntities}: hash=${hashCount} vs bruteForceOracle=${oracleKeys.length}`,
+      );
+      for (let p = 0; p < hashCount; p++) {
+        check(
+          hashKeys[p] === oracleKeys[p],
+          `SpatialHash pair set diverged from O(N^2) Oracle at n=${nEntities} index=${p}`,
+        );
+      }
+
+      // Random rect queries including tiny, medium, and giant full-world query (tests activeSlots shortcut)
+      for (let q = 0; q < 25; q++) {
+        const qx0 = q === 0 ? -400 : -260 + rng.next() * 720;
+        const qy0 = q === 0 ? -400 : -200 + rng.next() * 480;
+        const qw = q === 0 ? 1200 : q < 6 ? 12 : 70;
+        const qh = q === 0 ? 1200 : q < 6 ? 12 : 70;
+        const qx1 = qx0 + qw;
+        const qy1 = qy0 + qh;
+
+        const qCount = sh.queryRect(qx0, qy0, qx1, qy1, queryOut);
+        const gotSlots = Array.from(queryOut.subarray(0, qCount)).sort((a, b) => a - b);
+        const expectedSlots: number[] = [];
+        for (let i = 0; i < nEntities; i++) {
+          if (qx0 < bx[i] + bw[i] && qx1 > bx[i] && qy0 < by[i] + bh[i] && qy1 > by[i]) {
+            expectedSlots.push(i);
+          }
+        }
+        check(
+          gotSlots.length === expectedSlots.length && gotSlots.every((v, idx) => v === expectedSlots[idx]),
+          `SpatialHash.queryRect diverged from linear Oracle at n=${nEntities}, q=${q}`,
+        );
+      }
+    }
+  }
+
+  // 2. Visibility2D Oracles: Symmetric Shadowcasting FOV symmetry + Integer Rational LOS symmetry + Amanatides & Woo DDA
+  const fovMaskA = new Uint8Array(24 * 24);
+  const fovMaskB = new Uint8Array(24 * 24);
+  const fovScratch = createSymmetricFovScratch(1024);
+  const hitOut = new Float64Array(8);
+  let symmetryChecks = 0;
+  let losChecks = 0;
+  let ddaHitsChecked = 0;
+
+  for (let m = 0; m < 60; m++) {
+    const gw = 24;
+    const gh = 24;
+    const walls = new Uint8Array(gw * gh);
+    const openCells: number[] = [];
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const isWall = rng.next() < 0.3;
+        walls[y * gw + x] = isWall ? 1 : 0;
+        if (!isWall) openCells.push(y * gw + x);
+      }
+    }
+    const isOpaque = (x: number, y: number): boolean => walls[y * gw + x] === 1;
+    if (openCells.length < 16) continue;
+
+    // Sample open origin & verify symmetric visibility with every open cell in range
+    const origKey = openCells[Math.floor(rng.next() * openCells.length)];
+    const ox = origKey % gw;
+    const oy = (origKey - ox) / gw;
+    const cntA = computeSymmetricFovInto(gw, gh, ox, oy, 9, isOpaque, fovMaskA, fovScratch);
+    check(cntA >= 1 && cntA <= gw * gh, 'Symmetric FOV count out of valid range');
+
+    let checkedTargets = 0;
+    for (let t = 0; t < openCells.length && checkedTargets < 18; t++) {
+      const tgtKey = openCells[(t * 17 + m) % openCells.length];
+      const tx = tgtKey % gw;
+      const ty = (tgtKey - tx) / gw;
+      const d2 = (tx - ox) * (tx - ox) + (ty - oy) * (ty - oy);
+      if (d2 > 81) continue;
+
+      computeSymmetricFovInto(gw, gh, tx, ty, 9, isOpaque, fovMaskB, fovScratch);
+      check(
+        fovMaskA[tgtKey] === fovMaskB[origKey],
+        `Symmetric Shadowcasting FOV asymmetry detected between (${ox},${oy}) and (${tx},${ty}) on map ${m}`,
+      );
+      symmetryChecks++;
+      checkedTargets++;
+
+      const losAB = hasGridLineOfSight(ox, oy, tx, ty, isOpaque);
+      const losBA = hasGridLineOfSight(tx, ty, ox, oy, isOpaque);
+      check(losAB === losBA, `hasGridLineOfSight asymmetry between (${ox},${oy}) and (${tx},${ty})`);
+      losChecks++;
+    }
+
+    // Raycast 2D DDA vs fine-grain sub-step raymarch Oracle across non-corner off-center angles
+    for (const tileSize of [1, 16]) {
+      for (let r = 0; r < 12; r++) {
+        const angle = (r + 0.37) * ((Math.PI * 2) / 12) + m * 0.13;
+        const ndx = Math.cos(angle);
+        const ndy = Math.sin(angle);
+        const sx = (ox + 0.31) * tileSize;
+        const sy = (oy + 0.67) * tileSize;
+        const maxDist = 14 * tileSize;
+
+        const hit = raycastGrid2DInto(gw, gh, sx, sy, ndx, ndy, maxDist, isOpaque, hitOut, 0, tileSize);
+        check(
+          Number.isFinite(hitOut[1]) && Number.isFinite(hitOut[2]) && Number.isFinite(hitOut[3]),
+          'raycastGrid2DInto emitted NaN/Infinity',
+        );
+
+        // Sub-step reference raymarch oracle (checks only rays safely clear of grid corners)
+        let oracleHit = false;
+        let oracleT = maxDist;
+        let oracleCx = -1;
+        let oracleCy = -1;
+        let nearCorner = false;
+        const steps = 4000;
+        const dt = maxDist / steps;
+        for (let s = 1; s <= steps; s++) {
+          const tCur = s * dt;
+          const px = sx + ndx * tCur;
+          const py = sy + ndy * tCur;
+          const fx = px / tileSize;
+          const fy = py / tileSize;
+          const cx = Math.floor(fx);
+          const cy = Math.floor(fy);
+          if (cx < 0 || cx >= gw || cy < 0 || cy >= gh) break;
+          const rx = fx - Math.round(fx);
+          const ry = fy - Math.round(fy);
+          if (Math.abs(rx) < 0.008 && Math.abs(ry) < 0.008) nearCorner = true;
+          if (walls[cy * gw + cx] === 1) {
+            oracleHit = true;
+            oracleT = tCur;
+            oracleCx = cx;
+            oracleCy = cy;
+            break;
+          }
+        }
+        if (!nearCorner) {
+          check(hit === oracleHit, `DDA hit mismatch on map ${m} ray ${r} (tileSize=${tileSize})`);
+          if (hit) {
+            ddaHitsChecked++;
+            check(
+              hitOut[6] === oracleCx && hitOut[7] === oracleCy,
+              `DDA hit cell (${hitOut[6]},${hitOut[7]}) != oracle (${oracleCx},${oracleCy})`,
+            );
+            check(
+              Math.abs(hitOut[1] - oracleT) <= dt * 2.5,
+              `DDA hit dist ${hitOut[1]} diverged from fine oracle ${oracleT}`,
+            );
+            check(
+              hitOut[4] * ndx + hitOut[5] * ndy <= 1e-9,
+              'DDA surface normal must oppose incoming ray direction',
+            );
+          }
+        }
+      }
+    }
+  }
+  check(symmetryChecks > 300 && losChecks > 300 && ddaHitsChecked > 150, 'Visibility2D Oracle test coverage too low');
+
+  // Solid pillar occlusion + closed corner bevel + degenerate guards
+  const boxGrid = new Uint8Array(11 * 11);
+  for (let x = 4; x <= 6; x++) boxGrid[3 * 11 + x] = 1; // 3-wide stone pillar at y=3
+  const pillarMask = new Uint8Array(11 * 11);
+  computeSymmetricFovInto(11, 11, 5, 5, 6, (x, y) => boxGrid[y * 11 + x] === 1, pillarMask);
+  check(pillarMask[3 * 11 + 5] === 1 && pillarMask[1 * 11 + 5] === 0 && pillarMask[0 * 11 + 5] === 0, '3-wide pillar must illuminate wall front and block behind it');
+
+  // Closed diagonal two-wall corner test (1,2) & (2,1) block diagonal ray from (1.5,1.5) to (2,2)
+  const cornerGrid = new Uint8Array(5 * 5);
+  cornerGrid[1 * 5 + 2] = 1;
+  cornerGrid[2 * 5 + 1] = 1;
+  check(!hasGridLineOfSight(1, 1, 2, 2, (x, y) => cornerGrid[y * 5 + x] === 1), 'hasGridLineOfSight must block closed two-wall diagonal corners');
+  const blockedCorner = raycastGrid2DInto(5, 5, 1.5, 1.5, 1, 1, 6, (x, y) => cornerGrid[y * 5 + x] === 1, hitOut);
+  check(blockedCorner && hitOut[1] < 1.0, 'raycastGrid2DInto must stop at closed two-wall diagonal corner instead of tunneling');
+  check(!raycastGrid2DInto(5, 5, 1, 1, 0, 0, 5, () => false, hitOut), 'Zero-direction DDA ray must return false cleanly');
+  check(!raycastGrid2DInto(5, 5, Number.NaN, 1, 1, 0, 5, () => false, hitOut), 'NaN origin DDA ray must return false cleanly');
+  check(!raycastGrid2DInto(5, 5, 1, 1, 1, 0, -2, () => false, hitOut), 'Negative maxDist DDA ray must return false cleanly');
+
+  // 3. GridPathfinder Zero-GC A* & Flow Field vs Weighted O(V^2) Dijkstra Reference Oracle
+  const pathWs = createPathfinderWorkspace(16384);
+  const pathMeta = { totalCost: 0, steps: 0 };
+  const pathCells = new Int32Array(4096);
+  const flowDist = new Float64Array(48 * 48);
+  const flowDirX = new Int8Array(48 * 48);
+  const flowDirY = new Int8Array(48 * 48);
+  let weightedSolvesVerified = 0;
+
+  for (let g = 0; g < 80; g++) {
+    const pw = 20 + (g % 29); // 20..48
+    const ph = 20 + ((g * 3) % 29);
+    const total = pw * ph;
+    const gridWall = new Uint8Array(total);
+    const gridCost = new Float64Array(total);
+
+    for (let y = 0; y < ph; y++) {
+      for (let x = 0; x < pw; x++) {
+        const idx = y * pw + x;
+        const isWall = rng.next() < 0.27;
+        gridWall[idx] = isWall ? 1 : 0;
+        gridCost[idx] = 1 + Math.floor(rng.next() * 5); // weighted [1..5]
+      }
+    }
+
+    const sx = 1 + Math.floor(rng.next() * (pw - 2));
+    const sy = 1 + Math.floor(rng.next() * (ph - 2));
+    const gx = 1 + Math.floor(rng.next() * (pw - 2));
+    const gy = 1 + Math.floor(rng.next() * (ph - 2));
+    gridWall[sy * pw + sx] = 0;
+    // Every 5th maze tests unwalkable goal entity (like DndBotPolicy monster/chest!)
+    const goalUnwalkable = g % 5 === 0 && (sx !== gx || sy !== gy);
+    if (!goalUnwalkable) gridWall[gy * pw + gx] = 0;
+
+    const isWalkable = (x: number, y: number): boolean => gridWall[y * pw + x] === 0;
+    const stepCost = (x: number, y: number): number => gridCost[y * pw + x];
+
+    const oracleDist = oracleWeightedDijkstra(pw, ph, gx, gy, gridWall, gridCost);
+    const expectedCost = oracleDist[sy * pw + sx];
+    const reachable = Number.isFinite(expectedCost);
+
+    const len = findAStarPathInto(pw, ph, sx, sy, gx, gy, isWalkable, pathCells, pathMeta, stepCost, 1, pathWs);
+    const nextStep = findNextStep(pw, ph, { x: sx, y: sy }, { x: gx, y: gy }, isWalkable, stepCost, 1);
+
+    if (!reachable) {
+      check(len === 0 && !Number.isFinite(pathMeta.totalCost) && nextStep === null, `Unreachable grid ${g} must report unreachable cleanly`);
+    } else {
+      weightedSolvesVerified++;
+      check(len >= 1 && Math.abs(pathMeta.totalCost - expectedCost) < 1e-9, `A* totalCost ${pathMeta.totalCost} != Dijkstra Oracle ${expectedCost} on grid ${g}`);
+      check(pathCells[0] === sy * pw + sx && pathCells[len - 1] === gy * pw + gx, 'A* path endpoints mismatch');
+
+      let summedCost = 0;
+      for (let k = 1; k < len; k++) {
+        const prev = pathCells[k - 1];
+        const curr = pathCells[k];
+        const px = prev % pw;
+        const py = (prev - px) / pw;
+        const cx = curr % pw;
+        const cy = (curr - cx) / pw;
+        check(Math.abs(cx - px) + Math.abs(cy - py) === 1, 'A* path step must be 4-connected');
+        if (k < len - 1) check(isWalkable(cx, cy), 'Intermediate A* cell must be walkable');
+        summedCost += gridCost[curr];
+      }
+      check(Math.abs(summedCost - expectedCost) < 1e-9, `Actual path cost sum ${summedCost} != Dijkstra Oracle ${expectedCost}`);
+
+      if (len >= 2) {
+        const expectedNext = pathCells[1];
+        check(
+          nextStep !== null && nextStep.y * pw + nextStep.x === expectedNext,
+          'findNextStep must match pathCells[1]',
+        );
+      } else {
+        check(nextStep === null, 'findNextStep when start===goal must return null');
+      }
+
+      if (!goalUnwalkable) {
+        const flowCount = computeFlowFieldInto(pw, ph, gx, gy, isWalkable, flowDist, flowDirX, flowDirY, stepCost, 1, pathWs);
+        check(flowCount >= 1, 'Flow field reachable count must be >= 1');
+        for (let i = 0; i < total; i++) {
+          if (gridWall[i] === 0 && Number.isFinite(oracleDist[i])) {
+            check(
+              Math.abs(flowDist[i] - oracleDist[i]) < 1e-9,
+              `FlowField distance mismatch at cell ${i}: got ${flowDist[i]} vs Oracle ${oracleDist[i]}`,
+            );
+          }
+        }
+        // Walk from start along flow field vector and verify it arrives cleanly with exact cost
+        let wx = sx;
+        let wy = sy;
+        let walkCost = 0;
+        let hops = 0;
+        while ((wx !== gx || wy !== gy) && hops < total) {
+          const ci = wy * pw + wx;
+          const dx = flowDirX[ci];
+          const dy = flowDirY[ci];
+          check(Math.abs(dx) + Math.abs(dy) === 1, 'FlowField direction vector must be cardinal unit vector on reachable cells');
+          wx += dx;
+          wy += dy;
+          walkCost += gridCost[wy * pw + wx];
+          hops++;
+        }
+        check(wx === gx && wy === gy && Math.abs(walkCost - expectedCost) < 1e-9, 'FlowField walk did not reach goal in optimal cost');
+      }
+    }
+  }
+  check(weightedSolvesVerified >= 40, `Expected >= 40 valid weighted A* solves across 80 grids (got ${weightedSolvesVerified})`);
+
+  // Oversized workspace growth check (> default 16,384 cells: 160x120 = 19,200)
+  const bigCell = findAStarNextCell(160, 120, 2, 2, 155, 115, () => true);
+  check(bigCell >= 0, 'GridPathfinder must auto-grow shared workspace beyond 16,384 cells without error');
+
+  // 4. Isolated Zero-GC Hot Benchmark
+  const bench = runModule3HotBenchmark();
+  check(Number.isFinite(bench.sink) && bench.spatialMs < 200, `Module 3 SpatialHash 2048 benchmark too slow (${bench.spatialMs.toFixed(2)}ms)`);
+  check(bench.spatialSpeedup >= 5, `SpatialHash should outperform O(N^2) brute force by >=5x at 2,048 entities (got ${bench.spatialSpeedup.toFixed(1)}x)`);
+  check(bench.fovAndPathMs < 250, `Module 3 FOV/DDA/A*/FlowField benchmark too slow (${bench.fovAndPathMs.toFixed(2)}ms)`);
+  check(bench.heapDeltaKb < 2048, `Module 3 hot loop heap delta too large (${bench.heapDeltaKb}KB)`);
+
+  console.log(
+    `[BENCH] Module 3 SpatialHash(20x2048): ${bench.spatialMs.toFixed(2)}ms (${bench.spatialSpeedup.toFixed(1)}x vs O(N^2)), FOV+DDA+A*+Flow: ${bench.fovAndPathMs.toFixed(2)}ms (heapDelta=${bench.heapDeltaKb}KB)`,
+  );
+  console.log(
+    `[SIM OK] Module 3 SpatialHash, Visibility2D & GridPathfinder Oracles (n<=2048 pairs=${symmetryChecks} fovSym checks, ${weightedSolvesVerified} weighted A*/Flow solves) verified`,
+  );
+}
+
+function runModule3HotBenchmark(): {
+  spatialMs: number;
+  bruteMs: number;
+  spatialSpeedup: number;
+  fovAndPathMs: number;
+  heapDeltaKb: number;
+  sink: number;
+} {
+  const n = 2048;
+  const sh = new SpatialHash(n, 32, 4096, n * 8, 36);
+  const bx = new Float64Array(n);
+  const by = new Float64Array(n);
+  const outA = new Int32Array(16384);
+  const outB = new Int32Array(16384);
+  for (let i = 0; i < n; i++) {
+    bx[i] = ((i * 73) % 512) - 64;
+    by[i] = ((i * 41) % 384) - 48;
+  }
+
+  const gw = 48;
+  const gh = 48;
+  const wall = new Uint8Array(gw * gh);
+  for (let i = 0; i < wall.length; i++) {
+    if ((i * 37) % 13 === 0) wall[i] = 1;
+  }
+  wall[10 * gw + 10] = 0;
+  wall[40 * gw + 40] = 0;
+  const isOpaque = (x: number, y: number): boolean => wall[y * gw + x] === 1;
+  const isWalkable = (x: number, y: number): boolean => wall[y * gw + x] === 0;
+  const fovMask = new Uint8Array(gw * gh);
+  const fovScratch = createSymmetricFovScratch(1024);
+  const ddaHit = new Float64Array(8);
+  const pathWs = createPathfinderWorkspace(gw * gh);
+  const flowDist = new Float64Array(gw * gh);
+  const flowDirX = new Int8Array(gw * gh);
+  const flowDirY = new Int8Array(gw * gh);
+
+  let sink = 0;
+
+  const execSpatial = (ticks: number): void => {
+    for (let t = 0; t < ticks; t++) {
+      sh.clear();
+      const shift = t & 7;
+      for (let i = 0; i < n; i++) {
+        sh.insertBox(i, bx[i] + shift, by[i], 14, 14);
+      }
+      sink += sh.collectPairsInto(outA, outB);
+    }
+  };
+
+  const execBrute = (ticks: number): void => {
+    for (let t = 0; t < ticks; t++) {
+      const shift = t & 7;
+      let count = 0;
+      for (let i = 0; i < n; i++) {
+        const ax0 = bx[i] + shift;
+        const ay0 = by[i];
+        const ax1 = ax0 + 14;
+        const ay1 = ay0 + 14;
+        for (let j = i + 1; j < n; j++) {
+          const bx0 = bx[j] + shift;
+          const by0 = by[j];
+          if (ax0 < bx0 + 14 && ax1 > bx0 && ay0 < by0 + 14 && ay1 > by0) count++;
+        }
+      }
+      sink += count;
+    }
+  };
+
+  const execFovAndPath = (fovN: number, ddaN: number, astarN: number, flowN: number): void => {
+    for (let i = 0; i < fovN; i++) {
+      sink += computeSymmetricFovInto(gw, gh, 24, 24, 9, isOpaque, fovMask, fovScratch);
+    }
+    for (let i = 0; i < ddaN; i++) {
+      raycastGrid2DInto(gw, gh, 10.5, 10.5, 1 + (i & 3) * 0.25, 0.73, 24, isOpaque, ddaHit);
+      sink += ddaHit[1];
+    }
+    for (let i = 0; i < astarN; i++) {
+      sink += findAStarNextCell(gw, gh, 10, 10, 40, 40, isWalkable, undefined, 1, pathWs);
+    }
+    for (let i = 0; i < flowN; i++) {
+      sink += computeFlowFieldInto(gw, gh, 40, 40, isWalkable, flowDist, flowDirX, flowDirY, undefined, 1, pathWs);
+    }
+  };
+
+  // Warmup V8 JIT before measuring memory delta and speed
+  execSpatial(6);
+  execBrute(4);
+  execFovAndPath(40, 400, 40, 5);
+
+  const heapBefore = process.memoryUsage().heapUsed;
+  const tS0 = performance.now();
+  execSpatial(20);
+  const spatialMs = performance.now() - tS0;
+
+  const tF0 = performance.now();
+  execFovAndPath(200, 2000, 200, 20);
+  const fovAndPathMs = performance.now() - tF0;
+  const heapDeltaKb = Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024);
+
+  const tB0 = performance.now();
+  execBrute(20);
+  const bruteMs = performance.now() - tB0;
+
+  return {
+    spatialMs,
+    bruteMs,
+    spatialSpeedup: bruteMs / Math.max(0.05, spatialMs),
+    fovAndPathMs,
+    heapDeltaKb,
+    sink,
+  };
 }

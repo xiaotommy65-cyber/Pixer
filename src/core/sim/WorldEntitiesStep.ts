@@ -147,14 +147,47 @@ export function stepEntitiesInWorld(
     }
   }
 
-  for (let i = 0; i < world.entities.length; i++) {
-    const a = world.entities[i];
-    if (!a.alive) continue;
-    for (let j = 0; j < world.entities.length; j++) {
-      if (i === j) continue;
-      const b = world.entities[j];
-      if (!b.alive || !rectsOverlap(a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h, 1)) continue;
-      world.rules.evaluatePair(a, b, actions, dt);
+  const n = world.entities.length;
+  const hash = world.entityHash;
+  if (n <= hash.capacity) {
+    hash.clear();
+    for (let i = 0; i < n; i++) {
+      const e = world.entities[i];
+      if (e.alive) hash.insertBox(i, e.x - 0.5, e.y - 0.5, e.w + 1, e.h + 1);
+    }
+    const candidates = world.pairQuerySlots;
+    for (let i = 0; i < n; i++) {
+      const a = world.entities[i];
+      if (!a.alive) continue;
+      const cnt = hash.queryRect(a.x - 1, a.y - 1, a.x + a.w + 1, a.y + a.h + 1, candidates);
+      // Preserve deterministic ascending entity index order for multi-rule cascades
+      for (let p = 1; p < cnt; p++) {
+        const key = candidates[p];
+        let q = p - 1;
+        while (q >= 0 && candidates[q] > key) {
+          candidates[q + 1] = candidates[q];
+          q--;
+        }
+        candidates[q + 1] = key;
+      }
+      for (let k = 0; k < cnt; k++) {
+        const j = candidates[k];
+        if (i === j) continue;
+        const b = world.entities[j];
+        if (!b.alive || !rectsOverlap(a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h, 1)) continue;
+        world.rules.evaluatePair(a, b, actions, dt);
+      }
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      const a = world.entities[i];
+      if (!a.alive) continue;
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        const b = world.entities[j];
+        if (!b.alive || !rectsOverlap(a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h, 1)) continue;
+        world.rules.evaluatePair(a, b, actions, dt);
+      }
     }
   }
 }
