@@ -141,8 +141,12 @@ export class TurnGridKernel implements TurnKernelContract {
     const f = getActiveFloor(this.state);
     const worldW = f.width * TILE_PX;
     const worldH = f.height * TILE_PX;
-    this.cameraX = Math.max(0, Math.min(Math.max(0, worldW - GAME_W), this.state.hero.x * TILE_PX - GAME_W * 0.45));
-    this.cameraY = Math.max(0, Math.min(Math.max(0, worldH - GAME_H), this.state.hero.y * TILE_PX - GAME_H * 0.4));
+    const minCamX = -56;
+    const maxCamX = Math.max(minCamX, worldW - GAME_W + 56);
+    const minCamY = -28;
+    const maxCamY = Math.max(minCamY, worldH - GAME_H + 32);
+    this.cameraX = Math.max(minCamX, Math.min(maxCamX, this.state.hero.x * TILE_PX + 8 - GAME_W * 0.5));
+    this.cameraY = Math.max(minCamY, Math.min(maxCamY, this.state.hero.y * TILE_PX + 8 - GAME_H * 0.46));
   }
 
   public retryStage(): void {
@@ -216,8 +220,12 @@ export class TurnGridKernel implements TurnKernelContract {
 
     const worldW = f.width * TILE_PX;
     const worldH = f.height * TILE_PX;
-    const targetCamX = Math.max(0, Math.min(Math.max(0, worldW - GAME_W), s.hero.visualX - GAME_W * 0.45));
-    const targetCamY = Math.max(0, Math.min(Math.max(0, worldH - GAME_H), s.hero.visualY - GAME_H * 0.4));
+    const minCamX = -56;
+    const maxCamX = Math.max(minCamX, worldW - GAME_W + 56);
+    const minCamY = -28;
+    const maxCamY = Math.max(minCamY, worldH - GAME_H + 32);
+    const targetCamX = Math.max(minCamX, Math.min(maxCamX, s.hero.visualX + 8 - GAME_W * 0.5));
+    const targetCamY = Math.max(minCamY, Math.min(maxCamY, s.hero.visualY + 8 - GAME_H * 0.46));
     this.cameraX += (targetCamX - this.cameraX) * Math.min(1, dt * 10);
     this.cameraY += (targetCamY - this.cameraY) * Math.min(1, dt * 10);
 

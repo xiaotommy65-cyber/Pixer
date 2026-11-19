@@ -3,6 +3,7 @@ import {
   FLOATS_PER_INSTANCE,
   GAME_H,
   GAME_W,
+  MAX_DYNAMIC_LIGHTS,
   MAX_INSTANCES_PER_PASS,
   OVERSCAN_PAD,
   type IGpuBackend,
@@ -50,6 +51,8 @@ export class WebGpuBackend implements IGpuBackend {
   private compositePipeline: GPURenderPipeline;
   private skyUniformBuffer: GPUBuffer;
   private skyUniformData = new Float32Array(16);
+  private lightUniformBuffer: GPUBuffer;
+  private lightUniformData = new Float32Array(196);
   private alphaBuffer: GPUBuffer;
   private addBuffer: GPUBuffer;
   private atlasTexture: GPUTexture;
@@ -65,7 +68,7 @@ export class WebGpuBackend implements IGpuBackend {
   private postBlurHBuf: GPUBuffer;
   private postBlurVBuf: GPUBuffer;
   private postCompBuf: GPUBuffer;
-  private postUniformData = new Float32Array(12);
+  private postUniformData = new Float32Array(16);
   private renderTargets: PostRenderTargets | null = null;
   private paletteRows = DEFAULT_PALETTE_ROWS;
   private onLostCallback?: () => void;
@@ -87,6 +90,7 @@ export class WebGpuBackend implements IGpuBackend {
     bloomBlurPipeline: GPURenderPipeline,
     compositePipeline: GPURenderPipeline,
     skyUniformBuffer: GPUBuffer,
+    lightUniformBuffer: GPUBuffer,
     alphaBuffer: GPUBuffer,
     addBuffer: GPUBuffer,
     atlasTexture: GPUTexture,
@@ -115,6 +119,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.bloomBlurPipeline = bloomBlurPipeline;
     this.compositePipeline = compositePipeline;
     this.skyUniformBuffer = skyUniformBuffer;
+    this.lightUniformBuffer = lightUniformBuffer;
     this.alphaBuffer = alphaBuffer;
     this.addBuffer = addBuffer;
     this.atlasTexture = atlasTexture;
@@ -293,9 +298,13 @@ export class WebGpuBackend implements IGpuBackend {
         size: 64,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      const lightUniformBuffer = device.createBuffer({
+        size: 784,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
       const makePostBuf = () =>
         device.createBuffer({
-          size: 48,
+          size: 64,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
       const postDownBuf = makePostBuf();
@@ -320,6 +329,7 @@ export class WebGpuBackend implements IGpuBackend {
           { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
           { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
           { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+          { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
         ],
       });
       const pass1BindGroup = device.createBindGroup({
@@ -330,6 +340,7 @@ export class WebGpuBackend implements IGpuBackend {
           { binding: 2, resource: atlasSampler },
           { binding: 3, resource: indexAtlasTexture.createView() },
           { binding: 4, resource: paletteLutTexture.createView() },
+          { binding: 5, resource: { buffer: lightUniformBuffer } },
         ],
       });
 
@@ -452,6 +463,7 @@ export class WebGpuBackend implements IGpuBackend {
         bloomBlurPipeline,
         compositePipeline,
         skyUniformBuffer,
+        lightUniformBuffer,
         alphaBuffer,
         addBuffer,
         atlasTexture,
@@ -607,6 +619,7 @@ export class WebGpuBackend implements IGpuBackend {
             { binding: 2, resource: this.atlasSampler },
             { binding: 3, resource: this.indexAtlasTexture.createView() },
             { binding: 4, resource: this.paletteLutTexture.createView() },
+            { binding: 5, resource: { buffer: this.lightUniformBuffer } },
           ],
         });
       }
@@ -638,6 +651,8 @@ export class WebGpuBackend implements IGpuBackend {
     additiveItems: Float32Array,
     additiveCount: number,
     timeSec: number,
+    lightsData?: Float32Array,
+    lightCount = 0,
   ): number {
     let swapTex: GPUTexture;
     try {
@@ -676,6 +691,26 @@ export class WebGpuBackend implements IGpuBackend {
     this.skyUniformData[15] = mid ? mid[2] : (sky.top[2] + sky.bottom[2]) * 0.5;
     this.device.queue.writeBuffer(this.skyUniformBuffer, 0, this.skyUniformData);
 
+    const safeLights = lightsData ? Math.max(0, Math.min(MAX_DYNAMIC_LIGHTS, lightCount | 0)) : 0;
+    this.lightUniformData[0] = safeLights;
+    this.lightUniformData[1] = 0;
+    this.lightUniformData[2] = 0;
+    this.lightUniformData[3] = 0;
+    for (let i = 0; i < safeLights; i++) {
+      const src = i * 8;
+      const posDst = 4 + i * 4;
+      const colDst = 4 + MAX_DYNAMIC_LIGHTS * 4 + i * 4;
+      this.lightUniformData[posDst] = lightsData![src];
+      this.lightUniformData[posDst + 1] = lightsData![src + 1];
+      this.lightUniformData[posDst + 2] = lightsData![src + 2];
+      this.lightUniformData[posDst + 3] = lightsData![src + 7];
+      this.lightUniformData[colDst] = lightsData![src + 4];
+      this.lightUniformData[colDst + 1] = lightsData![src + 5];
+      this.lightUniformData[colDst + 2] = lightsData![src + 6];
+      this.lightUniformData[colDst + 3] = lightsData![src + 3];
+    }
+    this.device.queue.writeBuffer(this.lightUniformBuffer, 0, this.lightUniformData);
+
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);
     const safeAdd = Math.min(additiveCount, MAX_INSTANCES_PER_PASS);
 
@@ -703,6 +738,11 @@ export class WebGpuBackend implements IGpuBackend {
     this.postUniformData[9] = viewH;
     this.postUniformData[10] = viewW + OVERSCAN_PAD * 2;
     this.postUniformData[11] = viewH + OVERSCAN_PAD * 2;
+    const wt = sky.waterTint;
+    this.postUniformData[12] = sky.waterLevelNorm ?? 0;
+    this.postUniformData[13] = wt ? wt[0] : 0.227;
+    this.postUniformData[14] = wt ? wt[1] : 0.431;
+    this.postUniformData[15] = wt ? wt[2] : 0.612;
     if (doBloom) {
       this.postUniformData[0] = 1 / rt.osW;
       this.postUniformData[1] = 1 / rt.osH;
@@ -828,6 +868,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.alphaBuffer.destroy();
     this.addBuffer.destroy();
     this.skyUniformBuffer.destroy();
+    this.lightUniformBuffer.destroy();
     this.postDownBuf.destroy();
     this.postBlurHBuf.destroy();
     this.postBlurVBuf.destroy();

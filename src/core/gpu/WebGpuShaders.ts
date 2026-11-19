@@ -38,11 +38,18 @@ struct SkyUniforms {
   extra: vec4f,  // x: paletteRows, yzw: precomputed Oklab midColor RGB
 };
 
+struct LightUniforms {
+  info: vec4f, // x: lightCount
+  posRad: array<vec4f, 24>,
+  colInt: array<vec4f, 24>,
+};
+
 @group(0) @binding(0) var<uniform> uSky: SkyUniforms;
 @group(0) @binding(1) var uAtlas: texture_2d<f32>;
 @group(0) @binding(2) var uSamp: sampler;
 @group(0) @binding(3) var uIndexAtlas: texture_2d<f32>;
 @group(0) @binding(4) var uPaletteLut: texture_2d<f32>;
+@group(0) @binding(5) var<uniform> uLights: LightUniforms;
 
 struct SkyOut {
   @builtin(position) pos: vec4f,
@@ -80,7 +87,12 @@ fn fsSky(in: SkyOut) -> SceneOut {
   let botLin = srgbToLin(uSky.bottomColor.rgb);
   let upper = mix(topLin, midLin, clamp(y * 2.0, 0.0, 1.0));
   let lower = mix(midLin, botLin, clamp((y - 0.5) * 2.0, 0.0, 1.0));
-  let skyLin = select(upper, lower, y >= 0.5) + botLin * horizonGlow;
+  var skyLin = select(upper, lower, y >= 0.5) + botLin * horizonGlow;
+  if (uSky.params.y > 0.5) {
+    let rayPhase = sin((in.uv.x * 1.35 + in.uv.y * 0.55) * 6.28318 - uSky.params.x * 0.32) * 0.5 + 0.5;
+    let godRay = pow(max(1e-4, rayPhase), 3.0) * (1.0 - y * 0.72) * 0.055;
+    skyLin += topLin * godRay;
+  }
   var col = linToSrgb(skyLin);
   col += vec3f(bayer4x4(in.uv * viewSize) * (1.75 / 255.0));
   if (uSky.params.y > 0.5) {
@@ -111,6 +123,7 @@ struct SpriteOut {
   @location(5) param: f32,
   @location(6) uvBounds: vec4f,
   @location(7) paletteRow: f32,
+  @location(8) screenPos: vec2f,
 };
 
 // Branchless 32-bit unsigned integer xxHash32-style mix (eliminates mobile FP16 sin() banding)
@@ -159,6 +172,7 @@ fn vsSprite(@builtin(vertex_index) vid: u32, inst: InstanceIn) -> SpriteOut {
   out.param = inst.extra.w;
   out.uvBounds = inst.uvBounds;
   out.paletteRow = inst.deform.w;
+  out.screenPos = world;
   return out;
 }
 
@@ -347,14 +361,70 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     texAlpha = sampled.a;
   }
 
+  var reliefShade = 1.0;
+  var lit = vec3f(0.0);
+
+  if (in.paletteRow > -1.5) {
+    let texel = vec2f(1.0) / vec2f(textureDimensions(uIndexAtlas));
+    let uvMin = min(in.uvBounds.xy, in.uvBounds.zw) + texel * 0.5;
+    let uvMax = max(in.uvBounds.xy, in.uvBounds.zw) - texel * 0.5;
+    let safeMin = min(uvMin, uvMax);
+    let safeMax = max(uvMin, uvMax);
+    let flipSign = select(1.0, -1.0, in.uvBounds.x > in.uvBounds.z);
+    let lumaW = vec3f(0.299, 0.587, 0.114);
+    let sC = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv, safeMin, safeMax), 0.0);
+    let sL = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
+    let sR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
+    let sU = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(0.0, texel.y), safeMin, safeMax), 0.0);
+    let sD = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(0.0, texel.y), safeMin, safeMax), 0.0);
+    let sBR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, texel.y), safeMin, safeMax), 0.0);
+
+    let hC = sC.a * (0.65 + 0.35 * dot(sC.rgb, lumaW));
+    let hL = sL.a * (0.65 + 0.35 * dot(sL.rgb, lumaW));
+    let hR = sR.a * (0.65 + 0.35 * dot(sR.rgb, lumaW));
+    let hU = sU.a * (0.65 + 0.35 * dot(sU.rgb, lumaW));
+    let hD = sD.a * (0.65 + 0.35 * dot(sD.rgb, lumaW));
+    let hBR = sBR.a * (0.65 + 0.35 * dot(sBR.rgb, lumaW));
+
+    let gx = hR - hL;
+    let gy = hD - hU;
+    let sobelN = normalize(vec3f(-gx * 1.4, -gy * 1.4, 1.0));
+    let sobelLight = normalize(vec3f(-0.55, -0.75, 0.4));
+    let ndl = dot(sobelN, sobelLight) - sobelLight.z;
+    let rimBoost = select(0.0, 0.08, (hC - hBR) > 0.45);
+    reliefShade = clamp(1.0 + ndl * 0.24, 0.90, 1.14) + rimBoost;
+
+    let lightCnt = min(24u, u32(max(0.0, uLights.info.x + 0.5)));
+    var li = 0u;
+    loop {
+      if (li >= lightCnt) { break; }
+      let lp = uLights.posRad[li];
+      let lc = uLights.colInt[li];
+      let toL = vec3f(lp.xy - in.screenPos, 18.0);
+      let dist = length(vec2f(toL.x, toL.y));
+      if (dist < lp.z) {
+        let falloff = max(0.2, lp.w);
+        let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), falloff);
+        let lDir = normalize(toL);
+        let diff = max(0.0, dot(sobelN, lDir));
+        lit += lc.rgb * (lc.a * att * (0.35 + 0.95 * diff));
+      }
+      li += 1u;
+    }
+  }
+
   let flashAmt = clamp(in.flash, 0.0, 1.0);
-  let baseRgb = texRgb * in.tint.rgb;
+  var baseRgb = clamp(texRgb * in.tint.rgb * reliefShade, vec3f(0.0), vec3f(1.0));
+  if (in.paletteRow > -1.5) {
+    baseRgb = clamp(baseRgb * (1.0 + lit), vec3f(0.0), vec3f(1.35));
+  }
   let finalRgb = mix(baseRgb, vec3f(1.0), flashAmt);
   let finalAlpha = texAlpha * in.tint.a;
   let emissiveAmt = max(lutEmissive, clamp(in.param, 0.0, 1.5)) + flashAmt * 0.5;
+  let hdrExcess = max(finalRgb - vec3f(1.0), vec3f(0.0));
 
-  out.color = vec4f(finalRgb, finalAlpha);
-  out.emissive = vec4f(finalRgb * emissiveAmt, finalAlpha);
+  out.color = vec4f(clamp(finalRgb, vec3f(0.0), vec3f(1.0)), finalAlpha);
+  out.emissive = vec4f(finalRgb * emissiveAmt + hdrExcess, finalAlpha);
   return out;
 }
 `;
@@ -364,6 +434,7 @@ struct PostUniforms {
   params0: vec4f, // x: texelX, y: texelY, z: glowIntensity, w: filterMode (0=clean, 1=lcd, 2=crt)
   params1: vec4f, // x: timeSec, y: cozyFilter, z: camFracX, w: camFracY
   params2: vec4f, // x: viewW, y: viewH, z: osW, w: osH
+  params3: vec4f, // x: waterLevelNorm, yzw: waterTint
 };
 
 @group(0) @binding(0) var<uniform> uPost: PostUniforms;
@@ -462,12 +533,25 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
   let viewSize = max(vec2f(1.0), uPost.params2.xy);
   let osSize = max(vec2f(1.0), uPost.params2.zw);
   let sceneUv = (vec2f(${OVERSCAN_PAD}.0, ${OVERSCAN_PAD}.0) + in.uv * viewSize + uPost.params1.zw) / osSize;
-  let sceneCol = textureSampleLevel(uTexA, uNearestSamp, sceneUv, 0.0).rgb;
+  let waterLevel = uPost.params3.x;
+  let inWater = waterLevel > 0.01 && in.uv.y > waterLevel;
+  let waterDepth = select(0.0, in.uv.y - waterLevel, inWater);
+  var sampleUv = sceneUv;
+  if (inWater) {
+    let reflY = max(0.0, waterLevel - waterDepth * 0.92);
+    let ripplePx = floor(sin(waterDepth * 95.0 + uPost.params1.x * 4.5) * 2.5);
+    let rx = (${OVERSCAN_PAD}.0 + in.uv.x * viewSize.x + uPost.params1.z + ripplePx) / osSize.x;
+    let ry = (${OVERSCAN_PAD}.0 + reflY * viewSize.y + uPost.params1.w) / osSize.y;
+    let minUv = vec2f(${OVERSCAN_PAD}.0) / osSize;
+    let maxUv = (vec2f(${OVERSCAN_PAD}.0) + viewSize) / osSize;
+    sampleUv = clamp(vec2f(rx, ry), minUv, maxUv);
+  }
+  let sceneCol = textureSampleLevel(uTexA, uNearestSamp, sampleUv, 0.0).rgb;
   let glow = max(0.0, uPost.params0.z);
   var col = sceneCol;
 
   if (glow > 0.01) {
-    let bloom = textureSampleLevel(uTexB, uLinearSamp, sceneUv, 0.0).rgb;
+    let bloom = textureSampleLevel(uTexB, uLinearSamp, sampleUv, 0.0).rgb;
     let sceneLin = srgbToLin(sceneCol);
     let bloomLin = srgbToLin(bloom) * glow * 1.15;
     let hdrLin = sceneLin + bloomLin;
@@ -476,6 +560,18 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
     let toneBlend = smoothstep(0.0, 0.45, bloomEnergy);
     let outLin = mix(clamp(hdrLin, vec3f(0.0), vec3f(1.0)), toneMapped, toneBlend);
     col = linToSrgb(outLin);
+  }
+
+  if (inWater) {
+    let waterTint = uPost.params3.yzw;
+    let depthNorm = clamp(waterDepth / max(0.05, 1.0 - waterLevel), 0.0, 1.0);
+    let tintBlend = clamp(0.38 + depthNorm * 0.36, 0.0, 0.85);
+    let depthDarken = 1.0 - depthNorm * 0.34;
+    col = mix(col * 0.88, waterTint, tintBlend) * depthDarken;
+    if (waterDepth < 1.5 / viewSize.y) {
+      let shimmer = 0.65 + 0.35 * sin(in.uv.x * viewSize.x * 0.35 + uPost.params1.x * 5.0);
+      col = mix(col, min(vec3f(1.0), waterTint * 1.45 + vec3f(0.35)), 0.65 * shimmer);
+    }
   }
 
   let mode = uPost.params0.w;

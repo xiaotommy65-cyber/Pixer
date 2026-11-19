@@ -2,7 +2,7 @@
 
 ## 1. Project Identity (One Core, Two Future Editions)
 - **Core (`src/core/`, `src/assets/`)**: Lightweight, zero-GC, multi-backend (WebGPU / WebGL2 / Canvas 2D) 2D/2.5D fantasy console engine with deterministic simulation, `1024×1024` TextureAtlas, and Web Audio synthesizer.
-- **Arcade Edition (Current Focus)**: Tactile Switch-inspired creative handheld (`PA-01`–`PA-05`), shaders/HD-2D effects, Studio editors, PWA, and Capacitor native iOS/Android app.
+- **Arcade Edition (Current Focus)**: Tactile Switch-inspired creative handheld (`PA-01`–`PA-06`), shaders/HD-2D effects, Studio editors, PWA, and Capacitor native iOS/Android app.
 - **Edu Edition (Future Phase)**: Scratch-parallel white-box AI cartridge player & embeddable widget (transparent editable blocks/sprites, buggy-cartridge debugging, PNG homework).
 - Read [`docs/ROADMAP.md`](docs/ROADMAP.md) **ONLY** when planning or executing a milestone.
 
@@ -33,7 +33,7 @@
   - `EventBus.ts` & `SeededRng.ts` — Typed `EngineEventBus` and deterministic RNG.
 - `src/core/sim/` — Shared 2D/2.5D simulation primitives:
   - `WorldKernel.ts`, `WorldEntitiesStep.ts`, `WorldHeroPhysics.ts`, `WorldSnapshot.ts`, `WorldInternalTypes.ts`
-  - `CartridgeSchema.ts`, `ProceduralStageCompiler.ts`, `DataCartridgeRuntime.ts`, `DataRuntimeShmup.ts`, `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`
+  - `CartridgeSchema.ts`, `ProceduralStageCompiler.ts`, `DataCartridgeRuntime.ts`, `DataRuntimeShmup.ts`, `GenreControllers.ts`, `TweenSystem.ts`, `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`
   - `CameraDirector.ts`, `CutsceneSequencer.ts`, `JuiceSystem.ts` (`FEEDBACK_RECIPES`), `BehaviorTree.ts`, `GridPathfinder.ts`, `RuleMatrix.ts`, `Archetypes.ts`
 - `src/core/audio/` — Zero-dependency scale-locked Web Audio synthesizer (`ToySynth.ts`, `AudioBus.ts`, `BgmSequencer.ts`, `SynthPresets.ts`).
 - `src/core/input/` — Input DSP & hardware gamepad (`InputPipeline.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `InputMap.ts`, `WebGamepadSampler.ts`).
@@ -44,21 +44,21 @@
 
 ### `src/assets/` — Procedural Sprites, Atlas & Audio Data (DOM-free, never import `ui/` or `game/`)
 - `TextureAtlas.ts` — `1024×1024` RGBA atlas with `>=128px` dynamic sprite region & hot-reload dirty tracking.
-- `AtlasSpritesData.ts`, `src/assets/sprites/*`, `AudioPatterns.ts`, `WorkshopRecipes.ts`.
+- `AtlasSpritesData.ts`, `src/assets/sprites/*` (incl. `ParkourSprites.ts`, `AutoTileSprites.ts`, `PixelFontData.ts`), `AudioPatterns.ts`, `WorkshopRecipes.ts`.
 
 ### `src/game/` — Playable Cartridges (DOM-free, never import `ui/`)
-- `BuiltinCartridges.ts` — Registers all 5 cartridges (`PA-01`..`PA-05`) and D&D campaign generator via `registerBuiltinCartridges()`.
-- `cloudberry/cloudberry.cartridge.json` (`PA-01`) · `sugarStarlight/sugarStarlight.cartridge.json` (`PA-02`) · `sandbox/` (`PA-03`) · `emberkeep/` (`PA-04`) · `astralChronicles/` (`PA-05`).
+- `BuiltinCartridges.ts` — Registers all 6 cartridges (`PA-01`..`PA-06`) and D&D campaign generator via `registerBuiltinCartridges()`.
+- `cloudberry/cloudberry.cartridge.json` (`PA-01`) · `sugarStarlight/sugarStarlight.cartridge.json` (`PA-02`) · `sandbox/` (`PA-03`) · `emberkeep/` (`PA-04`) · `astralChronicles/` (`PA-05`) · `celestialParkour/` (`PA-06`, incl. `celestialParkour.cartridge.json`).
 
 ### `src/ui/` & `src/styles/` — Handheld OS Shell & Editors
 - Shell & Routing: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`.
-- Lobby & Overlays: `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts`, `ProceduralSurfaceTextures.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `TransitionMascot.ts`, `MomoMascot.ts`, `CardArt.ts`.
-- Cartridge HUDs & Studios: `ShmupOverlayView.ts`, `RpgOverlayView.ts`, `ChronicleOverlayView.ts`, `ChronicleModalViews.ts`, `StudioWorkbenchView.ts`, `SpriteAtelierView.ts`, `WorkshopView.ts`.
+- Lobby & Overlays: `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts`, `ProceduralSurfaceTextures.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `TransitionMascot.ts`, `MomoMascot.ts`, `CardArt.ts`, `BrowserAssetLoader.ts`.
+- Cartridge HUDs & Studios: `ShmupOverlayView.ts`, `RpgOverlayView.ts`, `ChronicleOverlayView.ts`, `ChronicleModalViews.ts`, `StudioWorkbenchView.ts`, `SpriteAtelierView.ts`, `WorkshopView.ts`, `WorkshopTemplates.ts`.
 - System, Input & Native: `SystemSettingsDrawerView.ts`, `SettingsDrawerTypes.ts`, `SystemLogPanelView.ts`, `VirtualGamepadInput.ts`, `TouchControlsBuilder.ts`, `TouchStateMerger.ts`, `GamepadHardwareBridge.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `PixelIcons.ts`, `dom.ts`.
 - Styles: `src/styles/atelier.css`, `src/styles/switch.css`, `src/styles/lobby.css`.
 
 ### `scripts/` — Headless Simulation & Architecture Verification
-- `scripts/headless-sim.ts` — Entry point for `npm run sim`.
+- `scripts/headless-sim.ts` — Entry point for `npm run sim`; `scripts/normalize-sprites.py`.
 - `scripts/sim/` — `SimTestHarness.ts`, `CoreSubsystemTests.ts`, `CartridgeActionTests.ts`, `CartridgeRpgTests.ts`, `HalAndInputTests.ts`, `ExtensibilityAiTests.ts`, `ArchitectureTests.ts`.
 
 ## 3. Non-Negotiable Constraints (Ponytail + Zero-GC)

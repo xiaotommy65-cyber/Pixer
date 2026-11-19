@@ -7,6 +7,8 @@ import {
 import type { CartridgeJsonV1 } from '../core/sim/CartridgeSchema.ts';
 import { DataCartridgeRuntime } from '../core/sim/DataCartridgeRuntime.ts';
 import { AstralChroniclesGame } from './astralChronicles/AstralChroniclesGame.ts';
+import { CelestialParkourGame } from './celestialParkour/CelestialParkourGame.ts';
+import celestialParkourJson from './celestialParkour/celestialParkour.cartridge.json' with { type: 'json' };
 import cloudberryJson from './cloudberry/cloudberry.cartridge.json' with { type: 'json' };
 import { generateEmberkeepCampaign, verifyModuleSolvability } from './emberkeep/DungeonGenerator.ts';
 import { DEFAULT_DND_MODULE_JSON, EmberkeepDndGame } from './emberkeep/EmberkeepDndGame.ts';
@@ -205,12 +207,39 @@ export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
       };
     },
   },
+  {
+    meta: {
+      id: 'celestial-parkour',
+      code: 'PA-06',
+      title: '緋空殘響：飛鉤跑酷',
+      subtitle: '360° 飛鉤擺盪 × 極限跑酷',
+      genre: '極限飛鉤跑酷',
+      accentHex: '#ff5d8f',
+      badgeText: '5 大試煉 × 雙模飛鉤 × 波動衝刺',
+      controlsHint: '方向移動／滑鼠右搖桿360°瞄準・左鍵/Y 擺盪・右鍵/R 牽引・B 跳躍/甩射・A 八向衝刺・L 重試',
+      goalHint: '駕馭 360° 雙模式飛鉤、波動衝刺與蹬牆連跳，穿越亂流風暴與雙骨 IK 巨爪追擊突破 5 大試煉！',
+      defaultScript: SANDBOX_DEFAULT_SCRIPT,
+      preserveActionHold: true,
+    },
+    cartridgeJson: celestialParkourJson as unknown as CartridgeJsonV1,
+    factory: () => new CelestialParkourGame(),
+    resolveControlProfile: () => ({
+      a: '8向衝刺',
+      b: '跳躍/甩',
+      x: '遠眺',
+      y: '擺盪/左鍵',
+      l: '重試',
+      r: '牽引/右鍵',
+      rightStick: '滑鼠/360°瞄',
+      legend: 'L 重試 · X 遠眺 · Y/左鍵 飛鉤擺盪 · R/右鍵 飛鉤牽引 · B 跳躍/甩射 · A 8向衝刺 · 滑鼠/右搖桿360°瞄準',
+    }),
+  },
 ];
 
 let builtinsRegistered = false;
 
 /**
- * Registers all 5 first-party cartridges and the Emberkeep procedural campaign generator
+ * Registers all 6 first-party cartridges and the Emberkeep procedural campaign generator
  * into src/core/ registries, preserving strict one-way game -> core dependency inversion.
  */
 export function registerBuiltinCartridges(): void {

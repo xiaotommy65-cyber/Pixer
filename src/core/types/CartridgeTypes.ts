@@ -7,7 +7,8 @@ export type BuiltinCartridgeId =
   | 'sugar-starlight'
   | 'sandbox-toybox'
   | 'emberkeep-dnd'
-  | 'astral-chronicles';
+  | 'astral-chronicles'
+  | 'celestial-parkour';
 
 export type CartridgeId = BuiltinCartridgeId | (string & {});
 

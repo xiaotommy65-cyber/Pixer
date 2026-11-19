@@ -5,6 +5,7 @@ export const OVERSCAN_W = GAME_W + OVERSCAN_PAD * 2;
 export const OVERSCAN_H = GAME_H + OVERSCAN_PAD * 2;
 export const FLOATS_PER_INSTANCE = 20;
 export const MAX_INSTANCES_PER_PASS = 16384;
+export const MAX_DYNAMIC_LIGHTS = 24;
 
 export interface LogicalViewport {
   width: number;
@@ -83,6 +84,8 @@ export interface SkyGradient {
   camFracY?: number;
   viewW?: number;
   viewH?: number;
+  waterLevelNorm?: number;
+  waterTint?: [number, number, number];
 }
 
 export interface GpuFrameStats {
@@ -110,6 +113,8 @@ export interface IGpuBackend {
     additiveItems: Float32Array,
     additiveCount: number,
     timeSec: number,
+    lightsData?: Float32Array,
+    lightCount?: number,
   ): number; // returns draw calls executed
   resize(pixelWidth: number, pixelHeight: number): void;
   dispose(): void;

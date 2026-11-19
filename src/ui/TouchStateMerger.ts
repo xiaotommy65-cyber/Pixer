@@ -29,6 +29,14 @@ export interface VisualGamepadRefs {
   btnR: HTMLButtonElement | null;
 }
 
+export interface PointerMergeState {
+  x: number;
+  y: number;
+  active: boolean;
+  primary: boolean;
+  secondary: boolean;
+}
+
 export function mergeRawGamepadInputs(
   touchInput: InputState,
   padInput: Record<PadDir, boolean>,
@@ -36,8 +44,14 @@ export function mergeRawGamepadInputs(
   stickInput: Record<PadDir, boolean>,
   hwGamepadInput: InputState,
   rightStickAxis: { x: number; y: number },
+  pointerState?: PointerMergeState,
 ): InputState {
   const touchRMag = Math.hypot(rightStickAxis.x, rightStickAxis.y);
+  const pointerActive = Boolean(pointerState?.active || touchInput.pointerActive);
+  const pointerX = pointerState?.active ? pointerState.x : (touchInput.pointerX ?? 0);
+  const pointerY = pointerState?.active ? pointerState.y : (touchInput.pointerY ?? 0);
+  const pointerPrimary = Boolean(pointerState?.primary || touchInput.pointerPrimary);
+  const pointerSecondary = Boolean(pointerState?.secondary || touchInput.pointerSecondary);
   return {
     left: touchInput.left || padInput.left || keyInput.left || stickInput.left || hwGamepadInput.left,
     right: touchInput.right || padInput.right || keyInput.right || stickInput.right || hwGamepadInput.right,
@@ -52,6 +66,11 @@ export function mergeRawGamepadInputs(
     restart: touchInput.restart || keyInput.restart || hwGamepadInput.restart,
     rightStickX: touchRMag > 0.05 ? rightStickAxis.x : hwGamepadInput.rightStickX,
     rightStickY: touchRMag > 0.05 ? rightStickAxis.y : hwGamepadInput.rightStickY,
+    pointerX,
+    pointerY,
+    pointerActive,
+    pointerPrimary,
+    pointerSecondary,
   };
 }
 
@@ -68,7 +87,10 @@ export function hasGamepadInputChanged(prev: InputState, next: InputState): bool
     next.left !== prev.left || next.right !== prev.right || next.up !== prev.up || next.down !== prev.down ||
     next.jump !== prev.jump || next.action !== prev.action || next.skillX !== prev.skillX || next.skillY !== prev.skillY ||
     next.shoulderL !== prev.shoulderL || next.shoulderR !== prev.shoulderR || next.restart !== prev.restart ||
-    Math.abs(next.rightStickX - prev.rightStickX) > 0.03 || Math.abs(next.rightStickY - prev.rightStickY) > 0.03
+    Math.abs(next.rightStickX - prev.rightStickX) > 0.03 || Math.abs(next.rightStickY - prev.rightStickY) > 0.03 ||
+    Boolean(next.pointerActive) !== Boolean(prev.pointerActive) ||
+    Boolean(next.pointerPrimary) !== Boolean(prev.pointerPrimary) ||
+    Boolean(next.pointerSecondary) !== Boolean(prev.pointerSecondary)
   );
 }
 

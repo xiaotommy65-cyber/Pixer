@@ -66,6 +66,11 @@ void main() {
   vec3 upper = mix(topLin, midLin, clamp(y * 2.0, 0.0, 1.0));
   vec3 lower = mix(midLin, botLin, clamp((y - 0.5) * 2.0, 0.0, 1.0));
   vec3 skyLin = mix(upper, lower, step(0.5, y)) + botLin * horizonGlow;
+  if (uCozyFilter > 0.5) {
+    float rayPhase = sin((vUv.x * 1.35 + vUv.y * 0.55) * 6.28318 - uTimeSec * 0.32) * 0.5 + 0.5;
+    float godRay = pow(max(1e-4, rayPhase), 3.0) * (1.0 - y * 0.72) * 0.055;
+    skyLin += topLin * godRay;
+  }
   vec3 col = linToSrgb(skyLin);
   col += vec3(bayer4x4(vUv * viewSize) * (1.75 / 255.0));
   if (uCozyFilter > 0.5) {
@@ -92,6 +97,7 @@ out float vFlash;
 out float vParam;
 out vec4 vUvBounds;
 out float vPaletteRow;
+out vec2 vScreenPos;
 
 void main() {
   vec2 uvUnit[6] = vec2[6](
@@ -122,6 +128,7 @@ void main() {
   vParam = aExtra.w;
   vUvBounds = aUvBounds;
   vPaletteRow = aDeform.w;
+  vScreenPos = world;
 }`;
 
 export const SPRITE_FS = `#version 300 es
@@ -135,11 +142,15 @@ in float vFlash;
 in float vParam;
 in vec4 vUvBounds;
 in float vPaletteRow;
+in vec2 vScreenPos;
 
 uniform sampler2D uAtlas;
 uniform sampler2D uIndexAtlas;
 uniform sampler2D uPaletteLut;
 uniform float uPaletteRows;
+uniform int uLightCount;
+uniform vec4 uLightPosRad[24];
+uniform vec4 uLightColInt[24];
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -328,14 +339,68 @@ void main() {
     texAlpha = sampled.a;
   }
 
+  float reliefShade = 1.0;
+  vec3 lit = vec3(0.0);
+
+  if (vPaletteRow > -1.5) {
+    vec2 texel = 1.0 / vec2(textureSize(uIndexAtlas, 0));
+    vec2 uvMin = min(vUvBounds.xy, vUvBounds.zw) + texel * 0.5;
+    vec2 uvMax = max(vUvBounds.xy, vUvBounds.zw) - texel * 0.5;
+    vec2 safeMin = min(uvMin, uvMax);
+    vec2 safeMax = max(uvMin, uvMax);
+    float flipSign = vUvBounds.x > vUvBounds.z ? -1.0 : 1.0;
+    vec3 lumaW = vec3(0.299, 0.587, 0.114);
+    vec4 sC = textureLod(uAtlas, clamp(vTexUv, safeMin, safeMax), 0.0);
+    vec4 sL = textureLod(uAtlas, clamp(vTexUv - vec2(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
+    vec4 sR = textureLod(uAtlas, clamp(vTexUv + vec2(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
+    vec4 sU = textureLod(uAtlas, clamp(vTexUv - vec2(0.0, texel.y), safeMin, safeMax), 0.0);
+    vec4 sD = textureLod(uAtlas, clamp(vTexUv + vec2(0.0, texel.y), safeMin, safeMax), 0.0);
+    vec4 sBR = textureLod(uAtlas, clamp(vTexUv + vec2(texel.x * flipSign, texel.y), safeMin, safeMax), 0.0);
+
+    float hC = sC.a * (0.65 + 0.35 * dot(sC.rgb, lumaW));
+    float hL = sL.a * (0.65 + 0.35 * dot(sL.rgb, lumaW));
+    float hR = sR.a * (0.65 + 0.35 * dot(sR.rgb, lumaW));
+    float hU = sU.a * (0.65 + 0.35 * dot(sU.rgb, lumaW));
+    float hD = sD.a * (0.65 + 0.35 * dot(sD.rgb, lumaW));
+    float hBR = sBR.a * (0.65 + 0.35 * dot(sBR.rgb, lumaW));
+
+    float gx = hR - hL;
+    float gy = hD - hU;
+    vec3 sobelN = normalize(vec3(-gx * 1.4, -gy * 1.4, 1.0));
+    vec3 sobelLight = normalize(vec3(-0.55, -0.75, 0.4));
+    float ndl = dot(sobelN, sobelLight) - sobelLight.z;
+    float rimBoost = (hC - hBR) > 0.45 ? 0.08 : 0.0;
+    reliefShade = clamp(1.0 + ndl * 0.24, 0.90, 1.14) + rimBoost;
+
+    int cnt = min(24, max(0, uLightCount));
+    for (int li = 0; li < 24; li++) {
+      if (li >= cnt) break;
+      vec4 lp = uLightPosRad[li];
+      vec4 lc = uLightColInt[li];
+      vec3 toL = vec3(lp.xy - vScreenPos, 18.0);
+      float dist = length(toL.xy);
+      if (dist < lp.z) {
+        float falloff = max(0.2, lp.w);
+        float att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), falloff);
+        vec3 lDir = normalize(toL);
+        float diff = max(0.0, dot(sobelN, lDir));
+        lit += lc.rgb * (lc.a * att * (0.35 + 0.95 * diff));
+      }
+    }
+  }
+
   float flashAmt = clamp(vFlash, 0.0, 1.0);
-  vec3 baseRgb = texRgb * vTint.rgb;
+  vec3 baseRgb = clamp(texRgb * vTint.rgb * reliefShade, vec3(0.0), vec3(1.0));
+  if (vPaletteRow > -1.5) {
+    baseRgb = clamp(baseRgb * (1.0 + lit), vec3(0.0), vec3(1.35));
+  }
   vec3 finalRgb = mix(baseRgb, vec3(1.0), flashAmt);
   float finalAlpha = texAlpha * vTint.a;
   float emissiveAmt = max(lutEmissive, clamp(vParam, 0.0, 1.5)) + flashAmt * 0.5;
+  vec3 hdrExcess = max(finalRgb - vec3(1.0), vec3(0.0));
 
-  fragColor = vec4(finalRgb, finalAlpha);
-  fragEmissive = vec4(finalRgb * emissiveAmt, finalAlpha);
+  fragColor = vec4(clamp(finalRgb, vec3(0.0), vec3(1.0)), finalAlpha);
+  fragEmissive = vec4(finalRgb * emissiveAmt + hdrExcess, finalAlpha);
 }`;
 
 export const POST_VS = `#version 300 es
@@ -422,6 +487,9 @@ uniform float uFilterMode;
 uniform float uCozyFilter;
 uniform vec2 uCamFrac;
 uniform vec2 uViewSize;
+uniform float uWaterLevel;
+uniform vec3 uWaterTint;
+uniform float uTimeSec;
 out vec4 fragColor;
 ${GLSL_COLOR_TRANSFER}
 ${GLSL_BAYER4X4}
@@ -440,11 +508,25 @@ void main() {
     (${OVERSCAN_PAD}.0 + vUv.x * viewSize.x + uCamFrac.x) / osSize.x,
     (${OVERSCAN_PAD}.0 + vUv.y * viewSize.y - uCamFrac.y) / osSize.y
   );
-  vec3 sceneCol = texture(uSceneTex, sceneUv).rgb;
+  float screenY = 1.0 - vUv.y;
+  bool inWater = uWaterLevel > 0.01 && screenY > uWaterLevel;
+  float waterDepth = inWater ? (screenY - uWaterLevel) : 0.0;
+  vec2 sampleUv = sceneUv;
+  if (inWater) {
+    float reflNormY = max(0.0, uWaterLevel - waterDepth * 0.92);
+    float reflV = 1.0 - reflNormY;
+    float ripplePx = floor(sin(waterDepth * 95.0 + uTimeSec * 4.5) * 2.5);
+    float rx = (${OVERSCAN_PAD}.0 + vUv.x * viewSize.x + uCamFrac.x + ripplePx) / osSize.x;
+    float ry = (${OVERSCAN_PAD}.0 + reflV * viewSize.y - uCamFrac.y) / osSize.y;
+    vec2 minUv = vec2(${OVERSCAN_PAD}.0) / osSize;
+    vec2 maxUv = (vec2(${OVERSCAN_PAD}.0) + viewSize) / osSize;
+    sampleUv = clamp(vec2(rx, ry), minUv, maxUv);
+  }
+  vec3 sceneCol = texture(uSceneTex, sampleUv).rgb;
   vec3 col = sceneCol;
 
   if (uGlowIntensity > 0.01) {
-    vec3 bloom = texture(uBloomTex, sceneUv).rgb;
+    vec3 bloom = texture(uBloomTex, sampleUv).rgb;
     vec3 sceneLin = srgbToLin(sceneCol);
     vec3 bloomLin = srgbToLin(bloom) * uGlowIntensity * 1.15;
     vec3 hdrLin = sceneLin + bloomLin;
@@ -453,6 +535,17 @@ void main() {
     float toneBlend = smoothstep(0.0, 0.45, bloomEnergy);
     vec3 outLin = mix(clamp(hdrLin, vec3(0.0), vec3(1.0)), toneMapped, toneBlend);
     col = linToSrgb(outLin);
+  }
+
+  if (inWater) {
+    float depthNorm = clamp(waterDepth / max(0.05, 1.0 - uWaterLevel), 0.0, 1.0);
+    float tintBlend = clamp(0.38 + depthNorm * 0.36, 0.0, 0.85);
+    float depthDarken = 1.0 - depthNorm * 0.34;
+    col = mix(col * 0.88, uWaterTint, tintBlend) * depthDarken;
+    if (waterDepth < 1.5 / viewSize.y) {
+      float shimmer = 0.65 + 0.35 * sin(vUv.x * viewSize.x * 0.35 + uTimeSec * 5.0);
+      col = mix(col, min(vec3(1.0), uWaterTint * 1.45 + vec3(0.35)), 0.65 * shimmer);
+    }
   }
 
   vec2 centered = vUv - vec2(0.5);

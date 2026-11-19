@@ -47,6 +47,7 @@ export interface ConsoleViewOptions {
 export class ConsoleView {
   public readonly element: HTMLElement;
   public canvas: HTMLCanvasElement;
+  public onCanvasPointer?: (nx: number, ny: number, active: boolean, primary: boolean, secondary: boolean) => void;
 
   private readonly host: EngineHost;
   private captureRequested = false;
@@ -63,6 +64,7 @@ export class ConsoleView {
   private readonly diorama: WindowDioramaView;
   private readonly onPerspectiveChange?: (perspective: DioramaPerspective) => void;
   private readonly ac = new AbortController();
+  private canvasAc: AbortController | null = null;
   private readonly activeTimers = new Set<number>();
   private readonly recoilTimers = new WeakMap<HTMLElement, number>();
   private readonly busUnsubs: (() => void)[] = [];
@@ -170,6 +172,7 @@ export class ConsoleView {
     this.screenFrame = body.screenFrame;
     this.glassSheenEl = body.glassSheen;
     this.canvas = body.canvas;
+    this.attachCanvas(this.canvas);
 
     this.consoleEl.append(rig.portraitRailBridge, this.auxRailEl, this.leftJoyconEl, this.bodyEl, this.rightJoyconEl);
 
@@ -558,6 +561,84 @@ export class ConsoleView {
     return this.hwGamepadLabel;
   }
 
+  public setCanvasPointer(
+    nx: number,
+    ny: number,
+    active: boolean,
+    primary: boolean,
+    secondary: boolean,
+  ): void {
+    this.gamepad.setCanvasPointer(nx, ny, active, primary, secondary);
+  }
+
+  public attachCanvas(nextCanvas: HTMLCanvasElement): void {
+    this.canvasAc?.abort();
+    this.canvasAc = new AbortController();
+    const { signal } = this.canvasAc;
+    this.canvas = nextCanvas;
+
+    const emitPointer = (
+      e: PointerEvent,
+      active: boolean,
+      forcePrimary?: boolean,
+      forceSecondary?: boolean,
+    ) => {
+      const rect = nextCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const ny = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+      const primary = active && (forcePrimary ?? (e.buttons & 1) !== 0);
+      const secondary = active && (forceSecondary ?? (e.buttons & 2) !== 0);
+      this.onCanvasPointer?.(nx, ny, active, primary, secondary);
+    };
+
+    nextCanvas.addEventListener(
+      'pointermove',
+      (e) => {
+        emitPointer(e, true);
+      },
+      { passive: true, signal },
+    );
+
+    nextCanvas.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (this.router.getShellPhase() === 'IN_GAME') {
+          this.host.unlockAudio();
+        }
+        const primary = (e.buttons & 1) !== 0 || e.button === 0;
+        const secondary = (e.buttons & 2) !== 0 || e.button === 2;
+        emitPointer(e, true, primary, secondary);
+      },
+      { signal },
+    );
+
+    nextCanvas.addEventListener(
+      'pointerup',
+      (e) => {
+        emitPointer(e, true);
+      },
+      { signal },
+    );
+
+    const clearCanvasPointer = (e: PointerEvent) => {
+      const rect = nextCanvas.getBoundingClientRect();
+      const nx = rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0;
+      const ny = rect.height > 0 ? Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)) : 0;
+      this.onCanvasPointer?.(nx, ny, false, false, false);
+    };
+
+    nextCanvas.addEventListener('pointerleave', clearCanvasPointer, { signal });
+    nextCanvas.addEventListener('pointercancel', clearCanvasPointer, { signal });
+    nextCanvas.addEventListener(
+      'contextmenu',
+      (e) => {
+        e.preventDefault();
+      },
+      { signal },
+    );
+  }
+
   public destroy(): void {
     this.hud.resetOverlays();
     this.trackResizeObserver?.disconnect();
@@ -568,6 +649,8 @@ export class ConsoleView {
     this.router.destroy();
     this.slots.destroy();
     this.gamepad.destroy();
+    this.canvasAc?.abort();
+    this.canvasAc = null;
     this.ac.abort();
     for (const id of this.activeTimers) window.clearTimeout(id);
     this.activeTimers.clear();
@@ -593,6 +676,10 @@ export class ConsoleView {
 
   public toggleDebugHitboxes(): boolean {
     this.debugHitboxesOn = this.host.toggleDebugHitboxes();
+    const showDebug = this.debugHitboxesOn || this.host.isBenchmarkOn();
+    this.bodyEl.querySelectorAll('.is-debug-metric').forEach((elNode) => {
+      elNode.classList.toggle('panel-hidden', !showDebug);
+    });
     return this.debugHitboxesOn;
   }
   public isDebugHitboxesOn(): boolean {
@@ -660,6 +747,10 @@ export class ConsoleView {
   public toggleBenchmark(): boolean {
     this.host.playUiSound('star');
     const on = this.host.toggleBenchmark();
+    const showDebug = this.debugHitboxesOn || on;
+    this.bodyEl.querySelectorAll('.is-debug-metric').forEach((elNode) => {
+      elNode.classList.toggle('panel-hidden', !showDebug);
+    });
     this.host.reactMomo();
     this.showCaptureToast(on ? '✨ 1,150+ GPU 精靈派對開啟！' : '✨ 已關閉 GPU 精靈派對');
     return on;

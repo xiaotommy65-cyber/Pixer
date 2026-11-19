@@ -203,6 +203,11 @@ export class InputPipeline {
       restart: raw.restart,
       rightStickX: raw.rightStickX,
       rightStickY: raw.rightStickY,
+      pointerX: raw.pointerX ?? 0,
+      pointerY: raw.pointerY ?? 0,
+      pointerActive: Boolean(raw.pointerActive),
+      pointerPrimary: Boolean(raw.pointerPrimary),
+      pointerSecondary: Boolean(raw.pointerSecondary),
     };
   }
 

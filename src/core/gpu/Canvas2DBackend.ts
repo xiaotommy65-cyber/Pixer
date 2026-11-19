@@ -120,6 +120,9 @@ export class Canvas2DBackend implements IGpuBackend {
     alphaCount: number,
     additiveItems: Float32Array,
     additiveCount: number,
+    timeSec = 0,
+    _lightsData?: Float32Array,
+    _lightCount = 0,
   ): number {
     const ctx = this.ctx;
     const cw = Math.max(1, ctx.canvas.width);
@@ -165,6 +168,28 @@ export class Canvas2DBackend implements IGpuBackend {
     }
 
     ctx.restore();
+
+    const waterLevel = sky.waterLevelNorm ?? 0;
+    if (waterLevel > 0.01 && waterLevel < 0.995) {
+      const wy = Math.floor(waterLevel * ch);
+      const wh = ch - wy;
+      if (wh > 0) {
+        const wt = sky.waterTint;
+        const wr = wt ? wt[0] : 0.227;
+        const wg = wt ? wt[1] : 0.431;
+        const wb = wt ? wt[2] : 0.612;
+        const wGrad = ctx.createLinearGradient(0, wy, 0, ch);
+        wGrad.addColorStop(0, rgbCss(wr, wg, wb, 0.46));
+        wGrad.addColorStop(1, rgbCss(wr * 0.55, wg * 0.55, wb * 0.65, 0.78));
+        ctx.fillStyle = wGrad;
+        ctx.fillRect(0, wy, cw, wh);
+        const crestAlpha = 0.35 + 0.15 * Math.sin(timeSec * 4.5);
+        ctx.fillStyle = rgbCss(Math.min(1, wr + 0.35), Math.min(1, wg + 0.35), Math.min(1, wb + 0.35), crestAlpha);
+        ctx.fillRect(0, wy, cw, Math.max(1, Math.round(ch / vh)));
+        drawCalls++;
+      }
+    }
+
     return drawCalls;
   }
 

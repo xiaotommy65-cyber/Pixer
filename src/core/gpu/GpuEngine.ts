@@ -4,11 +4,13 @@ import { appLogger } from '../runtime/AppLogger.ts';
 import { Canvas2DBackend } from './Canvas2DBackend.ts';
 import {
   FLOATS_PER_INSTANCE,
+  MAX_DYNAMIC_LIGHTS,
   MAX_INSTANCES_PER_PASS,
   type GpuBackendKind,
   type GpuFrameStats,
   type IGpuBackend,
   type SkyGradient,
+  type SpriteRect,
 } from './GpuTypes.ts';
 import { WebGl2Backend } from './WebGl2Backend.ts';
 import { WebGpuBackend } from './WebGpuBackend.ts';
@@ -42,6 +44,8 @@ export class GpuEngine {
   private canvas: HTMLCanvasElement;
   private alphaItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
   private addItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
+  private readonly dynamicLights = new Float32Array(MAX_DYNAMIC_LIGHTS * 8);
+  private dynamicLightCount = 0;
   private alphaCount = 0;
   private addCount = 0;
   private spriteTotal = 0;
@@ -61,6 +65,8 @@ export class GpuEngine {
     camFracY: 0,
     viewW: 320,
     viewH: 180,
+    waterLevelNorm: 0,
+    waterTint: hexToRgb01('#3a6e9c'),
   };
   private screenFilterCode = 0;
   private onBackendChange?: (kind: GpuBackendKind, canvas?: HTMLCanvasElement) => void;
@@ -300,10 +306,43 @@ export class GpuEngine {
     this.currentSky.camFracY = camFracY;
     this.currentSky.viewW = this.viewW;
     this.currentSky.viewH = this.viewH;
+    this.currentSky.waterLevelNorm = 0;
+    this.dynamicLightCount = 0;
     this.alphaCount = 0;
     this.addCount = 0;
     this.spriteTotal = 0;
     this.lightTotal = 0;
+  }
+
+  public pushDynamicLight(
+    x: number,
+    y: number,
+    radius: number,
+    colorHex: string,
+    intensity: number,
+    falloff = 2.0,
+  ): void {
+    if (this.dynamicLightCount >= MAX_DYNAMIC_LIGHTS || radius <= 0 || intensity <= 0.001) return;
+    const n = packHexRgb(colorHex);
+    const base = this.dynamicLightCount * 8;
+    this.dynamicLights[base] = x;
+    this.dynamicLights[base + 1] = y;
+    this.dynamicLights[base + 2] = radius;
+    this.dynamicLights[base + 3] = intensity;
+    this.dynamicLights[base + 4] = ((n >> 16) & 255) * INV_255;
+    this.dynamicLights[base + 5] = ((n >> 8) & 255) * INV_255;
+    this.dynamicLights[base + 6] = (n & 255) * INV_255;
+    this.dynamicLights[base + 7] = falloff > 0.05 ? falloff : 2.0;
+    this.dynamicLightCount++;
+  }
+
+  public setWaterPlane(levelNorm: number, tintHex = '#3a6e9c'): void {
+    this.currentSky.waterLevelNorm = Math.max(0, Math.min(1, levelNorm));
+    const n = packHexRgb(tintHex);
+    if (!this.currentSky.waterTint) this.currentSky.waterTint = [0, 0, 0];
+    this.currentSky.waterTint[0] = ((n >> 16) & 255) * INV_255;
+    this.currentSky.waterTint[1] = ((n >> 8) & 255) * INV_255;
+    this.currentSky.waterTint[2] = (n & 255) * INV_255;
   }
 
   private pushInstance(
@@ -605,6 +644,115 @@ export class GpuEngine {
     this.pushInstanceHex(false, cx, cy, w, h, dir, power, 1, 1, colorHex, alpha, 0, 5, 0, power);
   }
 
+  /**
+   * Zero-GC bitmap pixel text renderer using 6x8 atlas glyphs.
+   * Uses paletteRow = -2 so shaders skip Auto-Sobel/normal lighting on crisp UI text.
+   */
+  public drawPixelText(
+    text: string,
+    x: number,
+    y: number,
+    colorHex: string,
+    scale = 1,
+    align: 'left' | 'center' | 'right' = 'left',
+    shadowColor = '#120d1e',
+    alpha = 1,
+  ): void {
+    if (!text || alpha <= 0.005) return;
+    const atlasWithGlyphs = this.atlas as TextureAtlas & {
+      getGlyphRect?: (charCode: number) => SpriteRect | undefined;
+    };
+    if (typeof atlasWithGlyphs.getGlyphRect !== 'function') return;
+
+    const ctor = this.atlas.constructor as { FONT_GLYPH_W?: number; FONT_GLYPH_H?: number };
+    const glyphW = ctor.FONT_GLYPH_W ?? 6;
+    const glyphH = ctor.FONT_GLYPH_H ?? 8;
+    const stepW = glyphW * scale;
+    const drawH = glyphH * scale;
+    const len = text.length;
+
+    let totalW = 0;
+    for (let i = 0; i < len; i++) {
+      let ch = text.charCodeAt(i);
+      if (ch >= 97 && ch <= 122) ch -= 32;
+      if (atlasWithGlyphs.getGlyphRect(ch)) totalW += stepW;
+    }
+    if (totalW <= 0) return;
+
+    let startX = x;
+    if (align === 'center') startX = x - totalW * 0.5;
+    else if (align === 'right') startX = x - totalW;
+
+    if (shadowColor) {
+      let cx = startX;
+      const shadowAlpha = alpha * 0.85;
+      for (let i = 0; i < len; i++) {
+        let ch = text.charCodeAt(i);
+        if (ch >= 97 && ch <= 122) ch -= 32;
+        const rect = atlasWithGlyphs.getGlyphRect(ch);
+        if (!rect) continue;
+        if (ch !== 32) {
+          this.spriteTotal++;
+          this.pushInstanceHex(
+            false,
+            cx + scale,
+            y + scale,
+            stepW,
+            drawH,
+            rect.u0,
+            rect.v0,
+            rect.u1,
+            rect.v1,
+            shadowColor,
+            shadowAlpha,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -2,
+          );
+        }
+        cx += stepW;
+      }
+    }
+
+    let cx = startX;
+    for (let i = 0; i < len; i++) {
+      let ch = text.charCodeAt(i);
+      if (ch >= 97 && ch <= 122) ch -= 32;
+      const rect = atlasWithGlyphs.getGlyphRect(ch);
+      if (!rect) continue;
+      if (ch !== 32) {
+        this.spriteTotal++;
+        this.pushInstanceHex(
+          false,
+          cx,
+          y,
+          stepW,
+          drawH,
+          rect.u0,
+          rect.v0,
+          rect.u1,
+          rect.v1,
+          colorHex,
+          alpha,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          -2,
+        );
+      }
+      cx += stepW;
+    }
+  }
+
   public flush(timeSec: number): GpuFrameStats {
     this.syncAtlasIfDirty();
     if (!this.backend) {
@@ -618,12 +766,14 @@ export class GpuEngine {
       this.addItems,
       this.addCount,
       timeSec,
+      this.dynamicLights,
+      this.dynamicLightCount,
     );
     const frameTimeMs = performance.now() - t0;
     this.lastStats.backend = this.backend.kind;
     this.lastStats.drawCalls = drawCalls;
     this.lastStats.spriteCount = this.spriteTotal;
-    this.lastStats.lightCount = this.lightTotal;
+    this.lastStats.lightCount = Math.max(this.lightTotal, this.dynamicLightCount);
     this.lastStats.frameTimeMs = frameTimeMs;
     return this.lastStats;
   }

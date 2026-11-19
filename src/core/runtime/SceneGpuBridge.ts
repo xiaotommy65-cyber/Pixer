@@ -138,6 +138,7 @@ export class SceneGpuBridge {
   private perspSkew = 0;
   private cullPad = 56;
   private defaultPaletteRow = 0;
+  private frameTimeSec = 0;
 
   private perspScaleAtWorldY(wy: number): number {
     if (this.perspSkew <= 0) return 1;
@@ -198,10 +199,16 @@ export class SceneGpuBridge {
     }
 
     const capY = sy - elevZ * this.zoom * ps;
+    const hasWind = (t.windSway ?? 0) > 0 || t.sprite === 'tree_canopy';
+    const swayStrength = hasWind ? (t.windSway ?? 0.8) : 0;
+    const skewX = hasWind ? Math.sin(this.frameTimeSec * 2.3 + t.x * 0.08) * 0.09 * swayStrength : 0;
+    const isHanging = t.sprite === 'vine_hang';
+    const tilePivotY = hasWind ? (isHanging ? 0 : 1) : 0.5;
+    const tileDrawY = hasWind ? (isHanging ? capY - dh * 0.5 : capY + dh * 0.5) : capY;
     gpu.drawSpriteRaw(
       t.sprite,
       sx,
-      capY,
+      tileDrawY,
       dw,
       dh,
       t.flipX ?? false,
@@ -211,14 +218,48 @@ export class SceneGpuBridge {
       0,
       false,
       0.5,
-      0.5,
-      0,
+      tilePivotY,
+      skewX,
       this.defaultPaletteRow,
       0,
     );
   }
 
   private drawEntity(gpu: GpuEngine, e: EntityDesc): void {
+    let spriteId = e.sprite;
+    let drawW = e.w;
+    let drawH = e.h;
+    if (
+      e.id === 'hero' &&
+      typeof e.sprite === 'string' &&
+      e.sprite.startsWith('parkour_hero_') &&
+      gpu.atlas.hasSprite('hero32_idle_a')
+    ) {
+      let resolved = spriteId;
+      if (e.sprite === 'parkour_hero_dash') {
+        resolved = 'hero32_dash';
+      } else if (e.sprite === 'parkour_hero_jump' || e.sprite === 'parkour_hero_wall') {
+        resolved = 'hero32_jump';
+      } else if (e.sprite === 'parkour_hero_run_a' || e.sprite === 'parkour_hero_run_b') {
+        const runIdx = Math.floor(this.frameTimeSec * 12) & 3;
+        resolved =
+          runIdx === 0
+            ? 'hero32_run_0'
+            : runIdx === 1
+              ? 'hero32_run_1'
+              : runIdx === 2
+                ? 'hero32_run_2'
+                : 'hero32_run_3';
+      } else {
+        resolved = Math.floor(this.frameTimeSec * 2.5) % 2 === 0 ? 'hero32_idle_a' : 'hero32_idle_b';
+      }
+      if (gpu.atlas.hasSprite(resolved)) {
+        spriteId = resolved;
+        drawW = 24;
+        drawH = 24;
+      }
+    }
+
     const anchorY = e.anchorY ?? 0.5;
     const worldAnchorX = e.x + e.w * 0.5;
     const worldAnchorY = e.y + e.h * anchorY;
@@ -226,8 +267,8 @@ export class SceneGpuBridge {
     const ps = this.perspScaleAtWorldY(worldMidY);
     const sx = this.viewW * 0.5 + (worldAnchorX - this.camCenterX) * this.zoom * ps;
     const syBase = this.viewH * 0.5 + (worldAnchorY - this.camCenterY) * this.zoom * ps;
-    const sw = e.w * (e.scaleX ?? 1) * this.zoom * ps;
-    const sh = e.h * (e.scaleY ?? 1) * this.zoom * ps;
+    const sw = drawW * (e.scaleX ?? 1) * this.zoom * ps;
+    const sh = drawH * (e.scaleY ?? 1) * this.zoom * ps;
     const sy = syBase - (e.elevationZ ?? 0) * this.zoom * ps;
     const halfW = sw * 0.5;
     const top = sy - sh * anchorY;
@@ -241,7 +282,7 @@ export class SceneGpuBridge {
       return;
     }
     gpu.drawSpriteRaw(
-      e.sprite,
+      spriteId,
       sx,
       sy,
       sw,
@@ -350,7 +391,7 @@ export class SceneGpuBridge {
     }
 
     const cx = GAME_W * 0.5;
-    const cy = GAME_H * 0.42;
+    const cy = GAME_H * 0.36;
     const bob = awake ? -Math.abs(Math.sin(timeSec * 8)) * 7 : Math.sin(timeSec * 2.4) * 4;
     const elevFromFloor = Math.max(0, 6 - bob);
     drawGroundShadow(gpu, cx, cy + 28, 17, elevFromFloor, 1);
@@ -388,6 +429,7 @@ export class SceneGpuBridge {
     gpu.setLogicalViewport(vw, vh);
 
     this.defaultPaletteRow = snap.paletteRow ?? 0;
+    this.frameTimeSec = snap.timeSec;
     this.zoom = snap.cameraZoom ?? 1;
     const snappedCamX = Math.round(snap.cameraX);
     const snappedCamY = Math.round(snap.cameraY);
@@ -402,6 +444,14 @@ export class SceneGpuBridge {
     const hd2dOn = Boolean(hd2d?.enabled);
     this.perspSkew = hd2dOn ? (hd2d?.perspectiveSkew ?? 0.055) : 0;
     this.cullPad = 56 / Math.max(0.5, this.zoom);
+
+    if (hd2d?.waterLevelY !== undefined) {
+      const wyScreen = this.projectY(hd2d.waterLevelY);
+      if (wyScreen < this.viewH) {
+        const wNorm = Math.max(0.05, Math.min(0.96, wyScreen / this.viewH));
+        gpu.setWaterPlane(wNorm, hd2d.waterTint ?? '#355c8a');
+      }
+    }
 
     for (let i = 0; i < snap.bgStars.length; i++) {
       const s = snap.bgStars[i];
@@ -568,7 +618,9 @@ export class SceneGpuBridge {
       const ly = this.viewH * 0.5 + (l.y - this.camCenterY) * this.zoom * ps;
       const lr = l.radius * this.zoom * ps;
       if (lx + lr < -36 || lx - lr > this.viewW + 36 || ly + lr < -36 || ly - lr > this.viewH + 36) continue;
-      gpu.drawLight(lx, ly, lr, l.color, l.intensity, l.falloffPower ?? 2.0);
+      const falloff = l.falloffPower ?? 2.0;
+      gpu.pushDynamicLight(lx, ly, lr, l.color, l.intensity, falloff);
+      gpu.drawLight(lx, ly, lr, l.color, l.intensity * 0.45, falloff);
     }
 
     for (let i = 0; i < snap.particles.length; i++) {
@@ -637,7 +689,7 @@ export class SceneGpuBridge {
       gpu.drawRect(this.viewW * 0.5 + camFracX, this.viewH - barH * 0.5 + camFracY, this.viewW + 4, barH + 2, '#07060b', 0.96);
     }
 
-    if (!snap.rpgHud && !snap.chronicleHud) {
+    if (!snap.rpgHud && !snap.chronicleHud && !snap.shmupHud && !snap.hideClassicHud) {
       for (let i = 0; i < snap.maxHearts; i++) {
         gpu.drawSpriteRaw(i < snap.hearts ? 'heart_full' : 'heart_empty', 12 + i * 13 + camFracX, 11 + camFracY, 11, 11);
       }
@@ -646,10 +698,13 @@ export class SceneGpuBridge {
         gpu.drawSpriteRaw('key', this.viewW - 14 + camFracX, 11 + camFracY, 12, 12);
       }
 
-      for (let i = 0; i < snap.starsTotal; i++) {
-        const collected = i < snap.starsCollected;
+      const maxStarIcons = Math.min(snap.starsTotal, 6);
+      const activeStars = snap.starsTotal > 6 ? snap.starsCollected % 3 || (snap.starsCollected > 0 ? 3 : 0) : snap.starsCollected;
+      const shownCount = snap.starsTotal > 6 ? 3 : maxStarIcons;
+      for (let i = 0; i < shownCount; i++) {
+        const collected = i < activeStars;
         const baseOffset = snap.hasKey ? 28 : 14;
-        gpu.drawSpriteRaw('star_a', this.viewW - baseOffset - i * 11 + camFracX, 11 + camFracY, 9, 9, false, 0, collected ? '#ffd447' : '#8c9ab5', collected ? 1 : 0.45);
+        gpu.drawSpriteRaw('star_a', this.viewW - baseOffset - i * 12 + camFracX, 11 + camFracY, 10, 10, false, 0, collected ? '#ffd447' : '#8c9ab5', collected ? 1 : 0.45);
       }
 
       if (snap.bossMaxHp > 0 && snap.bossHp > 0) {
@@ -657,6 +712,67 @@ export class SceneGpuBridge {
         const ratio = snap.bossHp / snap.bossMaxHp;
         gpu.drawRect(this.viewW * 0.5 + camFracX, 11 + camFracY, barW + 6, 9, '#2b1d1a', 0.92, 0, false, 0, 1);
         gpu.drawRect(this.viewW * 0.5 - barW * 0.5 * (1 - ratio) + camFracX, 11 + camFracY, Math.max(2, barW * ratio), 4.5, '#ff708d', 1, 0, false, 0, 1);
+      }
+    }
+
+    if (snap.hudPrimitives && snap.hudPrimitives.length > 0) {
+      for (let i = 0; i < snap.hudPrimitives.length; i++) {
+        const p = snap.hudPrimitives[i];
+        if (p.kind === 'aim_line') {
+          const isWorld = p.worldSpace !== false;
+          const wx2 = p.x2 ?? p.x;
+          const wy2 = p.y2 ?? p.y;
+          const sx1 = isWorld ? this.projectX(p.x, p.y) : p.x + camFracX;
+          const sy1 = isWorld ? this.projectY(p.y) : p.y + camFracY;
+          const sx2 = isWorld ? this.projectX(wx2, wy2) : wx2 + camFracX;
+          const sy2 = isWorld ? this.projectY(wy2) : wy2 + camFracY;
+          const alpha = p.alpha ?? 0.7;
+          const dotW = Math.max(1.2, isWorld ? p.w * this.zoom : p.w);
+          const dotH = Math.max(1.2, isWorld ? p.h * this.zoom : p.h);
+          for (let d = 1; d <= 9; d++) {
+            const t = d * 0.1;
+            const dotX = sx1 + (sx2 - sx1) * t;
+            const dotY = sy1 + (sy2 - sy1) * t;
+            gpu.drawRect(dotX, dotY, dotW, dotH, p.color, alpha * (0.45 + 0.55 * t), 0, true);
+          }
+          const pulse = 0.75 + 0.25 * Math.sin(snap.timeSec * 10);
+          gpu.drawLight(sx2, sy2, Math.max(4, dotW * 2.8) * pulse, p.color, alpha * 0.75, 1.8);
+        } else if (p.kind === 'bar') {
+          const isWorld = p.worldSpace === true;
+          const cx = isWorld ? this.projectX(p.x + p.w * 0.5, p.y + p.h * 0.5) : p.x + p.w * 0.5 + camFracX;
+          const cy = isWorld ? this.projectY(p.y + p.h * 0.5) : p.y + p.h * 0.5 + camFracY;
+          const bw = Math.max(2, isWorld ? p.w * this.zoom : p.w);
+          const bh = Math.max(1, isWorld ? p.h * this.zoom : p.h);
+          const alpha = p.alpha ?? 0.94;
+          const ratio = Math.max(0, Math.min(1, p.ratio ?? 1));
+          gpu.drawRect(cx, cy, bw + 2, bh + 2, p.bgColor ?? '#1b1426', alpha, 0, false, 0, 1);
+          if (ratio > 0.001) {
+            const fillW = Math.max(1.5, bw * ratio);
+            const fillCx = cx - (bw - fillW) * 0.5;
+            gpu.drawRect(fillCx, cy, fillW, bh, p.color, alpha, 0, false, 0, 1);
+          }
+        } else if (p.kind === 'box') {
+          const isWorld = p.worldSpace === true;
+          const cx = isWorld ? this.projectX(p.x + p.w * 0.5, p.y + p.h * 0.5) : p.x + p.w * 0.5 + camFracX;
+          const cy = isWorld ? this.projectY(p.y + p.h * 0.5) : p.y + p.h * 0.5 + camFracY;
+          const bw = Math.max(1, isWorld ? p.w * this.zoom : p.w);
+          const bh = Math.max(1, isWorld ? p.h * this.zoom : p.h);
+          gpu.drawRect(cx, cy, bw, bh, p.color, p.alpha ?? 0.9, 0, false, 0, 1);
+        } else if (p.kind === 'text') {
+          const isWorld = p.worldSpace === true;
+          const sx = isWorld ? this.projectX(p.x, p.y) : p.x + camFracX;
+          const sy = isWorld ? this.projectY(p.y) : p.y + camFracY;
+          gpu.drawPixelText(
+            p.text ?? '',
+            sx,
+            sy,
+            p.color,
+            p.scale ?? 1,
+            p.align ?? 'left',
+            p.shadowColor ?? '#120d1e',
+            p.alpha ?? 1,
+          );
+        }
       }
     }
 

@@ -3,7 +3,7 @@ import { GAME_H, GAME_W, resolveLogicalViewport, type LogicalViewport } from '..
 import { InputMap } from '../input/InputMap.ts';
 import { SpatialHash } from '../math/SpatialHash.ts';
 import { stepSpringInto } from '../math/SpringDynamics.ts';
-import { hasGridLineOfSight } from '../math/Visibility2D.ts';
+import { hasGridLineOfSight, raycastGrid2DInto } from '../math/Visibility2D.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type { ShmupFighterSummary } from '../types/HudTypes.ts';
 import {
@@ -15,6 +15,7 @@ import {
   type DebuggableCartridge,
   type DebugRectDesc,
   type EntityDesc,
+  type HudPrimitiveDesc,
   type InputState,
   type LightDesc,
   type ParticleDesc,
@@ -50,7 +51,22 @@ import {
   type VmCollisionPair,
   type VmHostBridge,
 } from './EventActionVm.ts';
+import {
+  acquireHudSlot,
+  buildGenreHudPrimitives,
+  createRuntimeGenreState,
+  EF_FIGHTER_P2,
+  EF_LOGIC_SWITCH,
+  EF_PUSHABLE_CRATE,
+  initGenreStageState,
+  stepCardController,
+  stepFighterController,
+  stepTopdownController,
+  type GenreRuntimeContext,
+  type RuntimeGenreState,
+} from './GenreControllers.ts';
 import { JuiceSystem, stepSquashSpring } from './JuiceSystem.ts';
+import { TweenSystem } from './TweenSystem.ts';
 import {
   applyOklabParallaxFog,
   compileProceduralStage,
@@ -115,12 +131,14 @@ interface RuntimeSnapshotBank {
   entitySlots: EntityDesc[];
   lightSlots: LightDesc[];
   debugRectSlots: DebugRectDesc[];
+  hudSlots: HudPrimitiveDesc[];
   tiles: TileDesc[];
   fgTiles: TileDesc[];
   entities: EntityDesc[];
   particles: ParticleDesc[];
   lights: LightDesc[];
   debugRects: DebugRectDesc[];
+  hudPrimitives: HudPrimitiveDesc[];
 }
 
 function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): RuntimeSnapshotBank {
@@ -132,6 +150,7 @@ function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): RuntimeSna
   const particles: ParticleDesc[] = [];
   const lights: LightDesc[] = [];
   const debugRects: DebugRectDesc[] = [];
+  const hudPrimitives: HudPrimitiveDesc[] = [];
   return {
     viewport,
     stageInfo,
@@ -140,12 +159,14 @@ function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): RuntimeSna
     entitySlots: [],
     lightSlots: [],
     debugRectSlots: [],
+    hudSlots: [],
     tiles,
     fgTiles,
     entities,
     particles,
     lights,
     debugRects,
+    hudPrimitives,
     snapshot: {
       cartridgeId,
       skyTop: '#76c7ff',
@@ -182,6 +203,7 @@ function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): RuntimeSna
       particles,
       lights,
       debugRects: undefined,
+      hudPrimitives: undefined,
       statusBanner: '',
       stage: stageInfo,
       bgmTheme: undefined,
@@ -228,7 +250,32 @@ function acquireDebugRectSlot(pool: DebugRectDesc[], idx: number): DebugRectDesc
 
 const STARFIELD_PALETTE = ['#fffaf0', '#ffd447', '#5ec2f7', '#ff8ec6', '#e0aaff'] as const;
 const MAX_VM_COLLISION_PAIRS = 256;
+export const MAX_FLOATING_TEXTS = 24;
 const HERO_HB = { x: 2, y: 2, w: 12, h: 14 };
+const EF_GRAPPLE_TARGET = 1 << 23;
+const EF_CRYSTAL_RESET = 1 << 24;
+const RT_GRAPPLE_SHOOT_SPEED = 720;
+const RT_AIM_ROT_SPEED = 28;
+const RT_MAGNET_COS = Math.cos((26 * Math.PI) / 180);
+const RT_GRAPPLE_LINKS = 5;
+
+export interface FloatingTextSlot {
+  active: boolean;
+  text: string;
+  x: number;
+  y: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  color: string;
+}
+
+function wrapAimAngle(rad: number): number {
+  let a = rad;
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
 
 function compileTagsToFlags(tags: readonly CartridgeTag[]): number {
   let f = EF_ALIVE;
@@ -249,6 +296,14 @@ function compileTagsToFlags(tags: readonly CartridgeTag[]): number {
       case 'enemy_bullet': f |= EF_BULLET | EF_ENEMY; break;
       case 'pickup': f |= EF_PICKUP; break;
       case 'funnel': f |= EF_ALIVE; break;
+      case 'grapple_ring': f |= EF_GRAPPLE_TARGET | EF_EMISSIVE; break;
+      case 'zip_block': f |= EF_GRAPPLE_TARGET | EF_SOLID | EF_EMISSIVE; break;
+      case 'crystal_reset': f |= EF_CRYSTAL_RESET | EF_EMISSIVE; break;
+      case 'crumble_tile': f |= EF_SOLID; break;
+      case 'updraft': f |= EF_EMISSIVE; break;
+      case 'fighter_p2': f |= EF_ENEMY | EF_STOMPABLE | EF_FIGHTER_P2; break;
+      case 'card_slot': f |= EF_EMISSIVE; break;
+      case 'logic_switch': f |= EF_EMISSIVE | EF_LOGIC_SWITCH; break;
     }
   }
   return f;
@@ -258,7 +313,9 @@ function compileTagsToFlags(tags: readonly CartridgeTag[]): number {
  * Unified Zero-GC data-driven cartridge runtime executing validated CartridgeJsonV1 files.
  * Unifies platformer and arcade shooter simulations through SoaEntityPool, TilemapGrid, and EventActionVm.
  */
-export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingCartridge, ShmupRuntimeContext {
+export class DataCartridgeRuntime
+  implements DebuggableCartridge, ComboTrackingCartridge, ShmupRuntimeContext, GenreRuntimeContext
+{
   public readonly scriptError: string | null = null;
   public readonly def: CartridgeJsonV1;
   public readonly pool = new SoaEntityPool();
@@ -266,13 +323,15 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   public readonly juice = new JuiceSystem();
   public readonly rng = new SeededRng(0x20260002);
   public readonly vm = new EventActionVm();
+  public readonly tweens = new TweenSystem();
+  public readonly genre: RuntimeGenreState = createRuntimeGenreState();
   public readonly lastHitGroupByTarget = new Int32Array(MAX_ENTITIES);
 
-  private readonly archetypes: RuntimeArchetype[] = [];
+  public readonly archetypes: RuntimeArchetype[] = [];
   private readonly archetypeIdxById = new Map<string, number>();
   public readonly archetypeMetaByIdx: { id: string; scoreValue: number; dropKind?: string }[] = [];
 
-  private tilemap = new TilemapGrid(46, 12);
+  public tilemap = new TilemapGrid(46, 12);
   private fgTilemap = new TilemapGrid(46, 12);
   private hasFgTilemapTiles = false;
   private readonly tileSpriteLut: (SpriteId | undefined)[] = [];
@@ -280,8 +339,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private readonly fgAlphaLut = new Float32Array(256).fill(1);
   private readonly fgExtraTiles: TileDesc[] = [];
   private readonly bgParallaxLayers: BgParallaxLayerDesc[] = [];
-  private stageWorldW = GAME_W;
-  private stageWorldH = GAME_H;
+  public stageWorldW = GAME_W;
+  public stageWorldH = GAME_H;
   private bgClouds: BgCloudDesc[] = [];
   private bgStars: BgStarDesc[] = [];
 
@@ -302,8 +361,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private stageSkyTop = '#76c7ff';
   private stageSkyBottom = '#fff3df';
   private stageAmbientColor = '#120e24';
-  private cameraX = 0;
-  private cameraY = 0;
+  public cameraX = 0;
+  public cameraY = 0;
   private prevCameraX = 0;
   private prevCameraY = 0;
   private camVelX = 0;
@@ -313,45 +372,81 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
   private springCamFreq = 0;
   private springCamDamping = 1;
   private readonly camSpringOut = new Float64Array(2);
-  private readonly isTileOpaque = (tx: number, ty: number): boolean => this.tilemap.getCollision(tx, ty) === COLLISION_SOLID;
-  private cameraZoom = 1.0;
-  private stageViewport: LogicalViewport = { width: GAME_W, height: GAME_H };
+  public readonly isTileOpaque = (tx: number, ty: number): boolean => this.tilemap.getCollision(tx, ty) === COLLISION_SOLID;
+  private readonly grappleEnabled: boolean;
+  private readonly grappleMaxRange: number;
+  private readonly grappleAttachWalls: boolean;
+  private readonly grapplePullSpeed: number;
+  private grappleState: 'idle' | 'shooting' | 'swinging' | 'pulling' = 'idle';
+  private grappleMode: 'swing' | 'pull' = 'swing';
+  private grappleAnchorX = 0;
+  private grappleAnchorY = 0;
+  private grappleTipX = 0;
+  private grappleTipY = 0;
+  private grappleRopeLength = 80;
+  private grappleAimAngle = -0.7854;
+  private grappleHoldViaInput = false;
+  private grappleSwingElapsed = 0;
+  private grapplePullElapsed = 0;
+  private grapplePreviewKind: 'none' | 'wall' | 'ring' = 'none';
+  private grapplePreviewX = 0;
+  private grapplePreviewY = 0;
+  private grappleTargetSlot = -1;
+  private readonly grappleRayScratch = new Float64Array(8);
+  private readonly grappleLinkIds = Array.from({ length: RT_GRAPPLE_LINKS }, (_, i) => `rt-glink-${i}`);
+  public cameraZoom = 1.0;
+  public stageViewport: LogicalViewport = { width: GAME_W, height: GAME_H };
   private scoutMode = false;
-  private hasKey = false;
-  private stageHasKey = false;
-  private gateUnlocked = false;
+  public hasKey = false;
+  public stageHasKey = false;
+  public gateUnlocked = false;
   private bestStarsByStage: number[] = [];
   private stageStarsTotal = 0;
-  private stageStarsCollected = 0;
+  public stageStarsCollected = 0;
   private totalCampaignStars = 0;
-  private checkpointX = 24;
-  private checkpointY = 120;
+  public checkpointX = 24;
+  public checkpointY = 120;
   private coyote = 0;
   private airJumpsLeft = 0;
   private dashTimer = 0;
   private dashCooldown = 0;
   private pulseCooldown = 0;
-  private invulnTimer = 0;
-  private walkAnim = 0;
+  public invulnTimer = 0;
+  public walkAnim = 0;
   private relics = { doubleJump: false, airDash: false };
-  private readonly heroSquash = { scaleX: 1, scaleY: 1 };
-  private readonly aabbBox = { x: 0, y: 0, vx: 0, vy: 0 };
-  private readonly aabbRes: TileAabbStepResult = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
+  public readonly heroSquash = { scaleX: 1, scaleY: 1 };
+  public readonly aabbBox = { x: 0, y: 0, vx: 0, vy: 0 };
+  public readonly aabbRes: TileAabbStepResult = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
 
   // Shmup state
   public readonly shmup: RuntimeShmupState;
 
-  // Pre-allocated snapshot, spatial query & VM buffers (Zero-GC)
+  // Pre-allocated snapshot, spatial query, floating pixel text & VM buffers (Zero-GC)
   private readonly eventsOut: SimEvent[] = [];
-  private readonly platformerQuerySlots = new Int32Array(MAX_ENTITIES);
+  public readonly querySlots = new Int32Array(MAX_ENTITIES);
+  private readonly platformerQuerySlots = this.querySlots;
   private readonly entityIdCache: string[] = new Array<string>(MAX_ENTITIES);
   private readonly entityIdArchIdx = new Int16Array(MAX_ENTITIES).fill(-2);
   private snapshotBankIdx: 0 | 1 = 0;
   private readonly snapshotBanks: [RuntimeSnapshotBank, RuntimeSnapshotBank];
-  private readonly vmCollisions: VmCollisionPair[] = Array.from({ length: MAX_VM_COLLISION_PAIRS }, () => ({
+  private readonly floatingTexts: FloatingTextSlot[] = Array.from({ length: MAX_FLOATING_TEXTS }, () => ({
+    active: false,
+    text: '',
+    x: 0,
+    y: 0,
+    vy: -26,
+    life: 0,
+    maxLife: 0.85,
+    color: '#fffaf0',
+  }));
+  private floatTextCursor = 0;
+  private readonly onTweenUpdate = (key: string, value: number): void => {
+    this.vm.setVar(key, value);
+  };
+  public readonly vmCollisions: VmCollisionPair[] = Array.from({ length: MAX_VM_COLLISION_PAIRS }, () => ({
     selfSlot: -1, otherSlot: -1, selfTag: '', otherTag: '',
   }));
-  private vmCollisionCount = 0;
+  public vmCollisionCount = 0;
 
   private readonly vmHost: VmHostBridge = {
     isButton: (b: VmButtonId, edge: VmButtonEdge) =>
@@ -415,6 +510,31 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         this.status = outcome;
       }
     },
+    emitSignal: () => {
+      // Queue already populated by EventActionVm.emitSignal(); hook kept for bridge completeness
+    },
+    floatText: (text, color, anchor, x, y, selfSlot, otherSlot) => {
+      let wx = x;
+      let wy = y;
+      if (anchor === 'player' && this.playerSlot >= 0) {
+        wx += this.pool.x[this.playerSlot] + this.pool.w[this.playerSlot] * 0.5;
+        wy += this.pool.y[this.playerSlot] - 6;
+      } else if (anchor === 'self' && selfSlot >= 0) {
+        wx += this.pool.x[selfSlot] + this.pool.w[selfSlot] * 0.5;
+        wy += this.pool.y[selfSlot] - 6;
+      } else if (anchor === 'other' && otherSlot >= 0) {
+        wx += this.pool.x[otherSlot] + this.pool.w[otherSlot] * 0.5;
+        wy += this.pool.y[otherSlot] - 6;
+      } else if (anchor === 'other' && this.genre.p2Slot >= 0) {
+        const p2 = this.genre.p2Slot;
+        wx += this.pool.x[p2] + this.pool.w[p2] * 0.5;
+        wy += this.pool.y[p2] - 6;
+      }
+      this.spawnFloatingText(text, wx, wy, color ?? '#fffaf0');
+    },
+    tweenVar: (name, to, duration, ease) => {
+      this.tweens.start(name, this.vm.getVar(name, 0), to, duration, ease);
+    },
   };
 
   constructor(
@@ -426,6 +546,11 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       throw new Error(`Invalid Cartridge JSON: ${validated.errors.join('; ')}`);
     }
     this.def = validated.data;
+    const gc = this.def.player.grappleConfig;
+    this.grappleEnabled = this.def.player.controller === 'platformer' && Boolean(gc?.enabled);
+    this.grappleMaxRange = clamp(gc?.maxRange ?? 165, 24, 512);
+    this.grappleAttachWalls = gc?.attachWalls ?? true;
+    this.grapplePullSpeed = clamp(gc?.pullSpeed ?? 350, 80, 1600);
     this.stageViewport = resolveLogicalViewport(this.def.meta.viewport);
     this.snapshotBanks = [
       createRuntimeBank(this.def.meta.id, this.stageViewport),
@@ -597,6 +722,11 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.pool.reset();
     this.lastHitGroupByTarget.fill(0);
     this.juice.reset();
+    this.tweens.reset();
+    this.floatTextCursor = 0;
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      this.floatingTexts[i].active = false;
+    }
     this.playerSlot = -1;
     this.bossSlot = -1;
     this.status = 'playing';
@@ -612,6 +742,11 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.pulseCooldown = 0;
     this.invulnTimer = 0;
     this.coyote = 0;
+    this.grappleState = 'idle';
+    this.grappleTargetSlot = -1;
+    this.grappleHoldViaInput = false;
+    this.grapplePreviewKind = 'none';
+    this.grappleAimAngle = -0.7854;
     this.airJumpsLeft = this.relics.doubleJump ? 1 : 0;
     this.statusBanner = st.hint;
 
@@ -880,6 +1015,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
 
     const combinedRules = [...(this.def.rules ?? []), ...(st.rules ?? [])];
     this.vm.loadRules(combinedRules, this.def.initialVars);
+    initGenreStageState(this);
 
     if (this.def.player.controller === 'shmup') {
       this.shmup.waveIndex = 0;
@@ -898,7 +1034,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     this.pool.flags[slot] |= EF_PLAYER;
     this.pool.behaviorMask[slot] |= this.def.player.controller === 'shmup' ? BM_TOPDOWN_MOVE : BM_PLATFORMER_CTRL;
     this.pool.pivotX[slot] = 0.5;
-    this.pool.pivotY[slot] = this.def.player.controller === 'platformer' ? 1.0 : 0.5;
+    this.pool.pivotY[slot] = this.def.player.controller === 'shmup' ? 0.5 : 1.0;
   }
 
   public spawnArchetype(archetypeId: string, x: number, y: number, vx = 0, vy = 0, parentSlot = -1): number {
@@ -909,6 +1045,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     if (slot < 0) return -1;
     this.pool.archetypeIdx[slot] = idx;
     this.pool.flags[slot] = arch.flags;
+    if (archetypeId === 'crate' || ((arch.flags & EF_SOLID) !== 0 && !arch.def.tags.includes('zip_block'))) {
+      this.pool.flags[slot] |= EF_PUSHABLE_CRATE;
+    }
     this.pool.behaviorMask[slot] = arch.behaviorMask;
     this.pool.hp[slot] = arch.def.hp ?? 1;
     this.pool.maxHp[slot] = arch.def.hp ?? 1;
@@ -922,6 +1061,30 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     if (arch.def.paletteRow !== undefined) this.pool.paletteRow[slot] = arch.def.paletteRow;
     if (arch.def.emissive && arch.def.emissive > 0) this.pool.flags[slot] |= EF_EMISSIVE;
     return slot;
+  }
+
+  public spawnFloatingText(text: string, wx: number, wy: number, color = '#fffaf0'): void {
+    if (!text) return;
+    let slotIdx = -1;
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      if (!this.floatingTexts[i].active) {
+        slotIdx = i;
+        break;
+      }
+    }
+    if (slotIdx < 0) {
+      slotIdx = this.floatTextCursor;
+      this.floatTextCursor = (this.floatTextCursor + 1) % MAX_FLOATING_TEXTS;
+    }
+    const ft = this.floatingTexts[slotIdx];
+    ft.active = true;
+    ft.text = text;
+    ft.x = wx;
+    ft.y = wy;
+    ft.vy = -26;
+    ft.life = 0;
+    ft.maxLife = 0.85;
+    ft.color = color;
   }
 
   public setDebugHitboxes(enabled: boolean): void {
@@ -1006,6 +1169,118 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     return this.eventsOut;
   }
 
+  private updateRuntimeAim(dt: number, hcx: number, hcy: number): void {
+    if (this.input.pointerActive()) {
+      const safeZoom = Math.max(0.5, this.cameraZoom);
+      const mouseWorldX = this.cameraX + this.input.pointerX() * (this.stageViewport.width / safeZoom);
+      const mouseWorldY = this.cameraY + this.input.pointerY() * (this.stageViewport.height / safeZoom);
+      this.grappleAimAngle = Math.atan2(mouseWorldY - hcy, mouseWorldX - hcx);
+      return;
+    }
+
+    const rx = this.input.rightAxisX();
+    const ry = this.input.rightAxisY();
+    let hasDesired = false;
+    let desired = this.grappleAimAngle;
+    if (rx * rx + ry * ry > 0.04) {
+      desired = Math.atan2(ry, rx);
+      hasDesired = true;
+    } else {
+      const mx = this.input.axisX();
+      const my = this.input.axisY();
+      if (mx !== 0 || my !== 0) {
+        desired = Math.atan2(my, mx);
+        hasDesired = true;
+      }
+    }
+    if (hasDesired) {
+      const diff = wrapAimAngle(desired - this.grappleAimAngle);
+      const maxStep = RT_AIM_ROT_SPEED * dt;
+      this.grappleAimAngle =
+        Math.abs(diff) <= maxStep
+          ? desired
+          : wrapAimAngle(this.grappleAimAngle + Math.sign(diff) * maxStep);
+    }
+  }
+
+  private refreshRuntimeGrapplePreview(hcx: number, hcy: number): void {
+    const ndx = Math.cos(this.grappleAimAngle);
+    const ndy = Math.sin(this.grappleAimAngle);
+    const maxR = this.grappleMaxRange;
+    let bestDist = maxR + 1;
+    let bestSlot = -1;
+    let bestX = 0;
+    let bestY = 0;
+
+    const pool = this.pool;
+    for (let i = 0; i < pool.activeCount; i++) {
+      const s = pool.activeIndices[i];
+      if ((pool.flags[s] & EF_GRAPPLE_TARGET) === 0) continue;
+      const ax = pool.x[s] + pool.w[s] * 0.5;
+      const ay = pool.y[s] + pool.h[s] * 0.5;
+      const vx = ax - hcx;
+      const vy = ay - hcy;
+      const dist = Math.hypot(vx, vy);
+      if (dist < 10 || dist > maxR || dist >= bestDist) continue;
+      const dot = (vx / dist) * ndx + (vy / dist) * ndy;
+      if (dot < RT_MAGNET_COS) continue;
+      bestDist = dist;
+      bestSlot = s;
+      bestX = ax;
+      bestY = ay;
+    }
+
+    if (bestSlot >= 0) {
+      this.grapplePreviewKind = 'ring';
+      this.grapplePreviewX = bestX;
+      this.grapplePreviewY = bestY;
+      this.grappleTargetSlot = bestSlot;
+      return;
+    }
+
+    if (this.grappleAttachWalls) {
+      const hit = raycastGrid2DInto(
+        this.tilemap.cols,
+        this.tilemap.rows,
+        hcx,
+        hcy,
+        ndx,
+        ndy,
+        maxR,
+        this.isTileOpaque,
+        this.grappleRayScratch,
+        0,
+        TILE_SIZE,
+      );
+      if (hit && this.grappleRayScratch[1] >= 6) {
+        this.grapplePreviewKind = 'wall';
+        this.grapplePreviewX = this.grappleRayScratch[2];
+        this.grapplePreviewY = this.grappleRayScratch[3];
+        this.grappleTargetSlot = -1;
+        return;
+      }
+    }
+
+    this.grapplePreviewKind = 'none';
+    const previewDist = Math.min(64, maxR);
+    this.grapplePreviewX = hcx + ndx * previewDist;
+    this.grapplePreviewY = hcy + ndy * previewDist;
+    this.grappleTargetSlot = -1;
+  }
+
+  private fireRuntimeGrapple(mode: 'swing' | 'pull', hcx: number, hcy: number): boolean {
+    if (this.grapplePreviewKind === 'none') return false;
+    this.grappleState = 'shooting';
+    this.grappleMode = mode;
+    this.grappleAnchorX = this.grapplePreviewX;
+    this.grappleAnchorY = this.grapplePreviewY;
+    this.grappleTipX = hcx;
+    this.grappleTipY = hcy;
+    this.grappleSwingElapsed = 0;
+    this.grapplePullElapsed = 0;
+    return true;
+  }
+
   public step(dt: number, rawInput: InputState, params: RuntimeParams): SimEvent[] {
     this.eventsOut.length = 0;
     this.prevCameraX = this.cameraX;
@@ -1025,36 +1300,64 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       if (c.x < -48) c.x += Math.max(GAME_W, this.stageWorldW) + 64;
     }
 
-    // Decay visual flash timers across active entities
+    // Decay visual flash timers & floating pixel text pool
     for (let i = 0; i < this.pool.activeCount; i++) {
       const s = this.pool.activeIndices[i];
       if (this.pool.flash[s] > 0) this.pool.flash[s] = Math.max(0, this.pool.flash[s] - dt * 6);
     }
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      const ft = this.floatingTexts[i];
+      if (!ft.active) continue;
+      ft.life += dt;
+      if (ft.life >= ft.maxLife) {
+        ft.active = false;
+        continue;
+      }
+      ft.y += ft.vy * dt;
+      ft.vy *= 0.94;
+    }
 
-    if (this.def.player.controller === 'shmup') {
+    const ctrl = this.def.player.controller;
+    if (ctrl === 'shmup') {
       if (simDt > 0 && this.shmup.phase === 'sortie') this.elapsedSec += simDt;
+      if (simDt > 0) this.tweens.step(simDt, this.onTweenUpdate);
       stepShmupSystem(this, dt, simDt, this.eventsOut, params);
       this.vm.stepTick(this.vmHost, this.vmCollisions, 0);
       return this.eventsOut;
     }
 
-    // Platformer step
+    // Platformer / Fighter / Card / TopDown step
     stepSquashSpring(this.heroSquash, dt, 14);
     if (this.input.justPressed('shoulderL')) {
       this.retryCurrentStage();
       this.eventsOut.push('snap');
       return this.eventsOut;
     }
-    if (this.input.justPressed('skillX') && this.def.player.scoutZoom) {
+    if (ctrl === 'platformer' && this.input.justPressed('skillX') && this.def.player.scoutZoom) {
       this.scoutMode = !this.scoutMode;
       this.eventsOut.push('snap');
     }
     const targetZoom = this.scoutMode ? (this.def.player.scoutZoom ?? 0.78) : 1.0;
     this.cameraZoom += (targetZoom - this.cameraZoom) * Math.min(1, dt * 8);
 
-    if (simDt > 0 && this.status === 'playing' && this.playerSlot >= 0) {
-      this.elapsedSec += simDt;
-      this.stepPlatformer(simDt, params);
+    if (this.status === 'playing' && this.playerSlot >= 0) {
+      if (ctrl === 'card') {
+        if (simDt > 0) {
+          this.elapsedSec += simDt;
+          this.tweens.step(simDt, this.onTweenUpdate);
+        }
+        stepCardController(this, dt, params, this.eventsOut);
+      } else if (simDt > 0) {
+        this.elapsedSec += simDt;
+        this.tweens.step(simDt, this.onTweenUpdate);
+        if (ctrl === 'fighter') {
+          stepFighterController(this, simDt, params, this.eventsOut);
+        } else if (ctrl === 'topdown') {
+          stepTopdownController(this, simDt, params, this.eventsOut);
+        } else {
+          this.stepPlatformer(simDt, params);
+        }
+      }
     }
 
     this.vm.stepTick(this.vmHost, this.vmCollisions, this.vmCollisionCount);
@@ -1071,54 +1374,206 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - dt);
     if (this.pulseCooldown > 0) this.pulseCooldown = Math.max(0, this.pulseCooldown - dt);
 
-    // 1. Controls & Physics
+    // 1. Controls & Physics (plus optional Grapple system when grappleConfig.enabled)
+    let grappleHandledMotion = false;
+    let grappleBlockActions = false;
+    let grappleBlockJump = false;
+
+    if (this.grappleEnabled) {
+      const ghcx = pool.x[p] + 8;
+      const ghcy = pool.y[p] + 8;
+      this.updateRuntimeAim(dt, ghcx, ghcy);
+      this.refreshRuntimeGrapplePreview(ghcx, ghcy);
+
+      if (this.grappleState === 'idle') {
+        if (this.input.justPressed('skillY') || this.input.pointerPrimaryJustPressed()) {
+          if (this.fireRuntimeGrapple('swing', ghcx, ghcy)) {
+            this.grappleHoldViaInput = true;
+            this.eventsOut.push('rail');
+            grappleBlockActions = true;
+          }
+        } else if (this.input.justPressed('shoulderR') || this.input.pointerSecondaryJustPressed()) {
+          if (this.fireRuntimeGrapple('pull', ghcx, ghcy)) {
+            this.grappleHoldViaInput = false;
+            this.eventsOut.push('rail');
+            grappleBlockActions = true;
+          }
+        }
+      }
+
+      if (
+        (this.input.held('skillY') || this.input.pointerPrimaryHeld()) &&
+        (this.grappleState === 'shooting' || this.grappleState === 'swinging')
+      ) {
+        this.grappleHoldViaInput = true;
+      }
+
+      if (this.grappleState === 'shooting') {
+        if (this.grappleTargetSlot >= 0 && (pool.flags[this.grappleTargetSlot] & EF_ALIVE) !== 0) {
+          this.grappleAnchorX = pool.x[this.grappleTargetSlot] + pool.w[this.grappleTargetSlot] * 0.5;
+          this.grappleAnchorY = pool.y[this.grappleTargetSlot] + pool.h[this.grappleTargetSlot] * 0.5;
+        }
+        const dx = this.grappleAnchorX - this.grappleTipX;
+        const dy = this.grappleAnchorY - this.grappleTipY;
+        const rem = Math.hypot(dx, dy);
+        const stepDist = RT_GRAPPLE_SHOOT_SPEED * dt;
+        if (rem <= stepDist + 6) {
+          this.grappleTipX = this.grappleAnchorX;
+          this.grappleTipY = this.grappleAnchorY;
+          this.juice.triggerHitstop(0.018);
+          this.juice.addTrauma(0.14);
+          this.juice.registerCombo();
+          this.eventsOut.push('snap');
+          this.juice.spawnBurst(
+            this.grappleAnchorX,
+            this.grappleAnchorY,
+            ['#ffd447', '#ff5d8f', '#fffaf0'],
+            6,
+            params.sparkleDensity,
+          );
+          this.dashCooldown = 0;
+          this.airJumpsLeft = 1;
+          this.dashTimer = 0;
+          if (this.grappleMode === 'swing') {
+            this.grappleState = 'swinging';
+            this.grappleSwingElapsed = 0;
+            this.grappleRopeLength = clamp(
+              Math.hypot(ghcx - this.grappleAnchorX, ghcy - this.grappleAnchorY),
+              24,
+              this.grappleMaxRange,
+            );
+          } else {
+            this.grappleState = 'pulling';
+            this.grapplePullElapsed = 0;
+          }
+        } else {
+          this.grappleTipX += (dx / rem) * stepDist;
+          this.grappleTipY += (dy / rem) * stepDist;
+        }
+      }
+
+      if (this.grappleState === 'swinging') {
+        this.grappleSwingElapsed += dt;
+        grappleBlockActions = true;
+        if (this.input.justPressed('action') || this.input.pointerSecondaryJustPressed()) {
+          this.grappleMode = 'pull';
+          this.grappleState = 'pulling';
+          this.grapplePullElapsed = 0;
+          this.grappleHoldViaInput = false;
+          this.eventsOut.push('snap');
+        } else if (
+          (this.grappleHoldViaInput &&
+            !(this.input.held('skillY') || this.input.pointerPrimaryHeld()) &&
+            this.grappleSwingElapsed > 0.02) ||
+          this.input.justPressed('jump')
+        ) {
+          this.grappleState = 'idle';
+          this.grappleHoldViaInput = false;
+          pool.vx[p] *= 1.18;
+          pool.vy[p] = Math.min(pool.vy[p] * 1.1, -125);
+          this.dashCooldown = 0;
+          this.airJumpsLeft = 1;
+          this.heroSquash.scaleX = 0.8;
+          this.heroSquash.scaleY = 1.24;
+          this.eventsOut.push('jump');
+          grappleBlockJump = true;
+        } else {
+          grappleHandledMotion = true;
+          const reel = this.input.axisY();
+          if (reel !== 0) {
+            this.grappleRopeLength = clamp(this.grappleRopeLength + reel * 115 * dt, 24, this.grappleMaxRange);
+          }
+          const rx = ghcx - this.grappleAnchorX;
+          const ry = ghcy - this.grappleAnchorY;
+          const rDist = Math.max(1, Math.hypot(rx, ry));
+          const tx = -ry / rDist;
+          const ty = rx / rDist;
+          const pump = this.input.axisX();
+          if (pump !== 0) {
+            const signT = ty >= 0 ? -pump : pump;
+            const thrust = 260 * dt;
+            pool.vx[p] += tx * signT * thrust;
+            pool.vy[p] += ty * signT * thrust;
+            if (pump < 0) pool.flags[p] |= EF_FACING_LEFT;
+            else pool.flags[p] &= ~EF_FACING_LEFT;
+          }
+          pool.vy[p] = Math.min(340, pool.vy[p] + 520 * params.gravityScale * dt);
+        }
+      }
+
+      if (this.grappleState === 'pulling') {
+        this.grapplePullElapsed += dt;
+        grappleBlockActions = true;
+        const dx = this.grappleAnchorX - ghcx;
+        const dy = this.grappleAnchorY - ghcy;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 14 || this.grapplePullElapsed > 0.7 || this.input.justPressed('jump')) {
+          this.grappleState = 'idle';
+          this.grappleHoldViaInput = false;
+          this.dashCooldown = 0;
+          this.airJumpsLeft = 1;
+          pool.vy[p] = Math.min(pool.vy[p], -125);
+          this.eventsOut.push('jump');
+          grappleBlockJump = true;
+        } else {
+          grappleHandledMotion = true;
+          pool.vx[p] = (dx / dist) * this.grapplePullSpeed;
+          pool.vy[p] = (dy / dist) * this.grapplePullSpeed;
+          if (dx < -2) pool.flags[p] |= EF_FACING_LEFT;
+          else if (dx > 2) pool.flags[p] &= ~EF_FACING_LEFT;
+        }
+      }
+    }
+
     const dir = this.input.axisX();
-    if (this.dashTimer > 0) {
-      this.dashTimer = Math.max(0, this.dashTimer - dt);
-      pool.vy[p] = 0;
-    } else if (dir !== 0) {
-      if (dir < 0) pool.flags[p] |= EF_FACING_LEFT;
-      else pool.flags[p] &= ~EF_FACING_LEFT;
-      const targetVx = dir * params.moveSpeed;
-      const accel = (pool.flags[p] & EF_FLIP_X) !== 0 ? 640 : 960;
-      const onG = this.aabbRes.onGround;
-      const a = onG ? 960 : accel;
-      pool.vx[p] = pool.vx[p] < targetVx ? Math.min(targetVx, pool.vx[p] + a * dt) : Math.max(targetVx, pool.vx[p] - a * dt);
-      this.walkAnim += dt * 9;
-    } else {
-      const decel = this.aabbRes.onGround ? 880 : 300;
-      pool.vx[p] = pool.vx[p] > 0 ? Math.max(0, pool.vx[p] - decel * dt) : Math.min(0, pool.vx[p] + decel * dt);
-    }
+    if (!grappleHandledMotion) {
+      if (this.dashTimer > 0) {
+        this.dashTimer = Math.max(0, this.dashTimer - dt);
+        pool.vy[p] = 0;
+      } else if (dir !== 0) {
+        if (dir < 0) pool.flags[p] |= EF_FACING_LEFT;
+        else pool.flags[p] &= ~EF_FACING_LEFT;
+        const targetVx = dir * params.moveSpeed;
+        const accel = (pool.flags[p] & EF_FLIP_X) !== 0 ? 640 : 960;
+        const onG = this.aabbRes.onGround;
+        const a = onG ? 960 : accel;
+        pool.vx[p] = pool.vx[p] < targetVx ? Math.min(targetVx, pool.vx[p] + a * dt) : Math.max(targetVx, pool.vx[p] - a * dt);
+        this.walkAnim += dt * 9;
+      } else {
+        const decel = this.aabbRes.onGround ? 880 : 300;
+        pool.vx[p] = pool.vx[p] > 0 ? Math.max(0, pool.vx[p] - decel * dt) : Math.min(0, pool.vx[p] + decel * dt);
+      }
 
-    if (this.aabbRes.onGround) this.airJumpsLeft = this.relics.doubleJump ? 1 : 0;
-    if (this.input.justPressed('jump') || this.input.justPressed('up')) this.input.primeBuffer('jump', 0.13);
-    this.coyote = this.aabbRes.onGround ? 0.11 : Math.max(0, this.coyote - dt);
+      if (this.aabbRes.onGround) this.airJumpsLeft = this.relics.doubleJump ? 1 : 0;
+      if (!grappleBlockJump && (this.input.justPressed('jump') || this.input.justPressed('up'))) this.input.primeBuffer('jump', 0.13);
+      this.coyote = this.aabbRes.onGround ? 0.11 : Math.max(0, this.coyote - dt);
 
-    if (this.input.hasBuffered('jump') && this.coyote > 0) {
-      this.input.consumeBuffer('jump');
-      pool.vy[p] = -params.jumpPower;
-      this.coyote = 0;
-      this.heroSquash.scaleX = 0.78;
-      this.heroSquash.scaleY = 1.24;
-      this.eventsOut.push('jump');
-      this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#fffaf0', '#56d39c'], 4, params.sparkleDensity);
-    } else if (this.input.hasBuffered('jump') && this.relics.doubleJump && this.airJumpsLeft > 0 && !this.aabbRes.onGround) {
-      this.input.consumeBuffer('jump');
-      this.airJumpsLeft--;
-      pool.vy[p] = -params.jumpPower * 0.94;
-      this.dashTimer = 0;
-      this.heroSquash.scaleX = 0.74;
-      this.heroSquash.scaleY = 1.28;
-      this.eventsOut.push('jump');
-      this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#5ec2f7', '#fffaf0'], 7, params.sparkleDensity);
-    }
+      if (!grappleBlockJump && this.input.hasBuffered('jump') && this.coyote > 0) {
+        this.input.consumeBuffer('jump');
+        pool.vy[p] = -params.jumpPower;
+        this.coyote = 0;
+        this.heroSquash.scaleX = 0.78;
+        this.heroSquash.scaleY = 1.24;
+        this.eventsOut.push('jump');
+        this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#fffaf0', '#56d39c'], 4, params.sparkleDensity);
+      } else if (!grappleBlockJump && this.input.hasBuffered('jump') && this.relics.doubleJump && this.airJumpsLeft > 0 && !this.aabbRes.onGround) {
+        this.input.consumeBuffer('jump');
+        this.airJumpsLeft--;
+        pool.vy[p] = -params.jumpPower * 0.94;
+        this.dashTimer = 0;
+        this.heroSquash.scaleX = 0.74;
+        this.heroSquash.scaleY = 1.28;
+        this.eventsOut.push('jump');
+        this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#5ec2f7', '#fffaf0'], 7, params.sparkleDensity);
+      }
 
-    if (this.dashTimer <= 0 && !this.input.held('jump') && !this.input.held('up') && pool.vy[p] < -60) {
-      pool.vy[p] *= 0.86;
-    }
-    if (this.dashTimer <= 0) {
-      const apex = !this.aabbRes.onGround && Math.abs(pool.vy[p]) < 38 ? 0.56 : 1.0;
-      pool.vy[p] = Math.min(340, pool.vy[p] + 590 * params.gravityScale * apex * dt);
+      if (this.dashTimer <= 0 && !this.input.held('jump') && !this.input.held('up') && pool.vy[p] < -60) {
+        pool.vy[p] *= 0.86;
+      }
+      if (this.dashTimer <= 0) {
+        const apex = !this.aabbRes.onGround && Math.abs(pool.vy[p]) < 38 ? 0.56 : 1.0;
+        pool.vy[p] = Math.min(340, pool.vy[p] + 590 * params.gravityScale * apex * dt);
+      }
     }
 
     const facingLeft = (pool.flags[p] & EF_FACING_LEFT) !== 0;
@@ -1126,7 +1581,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     if (facingLeft) pool.flags[p] |= EF_FLIP_X;
     else pool.flags[p] &= ~EF_FLIP_X;
 
-    if (this.input.justPressed('action') || this.input.justPressed('shoulderR')) {
+    if (!grappleBlockActions && (this.input.justPressed('action') || (!this.grappleEnabled && this.input.justPressed('shoulderR')))) {
       if (this.relics.airDash && !this.aabbRes.onGround && this.dashCooldown <= 0) {
         this.dashTimer = 0.14;
         this.dashCooldown = 0.55;
@@ -1135,7 +1590,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         this.heroSquash.scaleX = 1.32;
         this.heroSquash.scaleY = 0.72;
         this.eventsOut.push('snap');
-      } else {
+      } else if (!this.grappleEnabled) {
         const sp = this.spawnArchetype('spark', pool.x[p] + 8 + sign * 7, pool.y[p] + 7, sign * 155, -22);
         if (sp >= 0) pool.timerA[sp] = 0.42;
         this.heroSquash.scaleX = 1.15;
@@ -1143,7 +1598,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         this.eventsOut.push('ignite');
       }
     }
-    if (this.input.justPressed('skillY') && this.pulseCooldown <= 0) {
+    if (!grappleBlockActions && !this.grappleEnabled && this.input.justPressed('skillY') && this.pulseCooldown <= 0) {
       this.pulseCooldown = 0.36;
       const s1 = this.spawnArchetype('spark', pool.x[p] + 8 + sign * 7, pool.y[p] + 5, sign * 172, -46);
       const s2 = this.spawnArchetype('spark', pool.x[p] + 8 + sign * 7, pool.y[p] + 9, sign * 164, 8);
@@ -1267,6 +1722,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         pool.vy[s] += 260 * dt;
         pool.timerA[s] -= dt;
         if (pool.timerA[s] <= 0) pool.free(s);
+      } else if ((pool.flags[s] & EF_CRYSTAL_RESET) !== 0 && pool.timerA[s] > 0) {
+        pool.timerA[s] = Math.max(0, pool.timerA[s] - dt);
       }
     }
 
@@ -1274,6 +1731,22 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     pool.y[p] = box.y;
     pool.vx[p] = box.vx;
     pool.vy[p] = box.vy;
+    if (this.grappleEnabled && this.grappleState === 'swinging') {
+      const rdx = pool.x[p] + 8 - this.grappleAnchorX;
+      const rdy = pool.y[p] + 8 - this.grappleAnchorY;
+      const rDist = Math.hypot(rdx, rdy);
+      if (rDist > this.grappleRopeLength && rDist > 1e-4) {
+        const ux = rdx / rDist;
+        const uy = rdy / rDist;
+        pool.x[p] = this.grappleAnchorX + ux * this.grappleRopeLength - 8;
+        pool.y[p] = this.grappleAnchorY + uy * this.grappleRopeLength - 8;
+        const vDotU = pool.vx[p] * ux + pool.vy[p] * uy;
+        if (vDotU > 0) {
+          pool.vx[p] -= vDotU * ux;
+          pool.vy[p] -= vDotU * uy;
+        }
+      }
+    }
     pool.sx[p] = this.heroSquash.scaleX;
     pool.sy[p] = this.heroSquash.scaleY;
     pool.skewX[p] = Math.abs(pool.vx[p]) > 10 ? clamp(pool.vx[p] / 460, -0.24, 0.24) : 0;
@@ -1293,6 +1766,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         this.status = 'lost';
         return;
       }
+      this.grappleState = 'idle';
+      this.grappleHoldViaInput = false;
+      this.grappleTargetSlot = -1;
       pool.teleport(p, this.checkpointX, this.checkpointY);
       pool.vx[p] = 0;
       pool.vy[p] = 0;
@@ -1389,6 +1865,14 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
           this.juice.applyPreset('player_hurt');
           if (this.hearts <= 0) this.status = 'lost';
         }
+      } else if ((f & EF_CRYSTAL_RESET) !== 0 && pool.timerA[s] <= 0 && dist < 16) {
+        pool.timerA[s] = 2.2;
+        pool.flash[s] = 0.25;
+        this.dashCooldown = 0;
+        this.airJumpsLeft = 1;
+        this.juice.registerCombo();
+        this.eventsOut.push('star');
+        this.juice.spawnBurst(ecx, ecy, ['#5ec2f7', '#fffaf0'], 6, params.sparkleDensity);
       } else if (aid === 'gate' && this.gateUnlocked && dist < 16) {
         if (this.stageIdx + 1 < this.def.stages.length) {
           this.hearts = Math.min(this.maxHearts, this.hearts + 1);
@@ -1412,13 +1896,17 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     }
 
     // 5. Camera track
+    this.trackCameraTarget(pool.x[p], pool.y[p], dt);
+  }
+
+  public trackCameraTarget(targetX: number, targetY: number, dt: number): void {
     const zoom = Math.max(0.5, this.cameraZoom);
     const viewW = this.stageViewport.width / zoom;
     const viewH = this.stageViewport.height / zoom;
     const maxCamX = Math.max(0, this.stageWorldW - viewW);
     const maxCamY = Math.max(0, this.stageWorldH - viewH);
-    const desiredCamX = clamp(pool.x[p] - viewW * 0.42, 0, maxCamX);
-    const desiredCamY = clamp(pool.y[p] - viewH * 0.55, 0, maxCamY);
+    const desiredCamX = clamp(targetX - viewW * 0.42, 0, maxCamX);
+    const desiredCamY = clamp(targetY - viewH * 0.55, 0, maxCamY);
     if (this.springCamFreq > 0) {
       stepSpringInto(
         this.cameraX,
@@ -1564,6 +2052,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     const visMaxY = camY + viewH + margin;
 
     let tileSlotCount = 0;
+    const gh = this.def.meta.genreHud;
+    const autoTileEnabled = gh === 'parkour' || gh === 'fighter' || gh === 'card' || gh === 'grid';
     const midChunks = this.tilemap.updateActiveChunks(visMinX, visMinY, visMaxX, visMaxY, 0);
     for (let ci = 0; ci < midChunks; ci++) {
       const slot = this.tilemap.activeChunkIds[ci];
@@ -1571,17 +2061,32 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
       const baseRow = this.tilemap.activeChunkRows[ci] << CHUNK_SHIFT;
       const baseSlab = slot << 8;
       for (let lr = 0; lr < CHUNK_SIZE; lr++) {
-        const y = (baseRow + lr) * TILE_SIZE;
+        const row = baseRow + lr;
+        const y = row * TILE_SIZE;
         if (y + TILE_SIZE < visMinY || y > visMaxY) continue;
         const h = Math.min(TILE_SIZE, Math.max(1, this.stageWorldH - y));
         const rowSlab = baseSlab | (lr << CHUNK_SHIFT);
         for (let lc = 0; lc < CHUNK_SIZE; lc++) {
           const tid = this.tilemap.tilesSlab[rowSlab | lc];
           if (tid === 0) continue;
-          const x = (baseCol + lc) * TILE_SIZE;
+          const col = baseCol + lc;
+          const x = col * TILE_SIZE;
           if (x + TILE_SIZE < visMinX || x > visMaxX) continue;
           const dst = acquireTileSlot(bank.tileSlots, tileSlotCount++);
-          dst.sprite = this.tileSpriteLut[tid] ?? 'stone';
+          let sprite = this.tileSpriteLut[tid] ?? 'stone';
+          let autoMask: number | undefined;
+          if (autoTileEnabled) {
+            if (sprite === 'stone') {
+              const mask = this.tilemap.getAutoMask(col, row);
+              sprite = `cliff_m${mask}`;
+              autoMask = mask;
+            } else if (sprite === 'grass') {
+              const mask = this.tilemap.getAutoMask(col, row);
+              sprite = `grass_m${mask}`;
+              autoMask = mask;
+            }
+          }
+          dst.sprite = sprite;
           dst.x = x;
           dst.y = y;
           dst.w = TILE_SIZE;
@@ -1597,6 +2102,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
           dst.castShadow = undefined;
           dst.alpha = undefined;
           dst.flipX = undefined;
+          dst.autoMask = autoMask;
+          dst.variant = undefined;
+          dst.windSway = undefined;
           outTiles.push(dst);
         }
       }
@@ -1718,10 +2226,16 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         if (blink && this.pool.flash[s] <= 0) continue;
 
         let sprite: SpriteId = this.def.player.sprite;
+        const ctrl = this.def.player.controller;
         if (isShmup && loadout) {
           sprite = Math.floor(t * 12) % 2 === 0 ? loadout.spriteA : loadout.spriteB;
         } else if (!isShmup && this.def.player.spriteB) {
-          const moving = Math.abs(this.pool.vx[s]) > 8 || !this.aabbRes.onGround;
+          const moving =
+            ctrl === 'topdown'
+              ? Math.hypot(this.pool.vx[s], this.pool.vy[s]) > 8
+              : ctrl === 'card'
+                ? false
+                : Math.abs(this.pool.vx[s]) > 8 || !this.aabbRes.onGround;
           sprite = moving && Math.floor(this.walkAnim) % 2 === 1 ? this.def.player.spriteB : this.def.player.sprite;
         }
 
@@ -1741,7 +2255,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         dst.flipX = (f & EF_FLIP_X) !== 0;
         dst.additive = undefined;
         dst.emissive = undefined;
-        dst.tint = undefined;
+        dst.tint = ctrl === 'fighter' && this.genre.p1.state === 'block' ? '#5ec2f7' : undefined;
         dst.alpha = undefined;
         dst.paletteRow = this.pool.paletteRow[s] || undefined;
         dst.elevationZ = undefined;
@@ -1752,12 +2266,13 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         outEntities.push(dst);
 
         if (glow > 0.05) {
+          const isDark = (st.ambientDarkness ?? 0) > 0.16;
           const l = acquireLightSlot(bank.lightSlots, lightSlotCount++);
           l.x = rx + 8;
           l.y = ry + 8;
-          l.radius = isShmup ? 32 : 36;
-          l.color = loadout?.accentHex ?? '#fff3d0';
-          l.intensity = 0.35 * glow;
+          l.radius = isShmup ? 24 : isDark ? 42 : 22;
+          l.color = loadout?.accentHex ?? '#ffe8a8';
+          l.intensity = (isShmup ? 0.18 : isDark ? 0.42 : 0.09) * glow;
           l.falloffPower = undefined;
           outLights.push(l);
         }
@@ -1780,6 +2295,9 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         if (arch?.id === 'checkpoint_flag' && this.pool.aiState[s] === 1) {
           sprite = 'flag_on';
         }
+        if ((f & EF_LOGIC_SWITCH) !== 0 && this.pool.aiState[s] === 1) {
+          sprite = 'switch_on';
+        }
         if (arch?.id === 'gate' && this.gateUnlocked) {
           sprite = 'gate_open';
         }
@@ -1790,6 +2308,8 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
           tint = cyc === 0 ? '#ff708d' : cyc === 1 ? '#5ec2f7' : cyc === 2 ? '#e0aaff' : '#ffd447';
         } else if (isShmup && (f & EF_BOSS) !== 0 && this.pool.aiState[s] === 2) {
           tint = Math.floor(t * 8) % 2 === 0 ? '#ff708d' : '#e0aaff';
+        } else if (this.def.player.controller === 'fighter' && s === this.genre.p2Slot && this.genre.p2.state === 'block') {
+          tint = '#5ec2f7';
         }
 
         const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
@@ -1809,7 +2329,7 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         dst.additive = (f & EF_ADDITIVE) !== 0;
         dst.emissive = (f & EF_EMISSIVE) !== 0 ? (arch?.def.emissive ?? ((f & EF_PIERCING) !== 0 ? 1.1 : 0.8)) : undefined;
         dst.tint = tint;
-        dst.alpha = undefined;
+        dst.alpha = (f & EF_CRYSTAL_RESET) !== 0 && this.pool.timerA[s] > 0 ? 0.28 : undefined;
         dst.paletteRow = this.pool.paletteRow[s] || undefined;
         dst.elevationZ = undefined;
         dst.shadowOffsetY = undefined;
@@ -1828,6 +2348,98 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
         l.intensity = arch.def.light.intensity * glow;
         l.falloffPower = undefined;
         outLights.push(l);
+      }
+    }
+
+    // Emit runtime grapple rope & aiming reticle when grappleConfig is active
+    if (this.grappleEnabled && this.playerSlot >= 0 && (this.pool.flags[this.playerSlot] & EF_ALIVE) !== 0) {
+      const hx = this.pool.renderX(this.playerSlot, alpha) + this.pool.w[this.playerSlot] * 0.5;
+      const hy = this.pool.renderY(this.playerSlot, alpha) + this.pool.h[this.playerSlot] * 0.5;
+      if (this.grappleState !== 'idle') {
+        const endX = this.grappleState === 'shooting' ? this.grappleTipX : this.grappleAnchorX;
+        const endY = this.grappleState === 'shooting' ? this.grappleTipY : this.grappleAnchorY;
+        const dx = endX - hx;
+        const dy = endY - hy;
+        const ang = Math.atan2(dy, dx);
+        for (let k = 0; k < RT_GRAPPLE_LINKS; k++) {
+          const u = (k + 1) / (RT_GRAPPLE_LINKS + 1);
+          const lDst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+          lDst.id = this.grappleLinkIds[k];
+          lDst.sprite = 'grapple_link';
+          lDst.x = hx + dx * u - 5;
+          lDst.y = hy + dy * u - 4;
+          lDst.w = 10;
+          lDst.h = 8;
+          lDst.rot = ang;
+          lDst.scaleX = 1;
+          lDst.scaleY = 1;
+          lDst.anchorY = 0.5;
+          lDst.skewX = undefined;
+          lDst.flash = 0;
+          lDst.flipX = false;
+          lDst.additive = false;
+          lDst.emissive = 0.7;
+          lDst.tint = this.grappleMode === 'swing' ? '#ff5d8f' : '#5ec2f7';
+          lDst.alpha = 1;
+          lDst.paletteRow = undefined;
+          lDst.elevationZ = undefined;
+          lDst.shadowOffsetY = undefined;
+          lDst.castShadow = false;
+          lDst.shadowRadius = undefined;
+          lDst.sortY = undefined;
+          outEntities.push(lDst);
+        }
+        const cDst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+        cDst.id = 'rt-grapple-claw';
+        cDst.sprite = 'grapple_claw';
+        cDst.x = endX - 7;
+        cDst.y = endY - 7;
+        cDst.w = 14;
+        cDst.h = 14;
+        cDst.rot = ang;
+        cDst.scaleX = 1;
+        cDst.scaleY = 1;
+        cDst.anchorY = 0.5;
+        cDst.skewX = undefined;
+        cDst.flash = 0;
+        cDst.flipX = false;
+        cDst.additive = false;
+        cDst.emissive = 0.9;
+        cDst.tint = undefined;
+        cDst.alpha = 1;
+        cDst.paletteRow = undefined;
+        cDst.elevationZ = undefined;
+        cDst.shadowOffsetY = undefined;
+        cDst.castShadow = false;
+        cDst.shadowRadius = undefined;
+        cDst.sortY = undefined;
+        outEntities.push(cDst);
+      } else if (this.grapplePreviewKind !== 'none') {
+        const rDst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+        rDst.id = 'rt-grapple-reticle';
+        rDst.sprite = 'grapple_reticle';
+        rDst.x = this.grapplePreviewX - 7;
+        rDst.y = this.grapplePreviewY - 7;
+        rDst.w = 14;
+        rDst.h = 14;
+        rDst.rot = t * 5;
+        rDst.scaleX = 1;
+        rDst.scaleY = 1;
+        rDst.anchorY = 0.5;
+        rDst.skewX = undefined;
+        rDst.flash = 0;
+        rDst.flipX = false;
+        rDst.additive = false;
+        rDst.emissive = 0.92;
+        rDst.tint = this.grapplePreviewKind === 'ring' ? '#ffd447' : '#5ec2f7';
+        rDst.alpha = 0.95;
+        rDst.paletteRow = undefined;
+        rDst.elevationZ = undefined;
+        rDst.shadowOffsetY = undefined;
+        rDst.castShadow = false;
+        rDst.shadowRadius = undefined;
+        rDst.sortY = undefined;
+        outEntities.push(rDst);
       }
     }
 
@@ -1920,10 +2532,117 @@ export class DataCartridgeRuntime implements DebuggableCartridge, ComboTrackingC
     snap.particles = bank.particles;
     snap.lights = outLights;
     snap.debugRects = debugRects;
+    const hideCtrl = this.def.player.controller;
+    snap.hideClassicHud =
+      hideCtrl === 'fighter' ||
+      hideCtrl === 'card' ||
+      hideCtrl === 'topdown' ||
+      gh === 'fighter' ||
+      gh === 'card' ||
+      gh === 'grid';
+    snap.hudPrimitives = this.buildHudPrimitives(bank, bossHp, bossMaxHp, alpha);
     snap.statusBanner = this.statusBanner;
     snap.stage = bank.stageInfo;
     snap.bgmTheme = st.bgmTheme;
     snap.shmupHud = isShmup ? buildShmupHudFromPool(this) : undefined;
     return snap;
+  }
+
+  private buildHudPrimitives(
+    bank: RuntimeSnapshotBank,
+    bossHp: number,
+    bossMaxHp: number,
+    alpha: number,
+  ): HudPrimitiveDesc[] | undefined {
+    const ctrl = this.def.player.controller;
+    const genreHud =
+      this.def.meta.genreHud ??
+      (ctrl === 'fighter' ? 'fighter' : ctrl === 'card' ? 'card' : ctrl === 'topdown' ? 'grid' : undefined);
+    const needsAimLine =
+      this.grappleEnabled &&
+      this.grappleState === 'idle' &&
+      this.playerSlot >= 0 &&
+      (this.pool.flags[this.playerSlot] & EF_ALIVE) !== 0;
+
+    let hasActiveFloatText = false;
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      if (this.floatingTexts[i].active) {
+        hasActiveFloatText = true;
+        break;
+      }
+    }
+
+    if (!needsAimLine && !hasActiveFloatText && (!genreHud || genreHud === 'platformer')) {
+      return undefined;
+    }
+
+    const out = bank.hudPrimitives;
+    out.length = 0;
+    let count = 0;
+    const vw = bank.viewport.width;
+    const vh = bank.viewport.height;
+
+    if (needsAimLine) {
+      const hx = this.pool.renderX(this.playerSlot, alpha) + this.pool.w[this.playerSlot] * 0.5;
+      const hy = this.pool.renderY(this.playerSlot, alpha) + this.pool.h[this.playerSlot] * 0.5;
+      const locked = this.grapplePreviewKind !== 'none';
+      const slot = acquireHudSlot(bank.hudSlots, count++);
+      slot.kind = 'aim_line';
+      slot.x = hx;
+      slot.y = hy;
+      if (locked) {
+        slot.x2 = this.grapplePreviewX;
+        slot.y2 = this.grapplePreviewY;
+      } else {
+        const len = Math.min(148, this.grappleMaxRange * 0.9);
+        slot.x2 = hx + Math.cos(this.grappleAimAngle) * len;
+        slot.y2 = hy + Math.sin(this.grappleAimAngle) * len;
+      }
+      slot.w = 2;
+      slot.h = 2;
+      slot.color = locked ? '#ffd447' : '#5ec2f7';
+      slot.alpha = locked ? 0.85 : 0.45;
+      slot.worldSpace = true;
+      out.push(slot);
+    }
+
+    if (genreHud === 'parkour') {
+      const ready = this.dashCooldown <= 0 && this.grappleState === 'idle';
+      const bar = acquireHudSlot(bank.hudSlots, count++);
+      bar.kind = 'bar';
+      bar.x = 8;
+      bar.y = 8;
+      bar.w = 68;
+      bar.h = 6;
+      bar.ratio = ready ? 1 : clamp(1 - this.dashCooldown / 0.55, 0.15, 0.95);
+      bar.color = ready ? '#ff5d8f' : '#5ec2f7';
+      bar.bgColor = '#120e24';
+      bar.alpha = 0.9;
+      out.push(bar);
+    } else if (genreHud === 'fighter' || genreHud === 'card' || genreHud === 'grid') {
+      count = buildGenreHudPrimitives(this, genreHud, out, bank.hudSlots, count, vw, vh, bossHp, bossMaxHp);
+    }
+
+    // Floating pixel text popups (world-space)
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      const ft = this.floatingTexts[i];
+      if (!ft.active) continue;
+      const tSlot = acquireHudSlot(bank.hudSlots, count++);
+      tSlot.kind = 'text';
+      tSlot.x = ft.x;
+      tSlot.y = ft.y;
+      tSlot.w = 0;
+      tSlot.h = 0;
+      tSlot.text = ft.text;
+      tSlot.scale = 1;
+      tSlot.align = 'center';
+      tSlot.color = ft.color;
+      tSlot.shadowColor = '#120d1e';
+      tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
+      tSlot.worldSpace = true;
+      out.push(tSlot);
+    }
+
+    return count > 0 ? out : undefined;
   }
 }

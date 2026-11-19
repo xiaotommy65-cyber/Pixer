@@ -94,4 +94,32 @@ export class InputMap {
   public rightAxisY(): number {
     return this.curr.rightStickY;
   }
+
+  public pointerActive(): boolean {
+    return Boolean(this.curr.pointerActive);
+  }
+
+  public pointerX(): number {
+    return this.curr.pointerX ?? 0;
+  }
+
+  public pointerY(): number {
+    return this.curr.pointerY ?? 0;
+  }
+
+  public pointerPrimaryHeld(): boolean {
+    return Boolean(this.curr.pointerPrimary);
+  }
+
+  public pointerPrimaryJustPressed(): boolean {
+    return Boolean(this.curr.pointerPrimary) && !Boolean(this.prev.pointerPrimary);
+  }
+
+  public pointerSecondaryHeld(): boolean {
+    return Boolean(this.curr.pointerSecondary);
+  }
+
+  public pointerSecondaryJustPressed(): boolean {
+    return Boolean(this.curr.pointerSecondary) && !Boolean(this.prev.pointerSecondary);
+  }
 }

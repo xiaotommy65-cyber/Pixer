@@ -30,6 +30,7 @@ import { SceneGpuBridge } from './core/runtime/SceneGpuBridge.ts';
 import { createEmptyInputState, type CartridgeId } from './core/types/WorldTypes.ts';
 import { registerBuiltinCartridges } from './game/BuiltinCartridges.ts';
 import { initCapacitorNativeBridge } from './ui/CapacitorNativeBridge.ts';
+import { loadEngine4ArtPack } from './ui/BrowserAssetLoader.ts';
 import { ConsoleView } from './ui/ConsoleView.ts';
 import { installGlobalTactileFeedback, registerDomHapticSink } from './ui/dom.ts';
 import { IrisWipeTransition } from './ui/IrisWipeTransition.ts';
@@ -154,7 +155,10 @@ export function createApp(): AppHandle | null {
       onRevealStart: () => {
         studioWorkbench?.revealToolbars();
       },
-      onDone: ensureForegroundVisible,
+      onDone: () => {
+        ensureForegroundVisible();
+        consoleView.syncPauseState();
+      },
     });
   };
 
@@ -176,10 +180,14 @@ export function createApp(): AppHandle | null {
       onRevealStart: () => {
         consoleView.refreshCardArt();
       },
-      onDone: ensureForegroundVisible,
+      onDone: () => {
+        ensureForegroundVisible();
+        consoleView.syncPauseState();
+      },
     });
   };
 
+  let destroyed = false;
   let gpuEngine: GpuEngine | null = null;
 
   const syncViewPill = (p: 'focus' | 'window') => {
@@ -244,8 +252,12 @@ export function createApp(): AppHandle | null {
   consoleView.setStickDynamicOrigin(stickDynamicOrigin);
 
   const updateGpuBadge = (kind: GpuBackendKind, activeCanvas?: HTMLCanvasElement) => {
-    if (activeCanvas) consoleView.canvas = activeCanvas;
+    if (activeCanvas) consoleView.attachCanvas(activeCanvas);
     drawerView?.updateGpuBadge(kind);
+  };
+
+  consoleView.onCanvasPointer = (nx, ny, active, primary, secondary) => {
+    consoleView.setCanvasPointer(nx, ny, active, primary, secondary);
   };
 
   gpuEngine = new GpuEngine(consoleView.canvas, updateGpuBadge, atlas);
@@ -256,6 +268,11 @@ export function createApp(): AppHandle | null {
     gpuEngine.resize(width, height);
   };
   syncGovernorResolution();
+  void loadEngine4ArtPack(atlas, () => {
+    if (destroyed) return;
+    gpuEngine?.syncAtlasToGpu();
+    consoleView.refreshCardArt();
+  });
 
   const spriteAtelierView = new SpriteAtelierView(gpuEngine, synth, save, () => host.reactMomo());
   let workshopView: WorkshopView;
@@ -506,7 +523,6 @@ export function createApp(): AppHandle | null {
     nativePlatform: nativeBridge.platform,
   });
 
-  let destroyed = false;
   void gpuEngine
     .init()
     .then((kind) => {

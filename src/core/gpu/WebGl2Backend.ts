@@ -3,6 +3,7 @@ import {
   FLOATS_PER_INSTANCE,
   GAME_H,
   GAME_W,
+  MAX_DYNAMIC_LIGHTS,
   MAX_INSTANCES_PER_PASS,
   OVERSCAN_PAD,
   type IGpuBackend,
@@ -112,6 +113,9 @@ export class WebGl2Backend implements IGpuBackend {
   private uSkyViewSizeLoc: WebGLUniformLocation | null;
   private uSpriteViewSizeLoc: WebGLUniformLocation | null;
   private uPaletteRowsLoc: WebGLUniformLocation | null;
+  private uLightCountLoc: WebGLUniformLocation | null;
+  private uLightPosRadLoc: WebGLUniformLocation | null;
+  private uLightColIntLoc: WebGLUniformLocation | null;
   private uDownOffsetLoc: WebGLUniformLocation | null;
   private uBlurStepLoc: WebGLUniformLocation | null;
   private uCompGlowLoc: WebGLUniformLocation | null;
@@ -119,6 +123,11 @@ export class WebGl2Backend implements IGpuBackend {
   private uCompCozyLoc: WebGLUniformLocation | null;
   private uCompCamFracLoc: WebGLUniformLocation | null;
   private uCompViewSizeLoc: WebGLUniformLocation | null;
+  private uCompWaterLevelLoc: WebGLUniformLocation | null;
+  private uCompWaterTintLoc: WebGLUniformLocation | null;
+  private uCompTimeLoc: WebGLUniformLocation | null;
+  private readonly lightPosRadData = new Float32Array(MAX_DYNAMIC_LIGHTS * 4);
+  private readonly lightColIntData = new Float32Array(MAX_DYNAMIC_LIGHTS * 4);
 
   private onLostListener?: (e: Event) => void;
   private canvasEl: HTMLCanvasElement;
@@ -156,6 +165,9 @@ export class WebGl2Backend implements IGpuBackend {
     const uLutLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteLut');
     this.uSpriteViewSizeLoc = gl.getUniformLocation(this.spriteProg, 'uViewSize');
     this.uPaletteRowsLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteRows');
+    this.uLightCountLoc = gl.getUniformLocation(this.spriteProg, 'uLightCount');
+    this.uLightPosRadLoc = gl.getUniformLocation(this.spriteProg, 'uLightPosRad');
+    this.uLightColIntLoc = gl.getUniformLocation(this.spriteProg, 'uLightColInt');
     if (uAtlasLoc) gl.uniform1i(uAtlasLoc, 0);
     if (uIdxLoc) gl.uniform1i(uIdxLoc, 1);
     if (uLutLoc) gl.uniform1i(uLutLoc, 2);
@@ -178,6 +190,9 @@ export class WebGl2Backend implements IGpuBackend {
     this.uCompCozyLoc = gl.getUniformLocation(this.compositeProg, 'uCozyFilter');
     this.uCompCamFracLoc = gl.getUniformLocation(this.compositeProg, 'uCamFrac');
     this.uCompViewSizeLoc = gl.getUniformLocation(this.compositeProg, 'uViewSize');
+    this.uCompWaterLevelLoc = gl.getUniformLocation(this.compositeProg, 'uWaterLevel');
+    this.uCompWaterTintLoc = gl.getUniformLocation(this.compositeProg, 'uWaterTint');
+    this.uCompTimeLoc = gl.getUniformLocation(this.compositeProg, 'uTimeSec');
     if (uSceneTexLoc) gl.uniform1i(uSceneTexLoc, 0);
     if (uBloomTexLoc) gl.uniform1i(uBloomTexLoc, 1);
 
@@ -383,6 +398,8 @@ export class WebGl2Backend implements IGpuBackend {
     additiveItems: Float32Array,
     additiveCount: number,
     timeSec: number,
+    lightsData?: Float32Array,
+    lightCount = 0,
   ): number {
     const gl = this.gl;
     const w = Math.max(1, gl.canvas.width);
@@ -418,6 +435,24 @@ export class WebGl2Backend implements IGpuBackend {
     gl.bindVertexArray(this.spriteVao);
     gl.uniform2f(this.uSpriteViewSizeLoc, vw, vh);
     gl.uniform1f(this.uPaletteRowsLoc, this.paletteRows);
+    const safeLights = lightsData ? Math.max(0, Math.min(MAX_DYNAMIC_LIGHTS, lightCount | 0)) : 0;
+    gl.uniform1i(this.uLightCountLoc, safeLights);
+    if (safeLights > 0) {
+      for (let i = 0; i < safeLights; i++) {
+        const src = i * 8;
+        const dst = i * 4;
+        this.lightPosRadData[dst] = lightsData![src];
+        this.lightPosRadData[dst + 1] = lightsData![src + 1];
+        this.lightPosRadData[dst + 2] = lightsData![src + 2];
+        this.lightPosRadData[dst + 3] = lightsData![src + 7];
+        this.lightColIntData[dst] = lightsData![src + 4];
+        this.lightColIntData[dst + 1] = lightsData![src + 5];
+        this.lightColIntData[dst + 2] = lightsData![src + 6];
+        this.lightColIntData[dst + 3] = lightsData![src + 3];
+      }
+      gl.uniform4fv(this.uLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
+      gl.uniform4fv(this.uLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
+    }
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
     gl.activeTexture(gl.TEXTURE1);
@@ -485,6 +520,15 @@ export class WebGl2Backend implements IGpuBackend {
     gl.uniform1f(this.uCompCozyLoc, sky.cozyFilter ? 1 : 0);
     gl.uniform2f(this.uCompCamFracLoc, sky.camFracX ?? 0, sky.camFracY ?? 0);
     gl.uniform2f(this.uCompViewSizeLoc, vw, vh);
+    gl.uniform1f(this.uCompWaterLevelLoc, sky.waterLevelNorm ?? 0);
+    const wt = sky.waterTint;
+    gl.uniform3f(
+      this.uCompWaterTintLoc,
+      wt ? wt[0] : 0.227,
+      wt ? wt[1] : 0.431,
+      wt ? wt[2] : 0.612,
+    );
+    gl.uniform1f(this.uCompTimeLoc, timeSec);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     drawCalls++;
 

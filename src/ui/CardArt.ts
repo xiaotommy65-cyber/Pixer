@@ -71,6 +71,18 @@ const ART: Record<string, ArtSpec> = {
       { id: 'hero_a', x: 8, y: 20, scale: 1.65 },
     ],
   },
+  'celestial-parkour': {
+    top: '#16112e',
+    bottom: '#ff5d8f',
+    ground: 'stone',
+    sprites: [
+      { id: 'grapple_ring', x: 34, y: 4, scale: 1 },
+      { id: 'crystal_reset', x: 52, y: 8, scale: 1 },
+      { id: 'grapple_claw', x: 26, y: 15, scale: 0.9 },
+      { id: 'ik_claw', x: 54, y: 22, scale: 1.35, flip: true },
+      { id: 'parkour_hero_dash', x: 8, y: 20, scale: 1.65 },
+    ],
+  },
 };
 
 const W = 80;

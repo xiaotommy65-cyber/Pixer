@@ -12,6 +12,11 @@ export interface InputState {
   restart: boolean;
   rightStickX: number;
   rightStickY: number;
+  pointerX?: number;
+  pointerY?: number;
+  pointerActive?: boolean;
+  pointerPrimary?: boolean;
+  pointerSecondary?: boolean;
 }
 
 export function createEmptyInputState(): InputState {
@@ -29,6 +34,11 @@ export function createEmptyInputState(): InputState {
     restart: false,
     rightStickX: 0,
     rightStickY: 0,
+    pointerX: 0,
+    pointerY: 0,
+    pointerActive: false,
+    pointerPrimary: false,
+    pointerSecondary: false,
   };
 }
 

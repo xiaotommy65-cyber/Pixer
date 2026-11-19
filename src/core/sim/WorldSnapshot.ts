@@ -467,13 +467,14 @@ export function buildWorldSnapshot(world: WorldKernel, params: RuntimeParams, al
     outEntities.push(dst);
   }
   if (glow > 0.05) {
+    const isDark = world.ambientDarkness > 0.16;
     const l = acquireLightSlot(bank.lightSlots, lightSlotCount++);
     l.x = h.x + 8;
     l.y = h.y + 8;
-    l.radius = world.ambientDarkness > 0.2 ? 48 : 30;
-    l.color = world.ambientDarkness > 0.2 ? '#ffe6a3' : '#fff3d0';
-    l.intensity = (world.ambientDarkness > 0.2 ? 0.58 : 0.3) * glow;
-    l.falloffPower = world.ambientDarkness > 0.2 ? 1.65 : 2.0;
+    l.radius = isDark ? 46 : 22;
+    l.color = isDark ? '#ffe6a3' : '#fff3d0';
+    l.intensity = (isDark ? 0.46 : 0.09) * glow;
+    l.falloffPower = isDark ? 1.7 : 2.2;
     lights.push(l);
   }
 

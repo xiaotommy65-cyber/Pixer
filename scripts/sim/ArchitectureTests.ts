@@ -47,6 +47,7 @@ import { WorldKernel } from '../../src/core/sim/WorldKernel.ts';
 import { AstralChroniclesGame } from '../../src/game/astralChronicles/AstralChroniclesGame.ts';
 import { parseDungeonModuleJson } from '../../src/game/emberkeep/TurnGridSave.ts';
 import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
+import { buildWorkshopTemplate, type WorkshopGenreTemplateId } from '../../src/ui/WorkshopTemplates.ts';
 import { check, collectTsFiles, emptyInput } from './SimTestHarness.ts';
 
 export function testHd2dDepthPipeline(): void {
@@ -56,6 +57,10 @@ export function testHd2dDepthPipeline(): void {
   const acSnap = ac.snapshot(params);
   check(acSnap.hd2dDepth?.enabled === true, 'PA-05 should enable hd2dDepth rendering');
   check(acSnap.hd2dDepth?.sortByDepthY === true, 'PA-05 should enable Y-depth painter sorting');
+  check(
+    acSnap.tiles.some((t) => t.sprite === 'meadow_floor') && !acSnap.tiles.some((t) => t.sprite === 'grass'),
+    'PA-05 Chapter 1 top-down meadow must use seamless meadow_floor tile instead of side-profile grass',
+  );
   const extrudedWalls = acSnap.tiles.filter((t) => (t.extrudeH ?? 0) > 0);
   check(extrudedWalls.length >= 4, `PA-05 should emit extruded 2.5D south wall faces (got ${extrudedWalls.length})`);
   const shadowedActors = acSnap.entities.filter((e) => e.castShadow === true);
@@ -195,8 +200,20 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   );
   const workshopSrc = fs.readFileSync(path.join(rootDir, 'src/ui/WorkshopView.ts'), 'utf8');
   check(
-    workshopSrc.includes('public destroy()') && workshopSrc.includes('new AbortController()'),
-    'WorkshopView must manage DOM listeners with AbortController and expose destroy()',
+    workshopSrc.includes('public destroy()') &&
+      workshopSrc.includes('new AbortController()') &&
+      workshopSrc.includes('workshop-canvas') &&
+      !workshopSrc.includes('workshop-level-cell'),
+    'WorkshopView must manage DOM listeners with AbortController, expose destroy(), and use Canvas Workbench 3.0 (workshop-canvas without workshop-level-cell div grid)',
+  );
+  const atelierSrc = fs.readFileSync(path.join(rootDir, 'src/ui/SpriteAtelierView.ts'), 'utf8');
+  check(
+    atelierSrc.includes('atelier-pixel-canvas') &&
+      !atelierSrc.includes('pixel-cell') &&
+      atelierSrc.includes('indicesToGrid') &&
+      atelierSrc.includes('exportCartridgeSprites') &&
+      atelierSrc.includes('public destroy()'),
+    'SpriteAtelierView must use Canvas Studio 3.0 (atelier-pixel-canvas without pixel-cell div grid) and expose indicesToGrid, exportCartridgeSprites, and destroy()',
   );
   const newUiViews = [
     'BootBlinkOverlay.ts',
@@ -225,6 +242,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       mainSrc.includes('host.bindAtlas(atlas)') &&
       mainSrc.includes('registerBuiltinCartridges()') &&
       mainSrc.includes('forceCanvas2DFallback') &&
+      mainSrc.includes('consoleView.syncPauseState()') &&
       mainSrc.includes('createAppSafe'),
     'main.ts must register built-in cartridges, bind TextureAtlas, guard startup/frame crashes, and tear down cleanly',
   );
@@ -292,6 +310,11 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   for (const pubFile of collectPublicFiles(path.join(rootDir, 'public'))) {
     check(!pubFile.endsWith('.md'), `Public hygiene: ${path.relative(rootDir, pubFile)} markdown must not be published in public/`);
   }
+  check(
+    fs.existsSync(path.join(rootDir, 'public/assets/engine4/hero_32x32_sheet.png')) &&
+      fs.existsSync(path.join(rootDir, 'public/assets/engine4/parallax_twilight_mountains.png')),
+    'Engine 4.0 PNG assets (hero_32x32_sheet.png & parallax_twilight_mountains.png) must exist under public/assets/engine4/',
+  );
 
   const agentsPath = path.join(rootDir, 'AGENTS.md');
   const agentsLineCount = fs.readFileSync(agentsPath, 'utf8').trimEnd().split('\n').length;
@@ -589,6 +612,19 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
       glslSrc.includes('srgbToLin'),
     'WebGpuShaders and WebGl2Shaders must maintain LUT + Karis Bloom + ACES + Bayer Dither + Integer Hash + Sky Midpoint parity',
   );
+  check(
+    wgslSrc.includes('uLights') &&
+      wgslSrc.includes('screenPos') &&
+      wgslSrc.includes('params3') &&
+      wgslSrc.includes('paletteRow') &&
+      glslSrc.includes('vScreenPos') &&
+      glslSrc.includes('uLightCount') &&
+      glslSrc.includes('uLightPosRad') &&
+      glslSrc.includes('uLightColInt') &&
+      glslSrc.includes('uWaterLevel') &&
+      glslSrc.includes('uWaterTint'),
+    'WebGpuShaders and WebGl2Shaders must maintain Engine 4.0 Dynamic Lights + Planar Water + Font paletteRow parity',
+  );
 
   console.log('[SIM OK] Upgraded GPU Art Pipeline (20-float LUT/Skew + 3-Pass Bloom/Post + Overscan) verified');
 }
@@ -778,6 +814,53 @@ export async function testM3LoadCartridgeAndPngCodec(): Promise<void> {
       );
       host.deleteCustomCartridge('custom-cloudberry-hop');
     }
+  }
+
+  const pa06Json = host.getCartridgeJson('celestial-parkour');
+  check(Boolean(pa06Json), 'Built-in PA-06 celestial-parkour must expose CartridgeJsonV1 for Polaroid PNG export');
+  if (pa06Json) {
+    const pa06Png = await embedCartridgeIntoPng(minimalPng, pa06Json);
+    const pa06Decoded = await extractCartridgeFromPng(pa06Png);
+    check(
+      pa06Decoded.ok && validateCartridgeJson(pa06Decoded.data).ok,
+      'Built-in PA-06 Polaroid PNG must roundtrip cleanly and pass validateCartridgeJson',
+    );
+  }
+
+  const tplParams = host.getParams();
+  const templateIds: readonly WorkshopGenreTemplateId[] = ['parkour', 'fighter', 'card', 'grid'];
+  for (const tplId of templateIds) {
+    const tpl = buildWorkshopTemplate(tplId, host);
+    const tplCheck = validateCartridgeJson(tpl);
+    check(tplCheck.ok, `Workshop template '${tplId}' must pass validateCartridgeJson`);
+    const rt = new DataCartridgeRuntime(tpl);
+    for (let f = 0; f < 20; f++) {
+      rt.step(
+        1 / 60,
+        {
+          ...emptyInput(),
+          right: f < 10,
+          action: f === 10,
+          skillY: f === 14,
+          pointerActive: true,
+          pointerX: 0.72,
+          pointerY: 0.25,
+        },
+        tplParams,
+      );
+    }
+    const tplSnap = rt.snapshot(tplParams);
+    check(
+      Boolean(tplSnap.hudPrimitives?.some((p) => p.kind === 'bar' || p.kind === 'box' || p.kind === 'aim_line')),
+      `Workshop template '${tplId}' must emit genreHud/aim_line primitives in snapshot.hudPrimitives`,
+    );
+    const s0 = rt.snapshot(tplParams);
+    const s1 = rt.snapshot(tplParams);
+    const s2 = rt.snapshot(tplParams);
+    check(
+      s0 === s2 && s0 !== s1,
+      `Workshop template '${tplId}' DataCartridgeRuntime must reuse ping-pong snapshot banks`,
+    );
   }
 
   // Verify multi-cartridge studio_* sprite isolation on mount & full deterministic PNG reload

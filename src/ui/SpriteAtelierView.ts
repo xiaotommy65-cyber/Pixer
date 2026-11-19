@@ -1,18 +1,22 @@
+import { BUILTIN_SPRITE_GRIDS } from '../assets/AtlasSpritesData.ts';
 import { PALETTE_THEMES } from '../assets/sprites/PaletteData.ts';
+import { PARKOUR_SPRITE_GRIDS } from '../assets/sprites/ParkourSprites.ts';
 import {
   DEFAULT_HERO_FRAME_A,
   DEFAULT_HERO_FRAME_B,
   parseGridToIndices,
   TILE_PX,
 } from '../assets/TextureAtlas.ts';
-import { BUILTIN_SPRITE_GRIDS } from '../assets/AtlasSpritesData.ts';
 import type { ToySynth } from '../core/audio/ToySynth.ts';
 import type { GpuEngine } from '../core/gpu/GpuEngine.ts';
+import { linearRgbToOklab, srgbToLinear } from '../core/math/ColorMath.ts';
 import type { SaveService } from '../core/runtime/SaveService.ts';
-import { drawIndexBufferToCanvas } from './MomoMascot.ts';
 import { btn, el } from './dom.ts';
 
 const HEX_DIGITS = '.123456789abcdef';
+const BOARD_CANVAS_PX = 384;
+const PREVIEW_CANVAS_PX = 96;
+const MAX_UNDO_STEPS = 20;
 
 export function indicesToGrid(buf: Uint8Array, w = TILE_PX, h = TILE_PX): string[] {
   const rows: string[] = [];
@@ -26,7 +30,9 @@ export function indicesToGrid(buf: Uint8Array, w = TILE_PX, h = TILE_PX): string
   return rows;
 }
 
-type SlotKey = 'hero' | 'custom_enemy' | 'custom_item' | 'custom_tile';
+type SlotKey = 'hero' | 'custom_enemy' | 'custom_item' | 'custom_tile' | 'studio_claw';
+type GridSize = 16 | 32;
+type PaintTool = 'pencil' | 'eraser' | 'fill' | 'eyedropper';
 
 interface StampDef {
   id: string;
@@ -119,10 +125,28 @@ const BEAR_PRESET_B: string[] = [
   '................',
 ];
 
+const BEVEL_PROMOTE_MAP: Readonly<Record<number, number>> = {
+  3: 2,
+  5: 4,
+  7: 6,
+  9: 8,
+  11: 10,
+  13: 12,
+  15: 14,
+};
+
 interface SlotState {
   label: string;
+  gridSize: GridSize;
   frameCount: 2 | 3 | 4;
   frames: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
+}
+
+interface UndoEntry {
+  slot: SlotKey;
+  frameIdx: number;
+  gridSize: GridSize;
+  data: Uint8Array;
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -131,6 +155,42 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+function resampleBuffer(src: Uint8Array, oldSize: GridSize, newSize: GridSize): Uint8Array {
+  if (oldSize === newSize) return new Uint8Array(src);
+  const dst = new Uint8Array(newSize * newSize);
+  if (newSize > oldSize) {
+    for (let y = 0; y < oldSize; y++) {
+      for (let x = 0; x < oldSize; x++) {
+        const v = src[y * oldSize + x] ?? 0;
+        const dx = x * 2;
+        const dy = y * 2;
+        dst[dy * newSize + dx] = v;
+        dst[dy * newSize + dx + 1] = v;
+        dst[(dy + 1) * newSize + dx] = v;
+        dst[(dy + 1) * newSize + dx + 1] = v;
+      }
+    }
+    return dst;
+  }
+  for (let y = 0; y < newSize; y++) {
+    for (let x = 0; x < newSize; x++) {
+      const sx = x * 2;
+      const sy = y * 2;
+      const a = src[sy * oldSize + sx] ?? 0;
+      const b = src[sy * oldSize + sx + 1] ?? 0;
+      const c = src[(sy + 1) * oldSize + sx] ?? 0;
+      const d = src[(sy + 1) * oldSize + sx + 1] ?? 0;
+      dst[y * newSize + x] = a || b || c || d;
+    }
+  }
+  return dst;
+}
+
+/**
+ * Pixel Studio 3.0: HTML5 Canvas pixel editor supporting 16x16 / 32x32 grids,
+ * 2-4 frame animation, onion skin, mirror-X, 20-step undo, auto-outline/bevel,
+ * PNG/AI image Oklab quantization import, and live HD-2D Auto-Sobel point-light preview.
+ */
 export class SpriteAtelierView {
   public readonly element: HTMLElement;
 
@@ -144,25 +204,50 @@ export class SpriteAtelierView {
   private activeFrameIdx = 0;
   private selectedColor = 4;
   private selectedThemeIdx = 0;
+  private activeTool: PaintTool = 'pencil';
   private activeStamp: StampDef | null = null;
-  private onionSkin = true;
+  private onionSkin = false;
   private mirrorX = false;
-  private fillMode = false;
   private isDrawing = false;
-  private undoSnapshot: { slot: SlotKey; frameIdx: number; data: Uint8Array } | null = null;
+  private activeStrokeEraser = false;
+  private hoverX = -1;
+  private hoverY = -1;
+  private undoStack: UndoEntry[] = [];
 
-  private cellEls: HTMLDivElement[] = [];
+  private boardCanvas: HTMLCanvasElement;
+  private boardCtx: CanvasRenderingContext2D | null;
   private paletteEls: HTMLButtonElement[] = [];
   private slotBtns = new Map<SlotKey, HTMLButtonElement>();
   private frameBtns: HTMLButtonElement[] = [];
   private frameCountSelect: HTMLSelectElement;
+  private sizeBtn: HTMLButtonElement;
   private themeSelect: HTMLSelectElement;
   private stampBtns = new Map<string, HTMLButtonElement>();
+  private pencilBtn: HTMLButtonElement;
+  private eraserBtn: HTMLButtonElement;
+  private fillBtn: HTMLButtonElement;
+  private eyedropBtn: HTMLButtonElement;
   private onionBtn: HTMLButtonElement;
   private mirrorBtn: HTMLButtonElement;
-  private fillBtn: HTMLButtonElement;
   private undoBtn: HTMLButtonElement;
+  private importInput: HTMLInputElement;
+  private importBtn: HTMLButtonElement;
+  private importStatusEl: HTMLElement;
   private previewCanvas: HTMLCanvasElement;
+  private previewCtx: CanvasRenderingContext2D | null;
+  private previewImgData: ImageData | null = null;
+  private lightCoordEl: HTMLElement;
+
+  private readonly texelHeightScratch = new Float32Array(32 * 32);
+  private readonly texelRgbScratch = new Uint8Array(32 * 32 * 4);
+  private readonly oklabPaletteScratch = new Float32Array(16 * 3);
+  private readonly okTmp = new Float32Array(3);
+
+  private lightNormX = -0.55;
+  private lightNormY = -0.65;
+  private lightAngle = -2.25;
+  private lightHover = false;
+  private lastLightReadout = '';
   private animPhase = 0;
   private editEpoch = 0;
   private readonly ac = new AbortController();
@@ -177,6 +262,7 @@ export class SpriteAtelierView {
     this.slots = {
       hero: {
         label: '🧑 主角',
+        gridSize: 16,
         frameCount: 2,
         frames: [
           this.gpu.atlas.heroPixelsA,
@@ -187,6 +273,7 @@ export class SpriteAtelierView {
       },
       custom_enemy: {
         label: '👾 自訂敵人',
+        gridSize: 16,
         frameCount: 2,
         frames: [
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.slime_a ?? DEFAULT_HERO_FRAME_A),
@@ -197,6 +284,7 @@ export class SpriteAtelierView {
       },
       custom_item: {
         label: '⭐ 自訂道具',
+        gridSize: 16,
         frameCount: 2,
         frames: [
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.star_a ?? DEFAULT_HERO_FRAME_A),
@@ -207,12 +295,24 @@ export class SpriteAtelierView {
       },
       custom_tile: {
         label: '🧱 自訂磚塊',
+        gridSize: 16,
         frameCount: 2,
         frames: [
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
+        ],
+      },
+      studio_claw: {
+        label: '🦾 飛鉤機爪',
+        gridSize: 16,
+        frameCount: 2,
+        frames: [
+          parseGridToIndices(PARKOUR_SPRITE_GRIDS.ik_claw),
+          parseGridToIndices(PARKOUR_SPRITE_GRIDS.grapple_claw),
+          parseGridToIndices(PARKOUR_SPRITE_GRIDS.ik_joint),
+          parseGridToIndices(PARKOUR_SPRITE_GRIDS.grapple_ring),
         ],
       },
     };
@@ -222,8 +322,8 @@ export class SpriteAtelierView {
     const head = el('div', 'studio-head');
     head.innerHTML = `
       <div>
-        <h2>🎨 精靈畫室（16×16 多槽位動畫工作台）</h2>
-        <p class="studio-sub">支援 2–4 幀洋蔥皮、8 組 LUT 發光主題與圖章，主角會即時同步 GPU 圖集，自訂槽位可打包進工坊卡匣！</p>
+        <h2>🎨 精靈畫室 3.0（16×16 / 32×32 HD-2D 像素工坊）</h2>
+        <p class="studio-sub">支援雙尺寸畫布、PNG/AI 圖片 Oklab 量化匯入、自動描邊立體化與即時法線點光源預覽！</p>
       </div>
     `;
 
@@ -246,8 +346,17 @@ export class SpriteAtelierView {
       slotRow.appendChild(b);
     });
 
-    // Frame count + 4 frame tabs + Onion skin
+    // Frame count + 4 frame tabs + Size toggle + Onion skin
     const frameBar = el('div', 'tool-row');
+    this.sizeBtn = btn(
+      'toy-btn is-mint',
+      '📐 16×16',
+      '切換目前槽位解析度：16×16 ⇄ 32×32（自動雙倍像素縮放保留）',
+      () => this.toggleSlotGridSize(),
+      this.ac.signal,
+    );
+    frameBar.appendChild(this.sizeBtn);
+
     this.frameCountSelect = el('select', 'atelier-select');
     this.frameCountSelect.title = '動畫總幀數';
     for (const n of [2, 3, 4] as const) {
@@ -287,7 +396,7 @@ export class SpriteAtelierView {
     });
 
     this.onionBtn = btn(
-      'toy-btn is-active',
+      'toy-btn',
       '🧅 洋蔥皮',
       '在背景半透明顯示前一幀參考線（不寫入紋理）',
       () => {
@@ -303,70 +412,143 @@ export class SpriteAtelierView {
 
     const layout = el('div', 'atelier-grid-layout');
 
-    // 16x16 Pixel Canvas Grid
-    const board = el('div', 'pixel-board');
+    // Interactive Canvas Drawing Surface
+    const boardWrap = el('div', 'atelier-workbench-panel');
+    this.boardCanvas = el('canvas', 'atelier-pixel-canvas');
+    this.boardCanvas.width = BOARD_CANVAS_PX;
+    this.boardCanvas.height = BOARD_CANVAS_PX;
+    this.boardCtx = this.boardCanvas.getContext('2d');
+    boardWrap.appendChild(this.boardCanvas);
+
     let lastPaintedKey = -1;
     const stopDrawing = () => {
       this.isDrawing = false;
+      this.activeStrokeEraser = false;
       lastPaintedKey = -1;
     };
-    const paintFromEvent = (clientX: number, clientY: number) => {
-      const rect = board.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      const x = Math.floor(((clientX - rect.left) / rect.width) * TILE_PX);
-      const y = Math.floor(((clientY - rect.top) / rect.height) * TILE_PX);
-      if (x < 0 || x >= TILE_PX || y < 0 || y >= TILE_PX) return;
-      const key = y * TILE_PX + x;
-      if (key === lastPaintedKey) return;
-      lastPaintedKey = key;
-      this.applyPaintAt(x, y);
+
+    const resolveCellFromClient = (clientX: number, clientY: number): { x: number; y: number } | null => {
+      const rect = this.boardCanvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      const n = this.slots[this.activeSlot].gridSize;
+      const x = Math.floor(((clientX - rect.left) / rect.width) * n);
+      const y = Math.floor(((clientY - rect.top) / rect.height) * n);
+      if (x < 0 || x >= n || y < 0 || y >= n) return null;
+      return { x, y };
     };
 
-    board.addEventListener(
+    const paintFromEvent = (clientX: number, clientY: number, altKey: boolean, rightBtn: boolean) => {
+      const cell = resolveCellFromClient(clientX, clientY);
+      if (!cell) return;
+      const n = this.slots[this.activeSlot].gridSize;
+      const key = cell.y * n + cell.x;
+      if (key === lastPaintedKey) return;
+      lastPaintedKey = key;
+
+      if (altKey || this.activeTool === 'eyedropper') {
+        this.pickColorAt(cell.x, cell.y);
+        return;
+      }
+      this.applyPaintAt(cell.x, cell.y, rightBtn || this.activeStrokeEraser);
+    };
+
+    this.boardCanvas.addEventListener(
       'pointerdown',
       (e) => {
         e.preventDefault();
         this.synth.unlock();
+        const rightBtn = e.button === 2 || (e.buttons & 2) !== 0;
+        if (e.altKey || this.activeTool === 'eyedropper') {
+          const cell = resolveCellFromClient(e.clientX, e.clientY);
+          if (cell) this.pickColorAt(cell.x, cell.y);
+          return;
+        }
         this.saveUndoSnapshot();
         this.isDrawing = true;
+        this.activeStrokeEraser = rightBtn;
         lastPaintedKey = -1;
         try {
-          board.setPointerCapture(e.pointerId);
+          this.boardCanvas.setPointerCapture(e.pointerId);
         } catch {
-          // Safe fallback if pointer capture is unavailable
+          // Safe fallback when synthetic events lack active pointerId
         }
-        paintFromEvent(e.clientX, e.clientY);
+        paintFromEvent(e.clientX, e.clientY, e.altKey, rightBtn);
       },
       { signal: this.ac.signal },
     );
-    board.addEventListener(
+
+    this.boardCanvas.addEventListener(
       'pointermove',
       (e) => {
-        if (!this.isDrawing || this.fillMode || this.activeStamp) return;
-        paintFromEvent(e.clientX, e.clientY);
+        const cell = resolveCellFromClient(e.clientX, e.clientY);
+        const nx = cell ? cell.x : -1;
+        const ny = cell ? cell.y : -1;
+        if (nx !== this.hoverX || ny !== this.hoverY) {
+          this.hoverX = nx;
+          this.hoverY = ny;
+          if (!this.isDrawing) this.renderBoard();
+        }
+        if (!this.isDrawing || this.activeTool === 'fill' || this.activeStamp) return;
+        paintFromEvent(e.clientX, e.clientY, e.altKey, (e.buttons & 2) !== 0);
       },
       { signal: this.ac.signal },
     );
-    board.addEventListener('pointercancel', stopDrawing, { signal: this.ac.signal });
-    board.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
+
+    this.boardCanvas.addEventListener(
+      'pointerleave',
+      () => {
+        if (this.hoverX !== -1 || this.hoverY !== -1) {
+          this.hoverX = -1;
+          this.hoverY = -1;
+          this.renderBoard();
+        }
+      },
+      { signal: this.ac.signal },
+    );
+
+    this.boardCanvas.addEventListener('contextmenu', (e) => e.preventDefault(), { signal: this.ac.signal });
+    this.boardCanvas.addEventListener('pointercancel', stopDrawing, { signal: this.ac.signal });
+    this.boardCanvas.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
     window.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
     window.addEventListener('blur', stopDrawing, { signal: this.ac.signal });
-
-    for (let i = 0; i < TILE_PX * TILE_PX; i++) {
-      this.cellEls.push(el('div', 'pixel-cell'));
-    }
-    board.append(...this.cellEls);
 
     // Sidebar controls
     const sidebar = el('div', 'atelier-sidebar');
 
-    const previewStrip = el('div', 'preview-strip');
-    this.previewCanvas = el('canvas', 'preview-canvas');
-    this.previewCanvas.width = 16;
-    this.previewCanvas.height = 16;
-    const previewInfo = el('div');
-    previewInfo.innerHTML =
-      '<strong>即時動畫預覽</strong><div class="studio-sub">自動循環播放目前槽位影格</div>';
+    // Interactive 96x96 HD-2D Normal + Point-Light Preview Card
+    const previewCard = el('div', 'atelier-preview-card');
+    this.previewCanvas = el('canvas', 'atelier-preview-canvas');
+    this.previewCanvas.width = PREVIEW_CANVAS_PX;
+    this.previewCanvas.height = PREVIEW_CANVAS_PX;
+    this.previewCtx = this.previewCanvas.getContext('2d');
+    if (this.previewCtx) {
+      this.previewImgData = this.previewCtx.createImageData(PREVIEW_CANVAS_PX, PREVIEW_CANVAS_PX);
+    }
+
+    this.previewCanvas.addEventListener(
+      'pointermove',
+      (e) => {
+        const rect = this.previewCanvas.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        this.lightHover = true;
+        this.lightNormX = Math.max(-1, Math.min(1, ((e.clientX - rect.left) / rect.width) * 2 - 1));
+        this.lightNormY = Math.max(-1, Math.min(1, ((e.clientY - rect.top) / rect.height) * 2 - 1));
+        this.lightAngle = Math.atan2(this.lightNormY, this.lightNormX);
+        this.updateLightReadout();
+      },
+      { passive: true, signal: this.ac.signal },
+    );
+    this.previewCanvas.addEventListener(
+      'pointerleave',
+      () => {
+        this.lightHover = false;
+      },
+      { signal: this.ac.signal },
+    );
+
+    const previewMeta = el('div', 'atelier-preview-meta');
+    const previewTitle = el('strong', undefined, 'HD-2D 即時法線打光預覽');
+    this.lightCoordEl = el('div', 'atelier-light-readout', '光源角度 -130° (-0.55, -0.65)');
 
     this.themeSelect = el('select', 'atelier-select');
     this.themeSelect.title = '切換 8 組 LUT 主題預設';
@@ -385,7 +567,8 @@ export class SpriteAtelierView {
       },
       { signal: this.ac.signal },
     );
-    previewStrip.append(this.previewCanvas, previewInfo, this.themeSelect);
+    previewMeta.append(previewTitle, this.lightCoordEl, this.themeSelect);
+    previewCard.append(this.previewCanvas, previewMeta);
 
     // 16-Color LUT Palette (14..15 marked as Bloom glow)
     const paletteGrid = el('div', 'palette-grid');
@@ -398,6 +581,8 @@ export class SpriteAtelierView {
         () => {
           this.selectedColor = idx;
           this.activeStamp = null;
+          if (idx === 0) this.activeTool = 'eraser';
+          else if (this.activeTool === 'eraser' || this.activeTool === 'eyedropper') this.activeTool = 'pencil';
           this.syncPaletteSelection();
           this.syncToolbarState();
         },
@@ -407,8 +592,52 @@ export class SpriteAtelierView {
       paletteGrid.appendChild(chip);
     }
 
-    // Paint Tools
-    const tools = el('div', 'tool-row');
+    // Core Studio Tools
+    const tools = el('div', 'tool-row atelier-tool-group');
+    this.pencilBtn = btn(
+      'toy-btn is-active',
+      '✏️ 畫筆',
+      undefined,
+      () => {
+        this.activeTool = 'pencil';
+        this.activeStamp = null;
+        this.syncToolbarState();
+      },
+      this.ac.signal,
+    );
+    this.eraserBtn = btn(
+      'toy-btn',
+      '🧽 橡皮',
+      '切換橡皮擦工具（亦可於畫布上按右鍵擦除）',
+      () => {
+        this.activeTool = 'eraser';
+        this.activeStamp = null;
+        this.syncToolbarState();
+      },
+      this.ac.signal,
+    );
+    this.fillBtn = btn(
+      'toy-btn',
+      '🪣 油漆桶',
+      undefined,
+      () => {
+        this.activeTool = this.activeTool === 'fill' ? 'pencil' : 'fill';
+        this.activeStamp = null;
+        this.syncToolbarState();
+      },
+      this.ac.signal,
+    );
+    this.eyedropBtn = btn(
+      'toy-btn',
+      '💧 吸色',
+      '點擊畫布吸取色號（亦可按住 Alt 點擊）',
+      () => {
+        this.activeTool = this.activeTool === 'eyedropper' ? 'pencil' : 'eyedropper';
+        this.activeStamp = null;
+        this.syncToolbarState();
+      },
+      this.ac.signal,
+    );
     this.mirrorBtn = btn(
       'toy-btn',
       '🪞 左右對稱',
@@ -419,21 +648,10 @@ export class SpriteAtelierView {
       },
       this.ac.signal,
     );
-    this.fillBtn = btn(
-      'toy-btn',
-      '🪣 油漆桶',
-      undefined,
-      () => {
-        this.fillMode = !this.fillMode;
-        this.activeStamp = null;
-        this.syncToolbarState();
-      },
-      this.ac.signal,
-    );
     this.undoBtn = btn(
       'toy-btn',
       '↩ 復原',
-      '單步復原上一次筆畫／圖章／填色',
+      '最多支援 20 步復原',
       () => this.undoLastEdit(),
       this.ac.signal,
     );
@@ -451,7 +669,48 @@ export class SpriteAtelierView {
       },
       this.ac.signal,
     );
-    tools.append(this.mirrorBtn, this.fillBtn, this.undoBtn, copyPrevBtn);
+    tools.append(
+      this.pencilBtn,
+      this.eraserBtn,
+      this.fillBtn,
+      this.eyedropBtn,
+      this.mirrorBtn,
+      this.undoBtn,
+      copyPrevBtn,
+    );
+
+    // Pro Actions: Auto-Outline/Bevel + PNG/AI Image Import
+    const proRow = el('div', 'tool-row atelier-tool-group');
+    const autoOutlineBtn = btn(
+      'toy-btn is-honey',
+      '✨ 自動描邊立體化',
+      '為目前圖層加上 1px 深色輪廓並提亮左上方高光邊緣',
+      () => this.applyAutoOutlineAndBevel(),
+      this.ac.signal,
+    );
+
+    this.importInput = el('input', 'panel-hidden');
+    this.importInput.type = 'file';
+    this.importInput.accept = 'image/png,image/webp,image/jpeg';
+    this.importInput.addEventListener(
+      'change',
+      () => {
+        const file = this.importInput.files?.[0];
+        this.importInput.value = '';
+        if (file) void this.importImageFile(file);
+      },
+      { signal: this.ac.signal },
+    );
+
+    this.importBtn = btn(
+      'toy-btn is-mint',
+      '📥 匯入 PNG / AI 圖',
+      '自動去背裁切並以 Oklab 感知色距量化至 Toybox 16 色盤',
+      () => this.importInput.click(),
+      this.ac.signal,
+    );
+    this.importStatusEl = el('span', 'studio-sub');
+    proRow.append(autoOutlineBtn, this.importBtn, this.importInput, this.importStatusEl);
 
     // 6 Pixel Stamps
     const stampRow = el('div', 'tool-row');
@@ -462,7 +721,7 @@ export class SpriteAtelierView {
         `點擊畫布蓋上「${stamp.label}」像素圖章`,
         () => {
           this.activeStamp = this.activeStamp?.id === stamp.id ? null : stamp;
-          this.fillMode = false;
+          if (this.activeStamp && this.activeTool === 'fill') this.activeTool = 'pencil';
           this.syncToolbarState();
         },
         this.ac.signal,
@@ -471,7 +730,7 @@ export class SpriteAtelierView {
       stampRow.appendChild(sBtn);
     }
 
-    // Hero Presets
+    // 4 Hero Presets
     const presetRow = el('div', 'tool-row');
     const addPresetBtn = (label: string, gridA: string[], gridB: string[]) => {
       presetRow.appendChild(
@@ -484,9 +743,10 @@ export class SpriteAtelierView {
             this.synth.playPreset('star');
             this.activeSlot = 'hero';
             this.saveUndoSnapshot();
+            this.ensureHeroSize16();
             parseGridToIndices(gridA, this.slots.hero.frames[0]);
             parseGridToIndices(gridB, this.slots.hero.frames[1]);
-            this.commitAtlasUpdate();
+            this.commitAtlasUpdate(true);
             this.syncToolbarState();
             this.renderBoard();
           },
@@ -497,19 +757,24 @@ export class SpriteAtelierView {
     addPresetBtn('🌱 嫩芽騎士', DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B);
     addPresetBtn('🍓 草莓小兔', BUNNY_PRESET_A, BUNNY_PRESET_B);
     addPresetBtn('🍯 蜂蜜小熊', BEAR_PRESET_A, BEAR_PRESET_B);
+    addPresetBtn('🧣 緋空跑酷俠', PARKOUR_SPRITE_GRIDS.parkour_hero_idle, PARKOUR_SPRITE_GRIDS.parkour_hero_dash);
 
-    sidebar.append(previewStrip, paletteGrid, tools, stampRow, presetRow);
-    layout.append(board, sidebar);
+    sidebar.append(previewCard, paletteGrid, tools, proRow, stampRow, presetRow);
+    layout.append(boardWrap, sidebar);
     this.element.append(head, layout);
 
     this.syncPaletteColors();
     this.syncPaletteSelection();
     this.syncToolbarState();
+    this.updateLightReadout();
     this.renderBoard();
   }
 
   public destroy(): void {
     this.isDrawing = false;
+    this.activeStrokeEraser = false;
+    this.previewImgData = null;
+    this.undoStack.length = 0;
     this.ac.abort();
   }
 
@@ -521,7 +786,7 @@ export class SpriteAtelierView {
     return this.editEpoch;
   }
 
-  /** Packages current Sprite Studio slots into CartridgeJsonV1.sprites grids. */
+  /** Packages current Sprite Studio slots into CartridgeJsonV1.sprites grids (16x16 or 32x32). */
   public exportCartridgeSprites(): Record<string, string[]> {
     const out: Record<string, string[]> = {};
     const prefixMap: Record<SlotKey, string> = {
@@ -529,6 +794,7 @@ export class SpriteAtelierView {
       custom_enemy: 'studio_enemy',
       custom_item: 'studio_item',
       custom_tile: 'studio_tile',
+      studio_claw: 'studio_claw',
     };
     const suffixes = ['a', 'b', 'c', 'd'];
     for (const key of Object.keys(this.slots) as SlotKey[]) {
@@ -536,7 +802,10 @@ export class SpriteAtelierView {
       const count = key === 'custom_tile' ? 1 : slot.frameCount;
       for (let i = 0; i < count; i++) {
         const sid = key === 'custom_tile' ? prefixMap[key] : `${prefixMap[key]}_${suffixes[i]}`;
-        out[sid] = indicesToGrid(slot.frames[i]);
+        out[sid] = indicesToGrid(slot.frames[i], slot.gridSize, slot.gridSize);
+      }
+      if (key === 'studio_claw') {
+        out.studio_claw = indicesToGrid(slot.frames[0], slot.gridSize, slot.gridSize);
       }
     }
     return out;
@@ -546,29 +815,88 @@ export class SpriteAtelierView {
     return this.slots[this.activeSlot].frames[this.activeFrameIdx];
   }
 
-  private saveUndoSnapshot(): void {
-    this.undoSnapshot = {
-      slot: this.activeSlot,
-      frameIdx: this.activeFrameIdx,
-      data: new Uint8Array(this.getCurrentBuffer()),
-    };
-    this.undoBtn.disabled = false;
+  private ensureHeroSize16(): void {
+    const hero = this.slots.hero;
+    if (hero.gridSize === 16) return;
+    const f0 = resampleBuffer(hero.frames[0], 32, 16);
+    const f1 = resampleBuffer(hero.frames[1], 32, 16);
+    const f2 = resampleBuffer(hero.frames[2], 32, 16);
+    const f3 = resampleBuffer(hero.frames[3], 32, 16);
+    this.gpu.atlas.heroPixelsA.set(f0);
+    this.gpu.atlas.heroPixelsB.set(f1);
+    hero.gridSize = 16;
+    hero.frames = [this.gpu.atlas.heroPixelsA, this.gpu.atlas.heroPixelsB, f2, f3];
   }
 
-  private undoLastEdit(): void {
-    if (!this.undoSnapshot) return;
-    const snap = this.undoSnapshot;
-    this.activeSlot = snap.slot;
-    this.activeFrameIdx = snap.frameIdx;
-    this.slots[snap.slot].frames[snap.frameIdx].set(snap.data);
-    this.undoSnapshot = null;
-    this.synth.playPreset('snap');
-    this.commitAtlasUpdate();
+  private applySlotGridSize(slotKey: SlotKey, targetSize: GridSize): void {
+    const slot = this.slots[slotKey];
+    if (slot.gridSize === targetSize) return;
+    if (slotKey === 'hero' && targetSize === 16) {
+      this.ensureHeroSize16();
+      return;
+    }
+    const oldSize = slot.gridSize;
+    slot.frames = [
+      resampleBuffer(slot.frames[0], oldSize, targetSize),
+      resampleBuffer(slot.frames[1], oldSize, targetSize),
+      resampleBuffer(slot.frames[2], oldSize, targetSize),
+      resampleBuffer(slot.frames[3], oldSize, targetSize),
+    ];
+    slot.gridSize = targetSize;
+  }
+
+  private toggleSlotGridSize(): void {
+    const slot = this.slots[this.activeSlot];
+    const nextSize: GridSize = slot.gridSize === 16 ? 32 : 16;
+    this.saveUndoSnapshot();
+    this.applySlotGridSize(this.activeSlot, nextSize);
+    this.synth.unlock();
+    this.synth.playPreset('bounce');
+    this.commitAtlasUpdate(true);
     this.syncToolbarState();
     this.renderBoard();
   }
 
+  private saveUndoSnapshot(): void {
+    const slot = this.slots[this.activeSlot];
+    this.undoStack.push({
+      slot: this.activeSlot,
+      frameIdx: this.activeFrameIdx,
+      gridSize: slot.gridSize,
+      data: new Uint8Array(this.getCurrentBuffer()),
+    });
+    if (this.undoStack.length > MAX_UNDO_STEPS) {
+      this.undoStack.shift();
+    }
+    this.undoBtn.disabled = false;
+  }
+
+  private undoLastEdit(): void {
+    const snap = this.undoStack.pop();
+    if (!snap) return;
+    this.activeSlot = snap.slot;
+    this.activeFrameIdx = snap.frameIdx;
+    this.applySlotGridSize(snap.slot, snap.gridSize);
+    this.slots[snap.slot].frames[snap.frameIdx].set(snap.data);
+    this.synth.playPreset('snap');
+    this.commitAtlasUpdate(true);
+    this.syncToolbarState();
+    this.renderBoard();
+  }
+
+  private pickColorAt(x: number, y: number): void {
+    const n = this.slots[this.activeSlot].gridSize;
+    const idx = this.getCurrentBuffer()[y * n + x] ?? 0;
+    this.selectedColor = idx;
+    this.activeStamp = null;
+    this.activeTool = idx === 0 ? 'eraser' : 'pencil';
+    this.synth.playPreset('snap');
+    this.syncPaletteSelection();
+    this.syncToolbarState();
+  }
+
   private applyStampAt(buf: Uint8Array, cx: number, cy: number, stamp: StampDef): void {
+    const n = this.slots[this.activeSlot].gridSize;
     const sh = stamp.grid.length;
     const sw = stamp.grid[0]?.length ?? 0;
     const ox = cx - Math.floor(sw / 2);
@@ -580,28 +908,30 @@ export class SpriteAtelierView {
         if (colorIdx === 0) continue;
         const tx = ox + x;
         const ty = oy + y;
-        if (tx >= 0 && tx < TILE_PX && ty >= 0 && ty < TILE_PX) {
-          buf[ty * TILE_PX + tx] = colorIdx;
+        if (tx >= 0 && tx < n && ty >= 0 && ty < n) {
+          buf[ty * n + tx] = colorIdx;
           if (this.mirrorX) {
-            buf[ty * TILE_PX + (TILE_PX - 1 - tx)] = colorIdx;
+            buf[ty * n + (n - 1 - tx)] = colorIdx;
           }
         }
       }
     }
   }
 
-  private applyPaintAt(x: number, y: number): void {
+  private applyPaintAt(x: number, y: number, forceErase = false): void {
     const buf = this.getCurrentBuffer();
-    if (this.activeStamp) {
+    const n = this.slots[this.activeSlot].gridSize;
+    if (this.activeStamp && !forceErase) {
       this.applyStampAt(buf, x, y, this.activeStamp);
       this.synth.playPreset('star');
-    } else if (this.fillMode) {
-      this.floodFill(buf, x, y, this.selectedColor);
+    } else if (this.activeTool === 'fill' && !forceErase) {
+      this.floodFill(buf, n, x, y, this.selectedColor);
       this.synth.playPreset('bounce');
     } else {
-      buf[y * TILE_PX + x] = this.selectedColor;
+      const paintIdx = forceErase || this.activeTool === 'eraser' ? 0 : this.selectedColor;
+      buf[y * n + x] = paintIdx;
       if (this.mirrorX) {
-        buf[y * TILE_PX + (TILE_PX - 1 - x)] = this.selectedColor;
+        buf[y * n + (n - 1 - x)] = paintIdx;
       }
       this.synth.playPreset('snap');
     }
@@ -609,25 +939,269 @@ export class SpriteAtelierView {
     this.renderBoard();
   }
 
-  private floodFill(buf: Uint8Array, sx: number, sy: number, targetColor: number): void {
-    const orig = buf[sy * TILE_PX + sx];
+  private floodFill(buf: Uint8Array, n: number, sx: number, sy: number, targetColor: number): void {
+    const orig = buf[sy * n + sx];
     if (orig === targetColor) return;
     const queue: [number, number][] = [[sx, sy]];
     while (queue.length > 0) {
       const [cx, cy] = queue.pop()!;
-      const idx = cy * TILE_PX + cx;
+      const idx = cy * n + cx;
       if (buf[idx] !== orig) continue;
       buf[idx] = targetColor;
       if (cx > 0) queue.push([cx - 1, cy]);
-      if (cx < TILE_PX - 1) queue.push([cx + 1, cy]);
+      if (cx < n - 1) queue.push([cx + 1, cy]);
       if (cy > 0) queue.push([cx, cy - 1]);
-      if (cy < TILE_PX - 1) queue.push([cx, cy + 1]);
+      if (cy < n - 1) queue.push([cx, cy + 1]);
     }
   }
 
-  private commitAtlasUpdate(): void {
+  private applyAutoOutlineAndBevel(): void {
+    const n = this.slots[this.activeSlot].gridSize;
+    const buf = this.getCurrentBuffer();
+    this.saveUndoSnapshot();
+    const snap = new Uint8Array(buf);
+    let changed = false;
+
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x;
+        if (snap[i] !== 0) continue;
+        const up = y > 0 ? snap[(y - 1) * n + x] : 0;
+        const dn = y < n - 1 ? snap[(y + 1) * n + x] : 0;
+        const lf = x > 0 ? snap[y * n + x - 1] : 0;
+        const rt = x < n - 1 ? snap[y * n + x + 1] : 0;
+        if (up > 1 || dn > 1 || lf > 1 || rt > 1) {
+          buf[i] = 1;
+          changed = true;
+        }
+      }
+    }
+
+    const postOutline = new Uint8Array(buf);
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const i = y * n + x;
+        const cur = postOutline[i];
+        if (cur <= 1) continue;
+        const up = y > 0 ? postOutline[(y - 1) * n + x] : 0;
+        const lf = x > 0 ? postOutline[y * n + x - 1] : 0;
+        const dn = y < n - 1 ? postOutline[(y + 1) * n + x] : 0;
+        const rt = x < n - 1 ? postOutline[y * n + x + 1] : 0;
+        const exposedTopLeft = up <= 1 || lf <= 1;
+        const supportedBotRight = dn > 1 || rt > 1;
+        if (exposedTopLeft && supportedBotRight) {
+          const promoted = BEVEL_PROMOTE_MAP[cur];
+          if (promoted !== undefined) {
+            buf[i] = promoted;
+            changed = true;
+          }
+        }
+      }
+    }
+
+    if (changed) {
+      this.synth.unlock();
+      this.synth.playPreset('star');
+      this.commitAtlasUpdate();
+      this.renderBoard();
+    } else {
+      this.undoStack.pop();
+      this.syncToolbarState();
+    }
+  }
+
+  private async importImageFile(file: File): Promise<void> {
+    this.importStatusEl.textContent = '量化中…';
+    try {
+      const loaded = await this.loadImageSource(file);
+      if (!loaded) {
+        this.importStatusEl.textContent = '無法讀取圖片';
+        return;
+      }
+
+      const maxDim = 256;
+      const scale = Math.min(1, maxDim / Math.max(1, Math.max(loaded.w, loaded.h)));
+      const sw = Math.max(1, Math.round(loaded.w * scale));
+      const sh = Math.max(1, Math.round(loaded.h * scale));
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = sw;
+      srcCanvas.height = sh;
+      const srcCtx = srcCanvas.getContext('2d');
+      if (!srcCtx) return;
+      srcCtx.imageSmoothingEnabled = true;
+      srcCtx.drawImage(loaded.img, 0, 0, sw, sh);
+      loaded.cleanup();
+
+      const srcImg = srcCtx.getImageData(0, 0, sw, sh);
+      const px = srcImg.data;
+
+      // Auto-remove uniform opaque edge background via corner flood-fill when corners match
+      const cTL = 0;
+      const cTR = (sw - 1) * 4;
+      const cBL = (sh - 1) * sw * 4;
+      const cBR = (sh * sw - 1) * 4;
+      const allOpaqueCorners = px[cTL + 3] > 200 && px[cTR + 3] > 200 && px[cBL + 3] > 200 && px[cBR + 3] > 200;
+      if (allOpaqueCorners) {
+        const bgR = px[cTL];
+        const bgG = px[cTL + 1];
+        const bgB = px[cTL + 2];
+        const closeToBg = (off: number) =>
+          Math.abs(px[off] - bgR) + Math.abs(px[off + 1] - bgG) + Math.abs(px[off + 2] - bgB) < 60;
+        if (closeToBg(cTR) && closeToBg(cBL) && closeToBg(cBR)) {
+          const visited = new Uint8Array(sw * sh);
+          const stack: number[] = [];
+          for (let x = 0; x < sw; x++) {
+            stack.push(x, (sh - 1) * sw + x);
+          }
+          for (let y = 1; y < sh - 1; y++) {
+            stack.push(y * sw, y * sw + sw - 1);
+          }
+          while (stack.length > 0) {
+            const p = stack.pop()!;
+            if (visited[p]) continue;
+            visited[p] = 1;
+            const off = p * 4;
+            if (!closeToBg(off)) continue;
+            px[off + 3] = 0;
+            const cx = p % sw;
+            const cy = Math.floor(p / sw);
+            if (cx > 0) stack.push(p - 1);
+            if (cx < sw - 1) stack.push(p + 1);
+            if (cy > 0) stack.push(p - sw);
+            if (cy < sh - 1) stack.push(p + sw);
+          }
+          srcCtx.putImageData(srcImg, 0, 0);
+        }
+      }
+
+      // Compute tight bounding box of opaque pixels
+      let minX = sw;
+      let minY = sh;
+      let maxX = -1;
+      let maxY = -1;
+      for (let y = 0; y < sh; y++) {
+        for (let x = 0; x < sw; x++) {
+          if (px[(y * sw + x) * 4 + 3] >= 48) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (maxX < minX || maxY < minY) {
+        this.importStatusEl.textContent = '圖片完全透明';
+        return;
+      }
+
+      const n = this.slots[this.activeSlot].gridSize;
+      const dstCanvas = document.createElement('canvas');
+      dstCanvas.width = n;
+      dstCanvas.height = n;
+      const dstCtx = dstCanvas.getContext('2d');
+      if (!dstCtx) return;
+
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+      const fitScale = Math.min(n / cropW, n / cropH);
+      const dw = Math.max(1, Math.round(cropW * fitScale));
+      const dh = Math.max(1, Math.round(cropH * fitScale));
+      const dx = Math.floor((n - dw) * 0.5);
+      const dy = Math.floor((n - dh) * 0.5);
+      dstCtx.imageSmoothingEnabled = Math.max(cropW, cropH) > n * 2;
+      dstCtx.drawImage(srcCanvas, minX, minY, cropW, cropH, dx, dy, dw, dh);
+      const qData = dstCtx.getImageData(0, 0, n, n).data;
+
+      // Precompute Oklab coordinates for active LUT theme indices 1..15
+      const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
+      for (let idx = 1; idx < 16; idx++) {
+        const [pr, pg, pb] = hexToRgb(theme.colors[idx] ?? '#ffffff');
+        linearRgbToOklab(
+          srgbToLinear(pr / 255),
+          srgbToLinear(pg / 255),
+          srgbToLinear(pb / 255),
+          this.oklabPaletteScratch,
+          idx * 3,
+        );
+      }
+
+      this.saveUndoSnapshot();
+      const targetBuf = this.getCurrentBuffer();
+      for (let i = 0; i < n * n; i++) {
+        const off = i * 4;
+        if (qData[off + 3] < 96) {
+          targetBuf[i] = 0;
+          continue;
+        }
+        linearRgbToOklab(
+          srgbToLinear(qData[off] / 255),
+          srgbToLinear(qData[off + 1] / 255),
+          srgbToLinear(qData[off + 2] / 255),
+          this.okTmp,
+          0,
+        );
+        let bestIdx = 1;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (let idx = 1; idx < 16; idx++) {
+          const pOff = idx * 3;
+          const dL = (this.okTmp[0] - this.oklabPaletteScratch[pOff]) * 1.25;
+          const da = this.okTmp[1] - this.oklabPaletteScratch[pOff + 1];
+          const db = this.okTmp[2] - this.oklabPaletteScratch[pOff + 2];
+          const d2 = dL * dL + da * da + db * db;
+          if (d2 < bestDist) {
+            bestDist = d2;
+            bestIdx = idx;
+          }
+        }
+        targetBuf[i] = bestIdx;
+      }
+
+      this.synth.unlock();
+      this.synth.playPreset('star');
+      this.commitAtlasUpdate();
+      this.syncToolbarState();
+      this.renderBoard();
+      this.importStatusEl.textContent = `已匯入 ${n}×${n} Oklab 量化`;
+    } catch {
+      this.importStatusEl.textContent = '圖片解析失敗';
+    }
+  }
+
+  private async loadImageSource(
+    file: File,
+  ): Promise<{ img: CanvasImageSource; w: number; h: number; cleanup: () => void } | null> {
+    if (typeof createImageBitmap === 'function') {
+      const bmp = await createImageBitmap(file);
+      return { img: bmp, w: bmp.width, h: bmp.height, cleanup: () => bmp.close() };
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const elImg = new Image();
+        elImg.onload = () => resolve(elImg);
+        elImg.onerror = () => reject(new Error('Image load failed'));
+        elImg.src = url;
+      });
+      return {
+        img,
+        w: img.naturalWidth || img.width,
+        h: img.naturalHeight || img.height,
+        cleanup: () => URL.revokeObjectURL(url),
+      };
+    } catch {
+      URL.revokeObjectURL(url);
+      return null;
+    }
+  }
+
+  private commitAtlasUpdate(forceHeroSync = false): void {
     this.editEpoch++;
-    if (this.activeSlot === 'hero' && (this.activeFrameIdx === 0 || this.activeFrameIdx === 1)) {
+    const hero = this.slots.hero;
+    if (
+      this.activeSlot === 'hero' &&
+      hero.gridSize === 16 &&
+      (forceHeroSync || this.activeFrameIdx === 0 || this.activeFrameIdx === 1)
+    ) {
       this.gpu.atlas.syncHeroSlots();
       this.gpu.syncAtlasToGpu();
       this.save.saveHeroSprites(this.gpu.atlas.heroPixelsA, this.gpu.atlas.heroPixelsB);
@@ -670,49 +1244,232 @@ export class SpriteAtelierView {
     for (const [key, b] of this.slotBtns.entries()) {
       b.classList.toggle('is-active', key === this.activeSlot);
     }
+    this.sizeBtn.textContent = `📐 ${slot.gridSize}×${slot.gridSize}`;
+    this.sizeBtn.classList.toggle('is-active', slot.gridSize === 32);
     this.frameCountSelect.value = String(slot.frameCount);
     this.frameBtns.forEach((b, i) => {
       b.classList.toggle('panel-hidden', i >= slot.frameCount);
       b.classList.toggle('is-active', i === this.activeFrameIdx);
     });
+    this.pencilBtn.classList.toggle('is-active', this.activeTool === 'pencil' && !this.activeStamp);
+    this.eraserBtn.classList.toggle('is-active', this.activeTool === 'eraser' && !this.activeStamp);
+    this.fillBtn.classList.toggle('is-active', this.activeTool === 'fill' && !this.activeStamp);
+    this.eyedropBtn.classList.toggle('is-active', this.activeTool === 'eyedropper' && !this.activeStamp);
     this.onionBtn.classList.toggle('is-active', this.onionSkin);
     this.mirrorBtn.classList.toggle('is-active', this.mirrorX);
-    this.fillBtn.classList.toggle('is-active', this.fillMode);
-    this.undoBtn.disabled = !this.undoSnapshot;
+    this.undoBtn.disabled = this.undoStack.length === 0;
     for (const [id, b] of this.stampBtns.entries()) {
       b.classList.toggle('is-active', this.activeStamp?.id === id);
     }
   }
 
+  private updateLightReadout(): void {
+    const deg = Math.round((this.lightAngle * 180) / Math.PI);
+    const next = `光源角度 ${deg}° (${this.lightNormX.toFixed(2)}, ${this.lightNormY.toFixed(2)})`;
+    if (next !== this.lastLightReadout) {
+      this.lastLightReadout = next;
+      this.lightCoordEl.textContent = next;
+    }
+  }
+
   public renderBoard(): void {
+    const ctx = this.boardCtx;
+    if (!ctx) return;
+
     const slot = this.slots[this.activeSlot];
+    const n = slot.gridSize;
+    const cellPx = BOARD_CANVAS_PX / n;
     const buf = this.getCurrentBuffer();
     const prevIdx = (this.activeFrameIdx - 1 + slot.frameCount) % slot.frameCount;
-    const prevBuf = this.onionSkin && slot.frameCount > 1 && prevIdx !== this.activeFrameIdx ? slot.frames[prevIdx] : null;
+    const prevBuf =
+      this.onionSkin && slot.frameCount > 1 && prevIdx !== this.activeFrameIdx ? slot.frames[prevIdx] : null;
     const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
 
-    for (let i = 0; i < TILE_PX * TILE_PX; i++) {
-      const idx = buf[i];
-      const cell = this.cellEls[i];
-      if (idx > 0) {
-        cell.style.backgroundColor = theme.colors[idx] ?? '#ffffff';
-        cell.classList.remove('is-onion');
-      } else if (prevBuf && prevBuf[i] > 0) {
-        const [r, g, b] = hexToRgb(theme.colors[prevBuf[i]] ?? '#ffffff');
-        cell.style.backgroundColor = `rgba(${r}, ${g}, ${b}, 0.28)`;
-        cell.classList.add('is-onion');
-      } else {
-        cell.style.backgroundColor = 'transparent';
-        cell.classList.remove('is-onion');
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        const px = x * cellPx;
+        const py = y * cellPx;
+        ctx.fillStyle = (x + y) % 2 === 0 ? '#faf3e5' : '#efe4cf';
+        ctx.fillRect(px, py, cellPx, cellPx);
+
+        const i = y * n + x;
+        const idx = buf[i] ?? 0;
+        if (idx > 0) {
+          ctx.fillStyle = theme.colors[idx] ?? '#ffffff';
+          ctx.fillRect(px, py, cellPx, cellPx);
+          const isGlow = (idx === 14 && theme.emissive14 > 0) || (idx === 15 && theme.emissive15 > 0);
+          if (isGlow && cellPx >= 10) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.fillRect(px + 2, py + 2, Math.max(2, Math.floor(cellPx * 0.22)), Math.max(2, Math.floor(cellPx * 0.22)));
+          }
+        } else if (prevBuf && prevBuf[i] > 0) {
+          const [r, g, b] = hexToRgb(theme.colors[prevBuf[i]] ?? '#ffffff');
+          const mr = Math.round(r * 0.45 + 94 * 0.55);
+          const mg = Math.round(g * 0.45 + 194 * 0.55);
+          const mb = Math.round(b * 0.45 + 247 * 0.55);
+          ctx.fillStyle = `rgba(${mr}, ${mg}, ${mb}, 0.36)`;
+          ctx.fillRect(px, py, cellPx, cellPx);
+        }
+      }
+    }
+
+    // Subtle pixel gridlines + center symmetry guides
+    ctx.strokeStyle = 'rgba(56, 40, 32, 0.1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let g = 1; g < n; g++) {
+      const pos = g * cellPx + 0.5;
+      ctx.moveTo(pos, 0);
+      ctx.lineTo(pos, BOARD_CANVAS_PX);
+      ctx.moveTo(0, pos);
+      ctx.lineTo(BOARD_CANVAS_PX, pos);
+    }
+    ctx.stroke();
+
+    const mid = BOARD_CANVAS_PX * 0.5 + 0.5;
+    ctx.strokeStyle = this.mirrorX ? 'rgba(255, 93, 143, 0.55)' : 'rgba(56, 40, 32, 0.2)';
+    ctx.beginPath();
+    ctx.moveTo(mid, 0);
+    ctx.lineTo(mid, BOARD_CANVAS_PX);
+    ctx.moveTo(0, mid);
+    ctx.lineTo(BOARD_CANVAS_PX, mid);
+    ctx.stroke();
+
+    if (this.hoverX >= 0 && this.hoverX < n && this.hoverY >= 0 && this.hoverY < n) {
+      ctx.strokeStyle = '#ff5d8f';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(this.hoverX * cellPx + 1, this.hoverY * cellPx + 1, cellPx - 2, cellPx - 2);
+      if (this.mirrorX) {
+        const mx = n - 1 - this.hoverX;
+        if (mx !== this.hoverX) {
+          ctx.strokeStyle = 'rgba(94, 194, 247, 0.85)';
+          ctx.strokeRect(mx * cellPx + 1, this.hoverY * cellPx + 1, cellPx - 2, cellPx - 2);
+        }
       }
     }
   }
 
   public tickPreview(dt: number): void {
     this.animPhase += dt * 4;
+    if (!this.lightHover) {
+      this.lightAngle = ((this.lightAngle + dt * 0.85 + Math.PI) % (Math.PI * 2)) - Math.PI;
+      this.lightNormX = Math.cos(this.lightAngle) * 0.72;
+      this.lightNormY = Math.sin(this.lightAngle) * 0.72;
+      this.updateLightReadout();
+    }
+
+    const ctx = this.previewCtx;
+    const img = this.previewImgData;
+    if (!ctx || !img) return;
+
     const slot = this.slots[this.activeSlot];
-    const idx = Math.floor(this.animPhase) % slot.frameCount;
+    const n = slot.gridSize;
+    const frameIdx = Math.floor(this.animPhase) % slot.frameCount;
+    const buf = slot.frames[frameIdx];
     const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
-    drawIndexBufferToCanvas(slot.frames[idx], this.previewCanvas, TILE_PX, TILE_PX, theme.colors);
+
+    for (let i = 0; i < n * n; i++) {
+      const idx = buf[i] ?? 0;
+      const p = i * 4;
+      if (idx === 0) {
+        this.texelHeightScratch[i] = 0;
+        this.texelRgbScratch[p] = 0;
+        this.texelRgbScratch[p + 1] = 0;
+        this.texelRgbScratch[p + 2] = 0;
+        this.texelRgbScratch[p + 3] = 0;
+      } else {
+        const [r, g, b] = hexToRgb(theme.colors[idx] ?? '#ffffff');
+        const luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+        this.texelHeightScratch[i] = 0.65 + 0.35 * luma;
+        this.texelRgbScratch[p] = r;
+        this.texelRgbScratch[p + 1] = g;
+        this.texelRgbScratch[p + 2] = b;
+        this.texelRgbScratch[p + 3] =
+          (idx === 14 && theme.emissive14 > 0) || (idx === 15 && theme.emissive15 > 0) ? 255 : 1;
+      }
+    }
+
+    const lightPx = (this.lightNormX * 0.5 + 0.5) * PREVIEW_CANVAS_PX;
+    const lightPy = (this.lightNormY * 0.5 + 0.5) * PREVIEW_CANVAS_PX;
+    const lightZ = 34;
+    const spriteSize = 64;
+    const margin = (PREVIEW_CANVAS_PX - spriteSize) * 0.5;
+    const texScale = n / spriteSize;
+    const out = img.data;
+
+    for (let py = 0; py < PREVIEW_CANVAS_PX; py++) {
+      for (let px = 0; px < PREVIEW_CANVAS_PX; px++) {
+        const dst = (py * PREVIEW_CANVAS_PX + px) * 4;
+        const ldx = lightPx - px;
+        const ldy = lightPy - py;
+        const dist2 = ldx * ldx + ldy * ldy;
+        const halo = 1 / (1 + dist2 * 0.0012);
+
+        let bgR = 24 + halo * 38;
+        let bgG = 19 + halo * 28;
+        let bgB = 46 + halo * 52;
+
+        const sx = px - margin;
+        const sy = py - margin;
+        if (sx >= 0 && sx < spriteSize && sy >= 0 && sy < spriteSize) {
+          const tx = Math.floor(sx * texScale);
+          const ty = Math.floor(sy * texScale);
+          const tIdx = ty * n + tx;
+          const tOff = tIdx * 4;
+          if (this.texelRgbScratch[tOff + 3] > 0) {
+            const hL = tx > 0 ? this.texelHeightScratch[tIdx - 1] : 0;
+            const hR = tx < n - 1 ? this.texelHeightScratch[tIdx + 1] : 0;
+            const hU = ty > 0 ? this.texelHeightScratch[tIdx - n] : 0;
+            const hD = ty < n - 1 ? this.texelHeightScratch[tIdx + n] : 0;
+            const gx = hR - hL;
+            const gy = hD - hU;
+            const nx = -gx * 1.4;
+            const ny = -gy * 1.4;
+            const nz = 1.0;
+            const invN = 1 / Math.hypot(nx, ny, nz);
+
+            const lLen = Math.hypot(ldx, ldy, lightZ);
+            const lx = ldx / lLen;
+            const ly = ldy / lLen;
+            const lz = lightZ / lLen;
+
+            const ndl = (nx * lx + ny * ly + nz * lz) * invN;
+            const atten = 1 / (1 + dist2 / (64 * 64));
+            const diffuse = Math.max(0.55, Math.min(1.36, 0.72 + ndl * 0.58 * atten));
+
+            const hx = lx;
+            const hy = ly;
+            const hz = lz + 1;
+            const invH = 1 / Math.hypot(hx, hy, hz);
+            const ndh = Math.max(0, (nx * hx + ny * hy + nz * hz) * invN * invH);
+            const spec = Math.pow(ndh, 12) * 0.35 * atten;
+
+            const hC = this.texelHeightScratch[tIdx];
+            const hBR = tx < n - 1 && ty < n - 1 ? this.texelHeightScratch[tIdx + n + 1] : 0;
+            const rim = hC - hBR > 0.45 ? 0.14 * atten : 0;
+            const glow = this.texelRgbScratch[tOff + 3] === 255 ? 0.22 : 0;
+            const mul = diffuse + glow;
+
+            bgR = this.texelRgbScratch[tOff] * mul + (spec + rim) * 255;
+            bgG = this.texelRgbScratch[tOff + 1] * mul + (spec + rim) * 245;
+            bgB = this.texelRgbScratch[tOff + 2] * mul + (spec + rim) * 235;
+          }
+        }
+
+        if (dist2 < 12) {
+          const orb = 1 - Math.sqrt(dist2) / 3.5;
+          bgR = bgR * (1 - orb) + 255 * orb;
+          bgG = bgG * (1 - orb) + 236 * orb;
+          bgB = bgB * (1 - orb) + 170 * orb;
+        }
+
+        out[dst] = Math.max(0, Math.min(255, Math.round(bgR)));
+        out[dst + 1] = Math.max(0, Math.min(255, Math.round(bgG)));
+        out[dst + 2] = Math.max(0, Math.min(255, Math.round(bgB)));
+        out[dst + 3] = 255;
+      }
+    }
+
+    ctx.putImageData(img, 0, 0);
   }
 }

@@ -74,6 +74,14 @@ export class VirtualGamepadInput {
   private rightStickAxis = { x: 0, y: 0 };
   private hwGamepadInput = createEmptyInputState();
   private lastHwConnected = false;
+  private pointerX = 0;
+  private pointerY = 0;
+  private pointerActive = false;
+  private pointerPrimary = false;
+  private pointerSecondary = false;
+  private pointerPrimaryLatched = false;
+  private pointerSecondaryLatched = false;
+  private readonly pointerMergeScratch = { x: 0, y: 0, active: false, primary: false, secondary: false };
 
   constructor(callbacks: VirtualGamepadCallbacks) {
     this.cb = callbacks;
@@ -143,6 +151,13 @@ export class VirtualGamepadInput {
     this.stickInput = createIdlePadDirs();
     this.rightStickAxis = { x: 0, y: 0 };
     this.hwGamepadInput = createEmptyInputState();
+    this.pointerX = 0;
+    this.pointerY = 0;
+    this.pointerActive = false;
+    this.pointerPrimary = false;
+    this.pointerSecondary = false;
+    this.pointerPrimaryLatched = false;
+    this.pointerSecondaryLatched = false;
     for (const resetStick of this.stickResetters) resetStick();
     this.pipeline.reset();
     this.syncVisual();
@@ -185,7 +200,35 @@ export class VirtualGamepadInput {
     this.autofireBlockedByCartridge = blocked;
   }
 
-  private mergeRawInput(): InputState {
+  public setCanvasPointer(
+    nx: number,
+    ny: number,
+    active: boolean,
+    primary: boolean,
+    secondary: boolean,
+  ): void {
+    const prevPrimary = this.pointerPrimary;
+    const prevSecondary = this.pointerSecondary;
+    this.pointerX = Math.max(0, Math.min(1, nx));
+    this.pointerY = Math.max(0, Math.min(1, ny));
+    this.pointerActive = active;
+    this.pointerPrimary = active && primary;
+    this.pointerSecondary = active && secondary;
+    if (!this.cb.isInputBlocked()) {
+      if (this.pointerPrimary && !prevPrimary) this.pointerPrimaryLatched = true;
+      if (this.pointerSecondary && !prevSecondary) this.pointerSecondaryLatched = true;
+    } else {
+      this.pointerPrimaryLatched = false;
+      this.pointerSecondaryLatched = false;
+    }
+  }
+
+  private mergeRawInput(includePointerLatches = false): InputState {
+    this.pointerMergeScratch.x = this.pointerX;
+    this.pointerMergeScratch.y = this.pointerY;
+    this.pointerMergeScratch.active = this.pointerActive;
+    this.pointerMergeScratch.primary = this.pointerPrimary || (includePointerLatches && this.pointerPrimaryLatched);
+    this.pointerMergeScratch.secondary = this.pointerSecondary || (includePointerLatches && this.pointerSecondaryLatched);
     return mergeRawGamepadInputs(
       this.touchInput,
       this.padInput,
@@ -193,15 +236,21 @@ export class VirtualGamepadInput {
       this.stickInput,
       this.hwGamepadInput,
       this.rightStickAxis,
+      this.pointerMergeScratch,
     );
   }
 
   public getInput(consumeLatches = true): InputState {
     if (this.syncBlockedTransition()) return createEmptyInputState();
-    return this.pipeline.resolve(this.mergeRawInput(), consumeLatches, {
+    const resolved = this.pipeline.resolve(this.mergeRawInput(true), consumeLatches, {
       touchAutofire: this.touchAutofire && !this.autofireBlockedByCartridge,
       touchActionHeld: this.touchInput.action,
     });
+    if (consumeLatches) {
+      this.pointerPrimaryLatched = false;
+      this.pointerSecondaryLatched = false;
+    }
+    return resolved;
   }
 
   public getActiveGamepadActuator(): GamepadHapticActuator | null {

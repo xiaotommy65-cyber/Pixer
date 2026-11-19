@@ -1,3 +1,4 @@
+import { AUTO_TILE_SPRITE_GRIDS } from './sprites/AutoTileSprites.ts';
 import { BOSS_SLIME_KING_32, BOSS_UFO_GRID_32 } from './sprites/BossSprites.ts';
 import { CHRONICLE_SPRITE_GRIDS } from './sprites/ChronicleSprites.ts';
 import { CORE_SPRITE_GRIDS } from './sprites/CoreSprites.ts';
@@ -10,6 +11,7 @@ import {
   type BuiltinSpriteId,
   type SpriteId,
 } from './sprites/PaletteData.ts';
+import { PARKOUR_SPRITE_GRIDS } from './sprites/ParkourSprites.ts';
 import { SHMUP_SPRITE_GRIDS } from './sprites/ShmupSprites.ts';
 
 export {
@@ -27,4 +29,6 @@ export const BUILTIN_SPRITE_GRIDS: Partial<Record<SpriteId, string[]>> = {
   ...SHMUP_SPRITE_GRIDS,
   ...DUNGEON_SPRITE_GRIDS,
   ...CHRONICLE_SPRITE_GRIDS,
+  ...PARKOUR_SPRITE_GRIDS,
+  ...AUTO_TILE_SPRITE_GRIDS,
 };

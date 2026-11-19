@@ -1,8 +1,10 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
-import { fbm2D } from '../math/NoiseMath.ts';
+import { curlNoise2DInto, fbm2D } from '../math/NoiseMath.ts';
 import { stepSpringInto } from '../math/SpringDynamics.ts';
 import { SeededRng } from '../runtime/SeededRng.ts';
 import type { FeedbackPreset, ParticleDesc, SimEvent } from '../types/WorldTypes.ts';
+
+const CURL_SCRATCH = new Float32Array(2);
 
 export interface SquashSpring {
   scaleX: number;
@@ -81,6 +83,8 @@ export class JuiceSystem {
         pull: undefined,
         damping: undefined,
         convergeSnapRadius: undefined,
+        curlStrength: undefined,
+        curlScale: undefined,
       });
     }
   }
@@ -242,6 +246,12 @@ export class JuiceSystem {
       } else {
         p.vy += (p.gravity ?? 0) * dt;
       }
+      if ((p.curlStrength ?? 0) > 0) {
+        const cs = p.curlScale ?? 0.018;
+        curlNoise2DInto(p.x * cs + this.visualTime * 0.35, p.y * cs - this.visualTime * 0.25, CURL_SCRATCH, 0, 1, 73);
+        p.vx += CURL_SCRATCH[0] * p.curlStrength! * dt;
+        p.vy += CURL_SCRATCH[1] * p.curlStrength! * dt;
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.rot += p.vRot * dt;
@@ -300,6 +310,8 @@ export class JuiceSystem {
       p.pull = undefined;
       p.damping = undefined;
       p.convergeSnapRadius = undefined;
+      p.curlStrength = undefined;
+      p.curlScale = undefined;
     }
   }
 
@@ -357,6 +369,65 @@ export class JuiceSystem {
       p.pull = pull;
       p.damping = 3.2;
       p.convergeSnapRadius = opts?.snapRadius ?? 3;
+      p.curlStrength = undefined;
+      p.curlScale = undefined;
+    }
+  }
+
+  /**
+   * Spawns divergence-free curl-noise advected particles (updraft wisps, grapple/dash trails).
+   */
+  public spawnCurlStream(
+    x: number,
+    y: number,
+    colors: readonly string[],
+    count: number,
+    opts?: {
+      vx?: number;
+      vy?: number;
+      spread?: number;
+      curlStrength?: number;
+      curlScale?: number;
+      maxLife?: number;
+      size?: number;
+      sprite?: SpriteId;
+      additive?: boolean;
+    },
+  ): void {
+    if (count <= 0) return;
+    const actual = Math.max(1, Math.round(count));
+    const baseVx = opts?.vx ?? 0;
+    const baseVy = opts?.vy ?? 0;
+    const spread = opts?.spread ?? 14;
+    const curlStrength = opts?.curlStrength ?? 140;
+    const curlScale = opts?.curlScale ?? 0.018;
+    const maxLife = opts?.maxLife ?? 0.55;
+    const useSprite = opts?.sprite;
+    const additive = opts?.additive ?? true;
+    const colorLen = colors.length;
+
+    for (let i = 0; i < actual; i++) {
+      const p = this.acquireParticle();
+      p.x = x + this.rng.range(-spread * 0.35, spread * 0.35);
+      p.y = y + this.rng.range(-spread * 0.35, spread * 0.35);
+      p.vx = baseVx + this.rng.range(-spread * 0.5, spread * 0.5);
+      p.vy = baseVy + this.rng.range(-spread * 0.5, spread * 0.5);
+      p.life = 0;
+      p.maxLife = maxLife;
+      p.size = opts?.size ?? (useSprite ? this.rng.range(4.5, 7.5) : this.rng.range(1.8, 3.2));
+      p.color = colorLen > 0 ? colors[i % colorLen] : '#fffaf0';
+      p.rot = this.rng.range(0, Math.PI * 2);
+      p.vRot = (i % 2 === 0 ? 1 : -1) * this.rng.range(1.5, 4.5);
+      p.sprite = useSprite;
+      p.additive = additive;
+      p.gravity = undefined;
+      p.targetX = undefined;
+      p.targetY = undefined;
+      p.pull = undefined;
+      p.damping = undefined;
+      p.convergeSnapRadius = undefined;
+      p.curlStrength = curlStrength;
+      p.curlScale = curlScale;
     }
   }
 }

@@ -201,6 +201,7 @@ export function buildSceneSnapshot(
       const key = y * f.width + x;
       if (!f.explored.has(key)) continue;
       const isVis = f.visible.has(key);
+      const floorTint = isVis ? '#d6cce8' : '#585e7a';
       const dimTint = isVis ? undefined : '#646e88';
       const kind = f.grid[y][x];
       const px = x * TILE_PX;
@@ -212,7 +213,7 @@ export function buildSceneSnapshot(
       else if (kind === 'stairs_down') sprite = 'stairs_down';
       else if (kind === 'trap') sprite = 'trap';
       else if (kind === 'torch' || kind === 'campfire') {
-        tiles.push({ sprite: 'dungeon_floor', x: px, y: py, w: TILE_PX, h: TILE_PX, tint: dimTint });
+        tiles.push({ sprite: 'dungeon_floor', x: px, y: py, w: TILE_PX, h: TILE_PX, tint: floorTint });
         entities.push({
           id: `${kind}-${x}-${y}`,
           sprite: kind === 'campfire' ? 'campfire' : 'torch',
@@ -226,10 +227,10 @@ export function buildSceneSnapshot(
           lights.push({
             x: px + 8,
             y: py + 8,
-            radius: (kind === 'campfire' ? 68 : 54) * (1 + Math.sin(t * 10 + x) * 0.08),
-            color: kind === 'campfire' ? '#ff9642' : '#ffae42',
-            intensity: (kind === 'campfire' ? 0.85 : 0.72) * glow,
-            falloffPower: 1.7,
+            radius: (kind === 'campfire' ? 58 : 44) * (1 + Math.sin(t * 10 + x) * 0.08),
+            color: kind === 'campfire' ? '#ff9642' : '#ffb85c',
+            intensity: (kind === 'campfire' ? 0.48 : 0.36) * glow,
+            falloffPower: 1.85,
           });
         }
         continue;
@@ -241,16 +242,27 @@ export function buildSceneSnapshot(
         f.grid[y + 1][x] === 'wall' &&
         f.explored.has((y + 1) * f.width + x);
 
+      const tileTint =
+        kind === 'locked_door'
+          ? '#ffd447'
+          : kind === 'wall'
+            ? isVis
+              ? '#6478ad'
+              : '#3b4363'
+            : kind === 'floor'
+              ? floorTint
+              : dimTint;
+
       tiles.push({
         sprite,
         x: px,
         y: py,
         w: TILE_PX,
         h: TILE_PX,
-        tint: kind === 'locked_door' ? '#ffd447' : dimTint,
+        tint: tileTint,
         elevationZ: isWallBlock ? 6 : 0,
         extrudeH: isWallBlock && !southIsWall ? 6 : 0,
-        wallColor: kind === 'locked_door' ? '#705824' : isVis ? '#363b57' : '#26293d',
+        wallColor: kind === 'locked_door' ? '#705824' : isVis ? '#2d3759' : '#1e243b',
         wallMaterial: kind === 'locked_door' ? 'astral' : 'stone',
         castShadow: isWallBlock && !southIsWall,
         sortY: py + TILE_PX,
@@ -302,10 +314,10 @@ export function buildSceneSnapshot(
     lights.push({
       x: state.hero.visualX + 8,
       y: state.hero.visualY + 8,
-      radius: 52 + (state.blackboard.sage_blessing ? 18 : 0) + (state.hero.relic?.visionBonus ?? 0) * 10,
+      radius: 48 + (state.blackboard.sage_blessing ? 16 : 0) + (state.hero.relic?.visionBonus ?? 0) * 10,
       color: '#ffe4a1',
-      intensity: 0.66 * glow,
-      falloffPower: 1.65,
+      intensity: 0.36 * glow,
+      falloffPower: 1.8,
     });
   }
 
@@ -331,8 +343,8 @@ export function buildSceneSnapshot(
 
   return {
     cartridgeId: 'emberkeep-dnd',
-    skyTop: '#0d0918',
-    skyBottom: '#1a122e',
+    skyTop: '#161129',
+    skyBottom: '#261d42',
     cozyFilter: params.cozyFilter > 0.5,
     glowIntensity: params.glowIntensity,
     timeSec: t,
@@ -348,8 +360,9 @@ export function buildSceneSnapshot(
     bossMaxHp: hud.combat?.enemyMaxHp ?? 0,
     cameraX: cameraX + state.juice.shakeX,
     cameraY: cameraY + state.juice.shakeY,
-    ambientDarkness: state.moduleDef.ambientDarkness ?? 0.72,
-    ambientColor: '#0c0818',
+    cameraZoom: 1.15,
+    ambientDarkness: Math.min(0.48, state.moduleDef.ambientDarkness ?? 0.45),
+    ambientColor: '#0e0a1c',
     screenFlashAlpha: state.juice.flashAlpha,
     screenFlashColor: state.juice.flashColor,
     hd2dDepth: {

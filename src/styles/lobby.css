@@ -12,19 +12,19 @@ body {
 .atelier-shell.is-os-locked {
   position: relative;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1260px;
   height: 100dvh;
   min-height: 100dvh;
   margin: 0 auto;
   padding:
-    max(8px, env(safe-area-inset-top))
+    max(6px, env(safe-area-inset-top))
     max(12px, env(safe-area-inset-right))
-    max(8px, env(safe-area-inset-bottom))
+    max(6px, env(safe-area-inset-bottom))
     max(12px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 0;
   overflow: hidden;
   transition: --lobby-theme-glow 320ms ease;
@@ -48,21 +48,28 @@ body {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-height: calc(100dvh - 16px);
+  height: 100%;
+  max-height: calc(100dvh - 12px);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
+  padding-bottom: clamp(10px, 2.2vh, 24px);
   gap: 0;
 }
 
 .atelier-shell.is-os-locked .switch-console {
   width: 100%;
-  margin-top: clamp(72px, 12vh, 122px);
+  margin-top: clamp(148px, 23vh, 210px);
+}
+
+.atelier-shell.is-os-locked .switch-stage[data-shell-phase='IN_GAME'] {
+  justify-content: center;
+  padding-bottom: 0;
 }
 
 .atelier-shell.is-os-locked .switch-stage[data-shell-phase='IN_GAME'] .switch-console {
-  margin-top: clamp(38px, 5.5vh, 52px);
+  margin-top: clamp(32px, 4.5vh, 46px);
 }
 
 .console-os-utility-bar {
@@ -257,7 +264,8 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 7px 9px;
+  padding: 5px 8px 6px;
+  gap: 3px;
   background: transparent;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
@@ -266,6 +274,7 @@ body {
   visibility: visible;
   opacity: 1;
   transform: translateY(0) scale(1);
+  overflow: hidden;
   transition:
     opacity 220ms ease,
     transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -298,22 +307,20 @@ body {
 }
 
 .lobby-center-window {
-  flex: 1;
-  min-height: 44%;
+  flex: 1 1 0;
+  min-height: 14%;
   pointer-events: none;
 }
 
 .lobby-lower-dock {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  background: transparent;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-  box-shadow: none;
+  gap: 4px;
+  background: rgba(255, 252, 245, 0.42);
+  border-radius: 11px;
+  padding: 3px 5px 4px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  flex-shrink: 0;
 }
 
 .lobby-greeting {
@@ -374,11 +381,11 @@ body {
 
 .lobby-carousel {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: stretch;
+  gap: 6px;
   overflow-x: auto;
-  overflow-y: visible;
-  padding: 6px 2px 3px;
+  overflow-y: hidden;
+  padding: 4px 2px 3px;
   scrollbar-width: none;
   scroll-snap-type: x proximity;
   overscroll-behavior-x: contain;
@@ -394,17 +401,17 @@ body {
 
 .lobby-card {
   position: relative;
-  flex: 0 0 clamp(76px, 14.5%, 98px);
+  flex: 0 0 clamp(68px, 18.2%, 88px);
   aspect-ratio: auto;
   background: linear-gradient(180deg, #fffefb 0%, #f3e8d6 100%);
   border: 2px solid var(--ink);
-  border-top: 4px solid var(--card-accent, #7fdcb4);
-  border-radius: 10px;
-  padding: 3px 4px 4px;
+  border-top: 3.5px solid var(--card-accent, #7fdcb4);
+  border-radius: 9px;
+  padding: 2.5px 3.5px 3px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 2px;
+  gap: 1.5px;
   cursor: pointer;
   scroll-snap-align: center;
   -webkit-user-select: none;
@@ -413,20 +420,19 @@ body {
   box-shadow:
     inset 0 1.5px 0 rgba(255, 255, 255, 0.94),
     inset 0 -1.5px 0 rgba(120, 88, 60, 0.16),
-    0 3px 0 var(--ink);
+    0 2.5px 0 var(--ink);
   transition: transform 160ms var(--ease-bounce), box-shadow 160ms ease, border-color 160ms ease;
 }
 
 .lobby-card.is-focused {
-  transform: scale(1.06) translateY(-3px);
+  transform: translateY(-2px);
   border-color: #0284c7;
   border-top-color: var(--card-accent, #38bdf8);
   background: linear-gradient(180deg, #ffffff 0%, #f9f2e4 100%);
   box-shadow:
     inset 0 1.5px 0 rgba(255, 255, 255, 0.98),
-    0 0 0 2.5px rgba(56, 189, 248, 0.58),
-    0 4.5px 0 var(--ink),
-    0 10px 16px rgba(2, 132, 199, 0.24);
+    0 0 0 2px rgba(56, 189, 248, 0.62),
+    0 3.5px 0 var(--ink);
 }
 
 .lobby-card-art {
@@ -505,22 +511,22 @@ body {
 .lobby-dock-btn {
   appearance: none;
   border: 2px solid var(--ink);
-  border-radius: 10px;
-  padding: 4px 10px;
-  min-height: 29px;
-  font-size: 0.68rem;
+  border-radius: 9px;
+  padding: 2px 9px;
+  min-height: 25px;
+  font-size: 0.64rem;
   font-weight: 900;
   white-space: nowrap;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   background: linear-gradient(180deg, #fffefb 0%, #f3e8d6 100%);
   color: var(--ink);
   box-shadow:
     inset 0 1.5px 0 rgba(255, 255, 255, 0.94),
     inset 0 -1.5px 0 rgba(120, 88, 60, 0.16),
-    0 2.5px 0 var(--ink);
+    0 2px 0 var(--ink);
   transition: transform 140ms var(--ease-bounce), box-shadow 140ms ease;
 }
 
@@ -1130,151 +1136,90 @@ body[data-perf='eco'] .lobby-lower-dock {
 
 .diorama-window-frame {
   position: absolute;
-  top: clamp(32px, 5.2vh, 52px);
-  left: 50%;
-  width: min(640px, 78vw);
-  aspect-ratio: 320 / 148;
-  transform: translate3d(
-    calc(-50% + var(--px, 0) * -9px),
-    calc(var(--py, 0) * -5px),
-    0
-  ) scale(1);
-  border: 4.5px solid var(--ink);
-  border-radius: 16px;
-  background-color: #a66f45;
-  background-image: var(--tex-wood, none);
-  background-size: 128px 64px;
-  background-repeat: repeat;
-  image-rendering: pixelated;
-  padding: 7px 7px 13px;
-  box-shadow:
-    inset 0 2px 0 rgba(255, 236, 210, 0.44),
-    0 10px 26px rgba(20, 14, 24, 0.22),
-    0 4px 0 var(--ink);
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: auto;
+  width: 100%;
+  height: clamp(380px, 66dvh, 720px);
+  transform: none;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
   pointer-events: auto;
   cursor: pointer;
   z-index: 1;
   transition:
-    top 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 520ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 420ms ease,
+    opacity 360ms ease,
     filter 420ms ease;
 }
 
+.diorama-window-frame::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 54px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--diorama-wall-bot, #181a28) 88%, transparent) 100%
+  );
+  transition: opacity 420ms ease;
+}
+
 .diorama-window-frame:hover {
-  box-shadow:
-    inset 0 2px 0 rgba(255, 236, 210, 0.54),
-    0 14px 32px rgba(20, 14, 24, 0.28),
-    0 4px 0 var(--ink);
+  box-shadow: none;
 }
 
 .diorama-window-glass {
   position: relative;
   width: 100%;
   height: 100%;
-  border: 2.5px solid #2b1b12;
-  border-radius: 9px;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
-  background: #141c38;
+  background: #0d1428;
 }
 
 .window-diorama-canvas {
   width: 100%;
   height: 100%;
   display: block;
+  object-fit: cover;
+  object-position: center top;
   image-rendering: pixelated;
 }
 
 .window-mullion-v,
-.window-mullion-h {
-  position: absolute;
-  pointer-events: none;
-  background: #4e3322;
-  box-shadow: 0 0 0 1px rgba(255, 228, 194, 0.22);
-}
-
-.window-mullion-v {
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 5px;
-  transform: translateX(-50%);
-}
-
-.window-mullion-h {
-  left: 0;
-  right: 0;
-  top: 48%;
-  height: 4px;
-}
-
-.window-wood-sill {
-  position: absolute;
-  left: -10px;
-  right: -10px;
-  bottom: -8px;
-  height: 14px;
-  border-radius: 8px;
-  border: 2.5px solid var(--ink);
-  background-color: #a66f45;
-  background-image: var(--tex-wood, none);
-  background-size: 128px 64px;
-  image-rendering: pixelated;
-  box-shadow:
-    inset 0 2px 0 rgba(255, 238, 214, 0.5),
-    0 3px 0 var(--ink);
-  pointer-events: none;
-}
-
-.window-sill-plant {
-  position: absolute;
-  left: 18px;
-  bottom: 9px;
-  width: 14px;
-  height: 12px;
-  background: #c86d44;
-  border: 2px solid var(--ink);
-  border-radius: 2px 2px 5px 5px;
-}
-
-.window-sill-plant::before {
-  content: '';
-  position: absolute;
-  left: 1px;
-  bottom: 9px;
-  width: 9px;
-  height: 8px;
-  border-radius: 50% 50% 2px 2px;
-  background: #56d39c;
-  border: 2px solid var(--ink);
-}
-
-.window-sill-mug {
-  position: absolute;
-  right: 24px;
-  bottom: 9px;
-  width: 12px;
-  height: 10px;
-  background: #fff8ea;
-  border: 2px solid var(--ink);
-  border-radius: 2px 2px 4px 4px;
+.window-mullion-h,
+.window-wood-sill,
+.diorama-wall-wash {
+  display: none !important;
 }
 
 .window-status-chip {
   position: absolute;
-  left: 14px;
-  top: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1.5px solid rgba(56, 40, 32, 0.55);
-  background: rgba(255, 250, 240, 0.88);
+  left: max(22px, env(safe-area-inset-left));
+  top: max(14px, env(safe-area-inset-top));
+  padding: 3px 10px;
+  border-radius: 8px;
+  border: 2px solid var(--ink);
+  background: rgba(255, 252, 244, 0.92);
   color: var(--ink);
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.02em;
+  box-shadow: 0 2.5px 0 var(--ink);
   pointer-events: none;
-  opacity: 0;
-  transform: translateY(-4px);
+  opacity: 0.95;
+  transform: translateY(0);
   transition: opacity 240ms ease, transform 240ms ease;
 }
 
@@ -1290,9 +1235,10 @@ body[data-perf='eco'] .lobby-lower-dock {
   left: -1%;
   right: -1%;
   bottom: 0;
-  height: clamp(134px, 24vh, 214px);
+  z-index: 1;
+  height: clamp(86px, 14vh, 128px);
   border-top: 3px solid var(--ink);
-  border-radius: 24px 24px 0 0;
+  border-radius: 16px 16px 0 0;
   background-color: #f5e8d4;
   background-image:
     linear-gradient(180deg, rgba(255, 252, 246, 0.28) 0%, rgba(56, 40, 32, 0.04) 100%),
@@ -1301,8 +1247,8 @@ body[data-perf='eco'] .lobby-lower-dock {
   background-repeat: no-repeat, repeat;
   image-rendering: pixelated;
   box-shadow:
-    inset 0 6px 0 rgba(255, 252, 246, 0.52),
-    0 -4px 18px rgba(42, 28, 18, 0.08);
+    inset 0 5px 0 rgba(255, 252, 246, 0.52),
+    0 -6px 22px rgba(16, 12, 24, 0.28);
   transition: border-radius 280ms ease, background-color 420ms ease, box-shadow 280ms ease;
 }
 
@@ -1333,11 +1279,12 @@ body[data-perf='eco'] .lobby-lower-dock {
   position: fixed;
   right: max(14px, env(safe-area-inset-right));
   bottom: max(12px, env(safe-area-inset-bottom));
-  z-index: 6;
-  min-height: 30px;
-  padding: 4px 10px;
-  font-size: 0.68rem;
-  opacity: 0.94;
+  z-index: 35;
+  pointer-events: auto;
+  min-height: 32px;
+  padding: 4px 11px;
+  font-size: 0.7rem;
+  opacity: 0.96;
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .desk-surface-btn,
@@ -1348,17 +1295,17 @@ body[data-perf='eco'] .lobby-lower-dock {
 
 /* Perspective Mode: Window View ("抬頭看窗外") */
 .switch-stage[data-perspective='window'] .diorama-window-frame {
-  top: 46%;
-  transform: translate3d(-50%, -56%, 0) scale(1.16);
-  z-index: 6;
-  box-shadow:
-    inset 0 2px 0 rgba(255, 224, 188, 0.5),
-    0 24px 48px rgba(14, 10, 20, 0.42),
-    0 6px 0 var(--ink);
+  height: 100dvh;
+  transform: none;
+  z-index: 1;
+}
+
+.switch-stage[data-perspective='window'] .diorama-window-frame::after {
+  opacity: 0;
 }
 
 .switch-stage[data-perspective='window'] .desk-spatial-track {
-  transform: translateY(52%) scale(0.8);
+  transform: translateY(48%) scale(0.82);
   opacity: 0.94;
 }
 
@@ -1372,17 +1319,19 @@ body[data-perf='eco'] .lobby-lower-dock {
   transform: translateY(18px) scale(0.92);
 }
 
-/* In-Game Guard: dim/blur room backdrop so gameplay canvas retains 100% contrast */
+/* In-Game Guard: dim/recede room backdrop & expand handheld focus so gameplay canvas commands the viewport */
 .switch-stage[data-shell-phase='IN_GAME'] .diorama-room-backdrop {
-  opacity: 0.52;
-  filter: blur(2.5px) brightness(0.72) saturate(0.8);
+  opacity: 0.85;
+  filter: brightness(0.62) saturate(0.88);
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .diorama-light-shaft {
-  opacity: 0.35;
+  opacity: 0.18;
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .diorama-window-frame {
+  opacity: 0.72;
+  filter: blur(1.5px);
   pointer-events: none;
 }
 
@@ -1497,15 +1446,7 @@ body[data-perf='eco'] .lobby-lower-dock {
 }
 
 .boot-pickup-hands {
-  position: absolute;
-  left: 50%;
-  bottom: -24px;
-  width: min(104%, 760px);
-  transform: translateX(-50%) translateY(120px);
-  opacity: 0;
-  pointer-events: none;
-  z-index: 12;
-  transition: transform 340ms cubic-bezier(0.22, 1, 0.36, 1), opacity 240ms ease;
+  display: none !important;
 }
 
 .boot-hands-svg {
@@ -1514,14 +1455,19 @@ body[data-perf='eco'] .lobby-lower-dock {
   display: block;
 }
 
+.switch-stage[data-boot-stage='standby'] .boot-pickup-hands {
+  opacity: 0.52;
+  transform: translateX(-50%) translateY(42px) scale(0.82);
+}
+
 .switch-stage[data-boot-stage='picking'] .boot-pickup-hands {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
 
 .switch-stage[data-boot-stage='holding'] .boot-pickup-hands {
-  opacity: 0.9;
-  transform: translateX(-50%) translateY(22px);
+  opacity: 0.92;
+  transform: translateX(-50%) translateY(18px);
 }
 
 .switch-stage[data-boot-stage='awake'] .boot-pickup-hands {
@@ -1535,7 +1481,7 @@ body[data-perf='eco'] .lobby-lower-dock {
   z-index: 2;
   width: 100%;
   display: grid;
-  grid-template-columns: 168px minmax(0, 860px) 168px;
+  grid-template-columns: 164px minmax(0, 860px) 164px;
   align-items: end;
   justify-content: center;
   gap: 14px;
@@ -1544,6 +1490,14 @@ body[data-perf='eco'] .lobby-lower-dock {
   user-select: none;
   -webkit-touch-callout: none;
   transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1), opacity 320ms ease;
+}
+
+@media (min-width: 1024px) {
+  .switch-stage[data-shell-phase='IN_GAME'] .desk-console-slot {
+    transform: scale(1.09);
+    transform-origin: center center;
+    transition: transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
 }
 
 .desk-prop {
@@ -1585,8 +1539,8 @@ body[data-perf='eco'] .lobby-lower-dock {
 }
 
 .switch-stage[data-shell-phase='IN_GAME'] .desk-prop {
-  opacity: 0.16;
-  transform: translateY(10px) scale(0.95);
+  opacity: 0;
+  transform: translateY(14px) scale(0.92);
   pointer-events: none;
 }
 
@@ -1715,7 +1669,7 @@ body[data-perf='eco'] .lobby-lower-dock {
 /* Tablet / medium desktop: keep focus cleanly on console */
 @media (max-width: 1179px) and (min-width: 761px) {
   .desk-spatial-track {
-    grid-template-columns: minmax(0, 920px);
+    grid-template-columns: minmax(0, 860px);
   }
 
   .desk-prop {
@@ -1831,7 +1785,7 @@ body[data-perf='eco'] .lobby-lower-dock {
   }
 
   .diorama-window-frame {
-    width: min(640px, 86vw);
+    width: 100%;
   }
 
   .switch-stage[data-perspective='window'] .portrait-desk-pager {

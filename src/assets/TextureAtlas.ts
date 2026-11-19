@@ -7,7 +7,9 @@ import {
   TOYBOX_PALETTE,
   type SpriteId,
 } from './AtlasSpritesData.ts';
+import { AUTO_TILE_SPRITE_GRIDS } from './sprites/AutoTileSprites.ts';
 import { buildPaletteLutRgba, PALETTE_THEME_COUNT } from './sprites/PaletteData.ts';
+import { PIXEL_FONT_5X7 } from './sprites/PixelFontData.ts';
 import type { SpriteRect } from '../core/gpu/GpuTypes.ts';
 
 export { DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B, PALETTE_THEME_COUNT, TOYBOX_PALETTE };
@@ -50,6 +52,9 @@ const DYNAMIC_START_Y = 128; // Reserve top 128px (8 rows x 64 cols = 512 slots)
  * for plugins and AI-synthesized pixel art.
  */
 export class TextureAtlas {
+  public static readonly FONT_GLYPH_W = 6;
+  public static readonly FONT_GLYPH_H = 8;
+
   public readonly width = ATLAS_SIZE;
   public readonly height = ATLAS_SIZE;
   public readonly pixels = new Uint8Array(ATLAS_SIZE * ATLAS_SIZE * 4);
@@ -58,6 +63,7 @@ export class TextureAtlas {
   public readonly paletteLut = buildPaletteLutRgba();
   public readonly paletteRows = PALETTE_THEME_COUNT;
   public readonly rects = new Map<SpriteId, SpriteRect>();
+  private readonly glyphRects = new Map<number, SpriteRect>();
   public readonly heroPixelsA = new Uint8Array(TILE_PX * TILE_PX);
   public readonly heroPixelsB = new Uint8Array(TILE_PX * TILE_PX);
 
@@ -203,6 +209,11 @@ export class TextureAtlas {
       'shrine', 'npc_elder', 'slime_knight', 'ember_warden', 'frost_mage',
       'sword_slash', 'tree_canopy', 'anvil_forge', 'astral_core', 'relic_flame',
       'momo_run_a', 'momo_run_b', 'momo_jump', 'momo_slide', 'momo_wave_a', 'momo_wave_b',
+      'meadow_floor',
+      'parkour_hero_idle', 'parkour_hero_run_a', 'parkour_hero_run_b',
+      'parkour_hero_jump', 'parkour_hero_wall', 'parkour_hero_dash',
+      'grapple_claw', 'grapple_ring', 'grapple_link', 'grapple_reticle',
+      'scarf_node', 'crystal_reset', 'crumble_tile', 'zip_block', 'ik_joint', 'ik_claw',
     ];
     let extSlot = 50;
     for (const id of extIds) {
@@ -215,6 +226,127 @@ export class TextureAtlas {
       this.rects.set(id, this.slotUv(col, row));
       extSlot++;
     }
+
+    // 4-bit N/E/S/W Auto-Tiling & decal grids packed into free static region col 16..63, row 0..4
+    const autoIds = Object.keys(AUTO_TILE_SPRITE_GRIDS) as SpriteId[];
+    let autoCol = 16;
+    let autoRow = 0;
+    for (const id of autoIds) {
+      const grid = AUTO_TILE_SPRITE_GRIDS[id];
+      if (grid && autoRow <= 4) {
+        this.blitIndexBuffer(autoCol, autoRow, parseGridToIndices(grid));
+      }
+      this.rects.set(id, this.slotUv(autoCol, autoRow));
+      autoCol++;
+      if (autoCol >= SLOTS_PER_ROW) {
+        autoCol = 16;
+        autoRow++;
+      }
+    }
+
+    // Pack 5x7 GPU Bitmap Font (ASCII 32..95) into col 16..63, rows 6..7 (y = 96 and y = 104)
+    const glyphCell = new Uint8Array(8 * 8 * 4);
+    for (let code = 32; code <= 95; code++) {
+      const idx = code - 32;
+      const gxIdx = idx % 32;
+      const gyIdx = Math.floor(idx / 32);
+      const px = 16 * TILE_PX + gxIdx * 8;
+      const py = 96 + gyIdx * 8;
+      glyphCell.fill(0);
+      const pattern = PIXEL_FONT_5X7[String.fromCharCode(code)];
+      if (pattern) {
+        for (let gy = 0; gy < 7; gy++) {
+          const rowStr = pattern[gy] ?? '';
+          for (let gx = 0; gx < 5; gx++) {
+            if (rowStr[gx] === '#') {
+              const dst = (gy * 8 + gx) * 4;
+              glyphCell[dst] = 255;
+              glyphCell[dst + 1] = 255;
+              glyphCell[dst + 2] = 255;
+              glyphCell[dst + 3] = 255;
+            }
+          }
+        }
+      }
+      this.blitRgbaBuffer(px, py, 8, 8, glyphCell);
+      this.glyphRects.set(code, this.pixelUv(px, py, TextureAtlas.FONT_GLYPH_W, TextureAtlas.FONT_GLYPH_H));
+    }
+
+    // Default procedural 96x48 16-bit twilight mountain + spire silhouette RGBA backdrop
+    this.registerDynamicRgbaSprite('parallax_twilight_bg', 96, 48, this.buildProceduralTwilightMountains());
+  }
+
+  private buildProceduralTwilightMountains(): Uint8Array {
+    const w = 96;
+    const h = 48;
+    const rgba = new Uint8Array(w * h * 4);
+    const tau = Math.PI * 2;
+    for (let x = 0; x < w; x++) {
+      const u = (x / w) * tau;
+      const farY = Math.round(14 + Math.sin(u) * 5 + Math.cos(u * 2 + 0.8) * 3 + Math.sin(u * 4) * 1.2);
+      const midY = Math.round(25 + Math.cos(u + 1.3) * 4.5 + Math.sin(u * 3 + 0.4) * 2.5);
+      const isTowerCol = x >= 58 && x <= 66;
+      const towerCrest =
+        x === 58 || x === 60 || x === 62 || x === 64 || x === 66 ? 10 : isTowerCol ? 12 : 99;
+      const effMidY = Math.min(midY, towerCrest);
+      const farSlopeLit = Math.cos(u) > 0;
+      const midSlopeLit = -Math.sin(u + 1.3) > 0;
+
+      for (let y = 0; y < h; y++) {
+        const dst = (y * w + x) * 4;
+        if (y < farY && y < effMidY) {
+          continue;
+        }
+        if (y >= effMidY) {
+          const isTowerBody = isTowerCol && y < midY;
+          const isWindow = (x === 61 || x === 63) && (y === 15 || y === 16);
+          if (isWindow) {
+            rgba[dst] = 255;
+            rgba[dst + 1] = 212;
+            rgba[dst + 2] = 71;
+            rgba[dst + 3] = 255;
+          } else if (y === effMidY) {
+            // Rim light along mid mountain ridge / tower top
+            rgba[dst] = isTowerBody || midSlopeLit ? 184 : 118;
+            rgba[dst + 1] = isTowerBody || midSlopeLit ? 114 : 90;
+            rgba[dst + 2] = isTowerBody || midSlopeLit ? 156 : 146;
+            rgba[dst + 3] = 255;
+          } else if (y >= 41) {
+            // Soft bottom horizon mist fade
+            const mistT = (y - 40) / 7;
+            rgba[dst] = Math.round(42 + mistT * 46);
+            rgba[dst + 1] = Math.round(29 + mistT * 38);
+            rgba[dst + 2] = Math.round(68 + mistT * 52);
+            rgba[dst + 3] = Math.round(255 - mistT * 75);
+          } else if (isTowerBody && x === 58) {
+            rgba[dst] = 152;
+            rgba[dst + 1] = 96;
+            rgba[dst + 2] = 136;
+            rgba[dst + 3] = 255;
+          } else {
+            const band = ((y + (x >> 2)) & 3) === 0;
+            rgba[dst] = midSlopeLit ? (band ? 62 : 50) : (band ? 44 : 36);
+            rgba[dst + 1] = midSlopeLit ? (band ? 43 : 35) : (band ? 31 : 25);
+            rgba[dst + 2] = midSlopeLit ? (band ? 98 : 82) : (band ? 74 : 62);
+            rgba[dst + 3] = 255;
+          }
+        } else {
+          // Far atmospheric mountain ridge
+          if (y === farY) {
+            rgba[dst] = farSlopeLit ? 156 : 118;
+            rgba[dst + 1] = farSlopeLit ? 128 : 102;
+            rgba[dst + 2] = farSlopeLit ? 186 : 158;
+            rgba[dst + 3] = 235;
+          } else {
+            rgba[dst] = farSlopeLit ? 82 : 66;
+            rgba[dst + 1] = farSlopeLit ? 64 : 52;
+            rgba[dst + 2] = farSlopeLit ? 124 : 104;
+            rgba[dst + 3] = 240;
+          }
+        }
+      }
+    }
+    return rgba;
   }
 
   public syncHeroSlots(): void {
@@ -250,8 +382,8 @@ export class TextureAtlas {
    * for custom plugins, procedurally generated art, or AI-synthesized textures.
    */
   public registerDynamicRgbaSprite(id: string, w: number, h: number, rgba: Uint8Array): SpriteRect {
-    const safeW = Math.max(1, Math.min(128, Math.round(w)));
-    const safeH = Math.max(1, Math.min(128, Math.round(h)));
+    const safeW = Math.max(1, Math.min(512, Math.round(w)));
+    const safeH = Math.max(1, Math.min(256, Math.round(h)));
     const existing = this.rects.get(id);
     if (existing && existing.w === safeW && existing.h === safeH) {
       const startX = Math.floor(existing.u0 * ATLAS_SIZE);
@@ -311,5 +443,9 @@ export class TextureAtlas {
 
   public getRect(id: SpriteId): SpriteRect {
     return this.rects.get(id) ?? this.rects.get('solid')!;
+  }
+
+  public getGlyphRect(charCode: number): SpriteRect | undefined {
+    return this.glyphRects.get(charCode);
   }
 }

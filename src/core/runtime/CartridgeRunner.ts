@@ -1,6 +1,7 @@
 import { SANDBOX_DEFAULT_SCRIPT } from '../../assets/WorkshopRecipes.ts';
 import { GAME_H, GAME_W } from '../gpu/GpuTypes.ts';
 import {
+  createEmptyInputState,
   DEFAULT_RUNTIME_PARAMS,
   isComboTrackingCartridge,
   isDebuggableCartridge,
@@ -48,6 +49,8 @@ export class CartridgeRunner {
   private cachedSnapshot: RenderSceneSnapshot | null = null;
   private cachedSnapAlpha = -1;
   private snapshotDirty = true;
+  private readonly pendingLatchInput: InputState = createEmptyInputState();
+  private hasPendingLatch = false;
 
   public sparkleBenchmark = false;
   public benchmarkSprites: BenchmarkSprite[] = [];
@@ -99,6 +102,7 @@ export class CartridgeRunner {
     this.cartridgeId = id;
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
+    this.hasPendingLatch = false;
     this.invalidateSnapshot();
     this.instance = this.createInstance(id);
     let resumed = false;
@@ -130,6 +134,7 @@ export class CartridgeRunner {
   public restart(): void {
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
+    this.hasPendingLatch = false;
     this.invalidateSnapshot();
     this.instance = this.createInstance(this.cartridgeId);
     this.events.emit('cartridge:restarted', { id: this.cartridgeId });
@@ -141,6 +146,7 @@ export class CartridgeRunner {
   public retryStage(): void {
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
+    this.hasPendingLatch = false;
     this.invalidateSnapshot();
     if (this.instance.retryStage) {
       this.instance.retryStage();
@@ -236,6 +242,7 @@ export class CartridgeRunner {
       this.instance = inst;
       this.accumulator = 0;
       this.interpolating = false;
+      this.hasPendingLatch = false;
       this.events.emit('cartridge:mounted', { id: 'emberkeep-dnd', resumedSram: false });
       appLogger.success('parsing', 'cartridge.applyDndModule', '已套用自訂 D&D 地牢模組 JSON 並啟動卡匣', {
         rawBytes: jsonSource.length,
@@ -322,9 +329,75 @@ export class CartridgeRunner {
 
     let stepped = false;
     while (this.accumulator >= STEP_DT) {
-      this.stepFixedInternal(STEP_DT, input, false, false);
+      let stepInput = input;
+      if (!stepped && this.hasPendingLatch) {
+        const merged = this.pendingLatchInput;
+        merged.left = input.left;
+        merged.right = input.right;
+        merged.up = input.up;
+        merged.down = input.down;
+        merged.rightStickX = input.rightStickX;
+        merged.rightStickY = input.rightStickY;
+        merged.restart = input.restart;
+        merged.action = input.action || merged.action;
+        merged.jump = input.jump || merged.jump;
+        merged.skillX = input.skillX || merged.skillX;
+        merged.skillY = input.skillY || merged.skillY;
+        merged.shoulderL = input.shoulderL || merged.shoulderL;
+        merged.shoulderR = input.shoulderR || merged.shoulderR;
+        const hasLivePtrClick = Boolean(input.pointerPrimary || input.pointerSecondary);
+        merged.pointerPrimary = Boolean(input.pointerPrimary || merged.pointerPrimary);
+        merged.pointerSecondary = Boolean(input.pointerSecondary || merged.pointerSecondary);
+        if (input.pointerActive && (hasLivePtrClick || (!merged.pointerPrimary && !merged.pointerSecondary))) {
+          merged.pointerX = input.pointerX;
+          merged.pointerY = input.pointerY;
+          merged.pointerActive = true;
+        }
+        stepInput = merged;
+        this.hasPendingLatch = false;
+      }
+      this.stepFixedInternal(STEP_DT, stepInput, false, false);
       this.accumulator -= STEP_DT;
       stepped = true;
+    }
+    if (!stepped) {
+      const hasTrigger =
+        input.action ||
+        input.jump ||
+        input.skillX ||
+        input.skillY ||
+        input.shoulderL ||
+        input.shoulderR ||
+        Boolean(input.pointerPrimary) ||
+        Boolean(input.pointerSecondary);
+      if (hasTrigger) {
+        const buf = this.pendingLatchInput;
+        if (!this.hasPendingLatch) {
+          buf.action = false;
+          buf.jump = false;
+          buf.skillX = false;
+          buf.skillY = false;
+          buf.shoulderL = false;
+          buf.shoulderR = false;
+          buf.pointerPrimary = false;
+          buf.pointerSecondary = false;
+          buf.pointerActive = false;
+        }
+        buf.action = buf.action || input.action;
+        buf.jump = buf.jump || input.jump;
+        buf.skillX = buf.skillX || input.skillX;
+        buf.skillY = buf.skillY || input.skillY;
+        buf.shoulderL = buf.shoulderL || input.shoulderL;
+        buf.shoulderR = buf.shoulderR || input.shoulderR;
+        buf.pointerPrimary = Boolean(buf.pointerPrimary || input.pointerPrimary);
+        buf.pointerSecondary = Boolean(buf.pointerSecondary || input.pointerSecondary);
+        if (input.pointerActive || input.pointerPrimary || input.pointerSecondary) {
+          buf.pointerX = input.pointerX ?? 0;
+          buf.pointerY = input.pointerY ?? 0;
+          buf.pointerActive = Boolean(input.pointerActive);
+        }
+        this.hasPendingLatch = true;
+      }
     }
     if (stepped && this.events.listenerCount('stage:changed') > 0) {
       this.emitStageChangeIfNeeded();

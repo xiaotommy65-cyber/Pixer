@@ -23,6 +23,10 @@ const VALID_SOUND_PRESETS = new Set<SimEvent>([
 ]);
 
 const VALID_BGM_THEMES = new Set<BgmTheme>(['meadow', 'starlight', 'dungeon', 'boss']);
+const VALID_GENRE_HUDS = new Set<string>(['platformer', 'parkour', 'fighter', 'card', 'grid']);
+const VALID_CONTROLLERS = new Set<string>(['platformer', 'shmup', 'topdown', 'fighter', 'card']);
+const VALID_CARD_KINDS = new Set<string>(['attack', 'shield', 'heal', 'surge']);
+const VALID_TWEEN_EASES = new Set<string>(['linear', 'quadOut', 'backOut', 'cubicInOut']);
 const VALID_BEHAVIORS = new Set<string>([
   'none', 'patrol', 'sine', 'chase_los', 'interceptor', 'frigate', 'carrier',
   'missile', 'meteor', 'cargo', 'boss_shmup', 'boss_stomp', 'orbit',
@@ -34,11 +38,34 @@ const VALID_COMPARE_OPS = new Set<string>(['==', '!=', '<', '<=', '>', '>=']);
 const VALID_VAR_OPS = new Set<string>(['=', '+=', '-=', 'clamp']);
 const FORBIDDEN_KEYS = new Set<string>(['__proto__', 'constructor', 'prototype']);
 
+export type CartridgeControllerKind = 'platformer' | 'shmup' | 'topdown' | 'fighter' | 'card';
+export type CartridgeCardKind = 'attack' | 'shield' | 'heal' | 'surge';
+
+export interface CartridgeCardDef {
+  id: string;
+  name: string;
+  cost: number;
+  kind: CartridgeCardKind;
+  power: number;
+  color?: string;
+}
+
 export type CartridgeTag =
   | 'player' | 'solid' | 'oneway' | 'hazard' | 'collectible' | 'stompable'
   | 'bouncy' | 'gravity' | 'enemy' | 'boss' | 'weak_point' | 'bullet'
   | 'enemy_bullet' | 'pickup' | 'relic' | 'checkpoint' | 'key' | 'gate'
-  | 'torch' | 'moving_plat' | 'funnel' | 'star' | 'coin';
+  | 'torch' | 'moving_plat' | 'funnel' | 'star' | 'coin'
+  | 'grapple_ring' | 'zip_block' | 'crumble_tile' | 'crystal_reset' | 'updraft'
+  | 'fighter_p2' | 'card_slot' | 'logic_switch';
+
+export type CartridgeGenreHud = 'platformer' | 'parkour' | 'fighter' | 'card' | 'grid';
+
+export interface CartridgeGrappleConfig {
+  enabled?: boolean;
+  maxRange?: number;
+  attachWalls?: boolean;
+  pullSpeed?: number;
+}
 
 export interface CartridgeArchetypeBehavior {
   kind:
@@ -265,20 +292,23 @@ export interface CartridgeJsonV1 {
     title: string;
     subtitle?: string;
     genre: 'platformer' | 'shmup';
+    genreHud?: CartridgeGenreHud;
     viewport?: 'classic' | 'wide' | 'hd' | { width: number; height: number };
     paletteRow?: number;
     glowIntensity?: number;
   };
   initialVars?: Record<string, number>;
   sprites?: Record<string, readonly string[]>;
+  cardDeck?: readonly CartridgeCardDef[];
   player: {
-    controller: 'platformer' | 'shmup';
+    controller: CartridgeControllerKind;
     sprite: SpriteId;
     spriteB?: SpriteId;
     w: number;
     h: number;
     maxHearts: number;
     scoutZoom?: number;
+    grappleConfig?: CartridgeGrappleConfig;
     bootInHangar?: boolean;
     loadouts?: readonly CartridgeLoadoutDef[];
     weapons?: Record<string, CartridgeWeaponDef>;
@@ -363,8 +393,32 @@ function validateRulesList(
           errors.push(`${path}[${i}].when OnVar requires varName, valid op, and finite value`);
         }
         break;
+      case 'OnSignal':
+        if (typeof w.signal !== 'string' || !w.signal) {
+          errors.push(`${path}[${i}].when OnSignal requires non-empty signal`);
+        }
+        break;
       default:
         errors.push(`${path}[${i}].when.type '${String(w.type)}' unsupported`);
+    }
+
+    if (r.if !== undefined) {
+      if (!Array.isArray(r.if)) {
+        errors.push(`${path}[${i}].if must be an array`);
+      } else {
+        for (let k = 0; k < r.if.length; k++) {
+          const cond = r.if[k];
+          if (
+            !isRecord(cond) ||
+            typeof cond.varName !== 'string' ||
+            !cond.varName ||
+            !VALID_COMPARE_OPS.has(String(cond.op)) ||
+            !isFiniteNum(cond.value)
+          ) {
+            errors.push(`${path}[${i}].if[${k}] requires varName, valid op, and finite value`);
+          }
+        }
+      }
     }
 
     for (let j = 0; j < r.do.length; j++) {
@@ -400,6 +454,45 @@ function validateRulesList(
         case 'EndGame':
           if (act.outcome !== 'won' && act.outcome !== 'lost' && act.outcome !== 'nextStage') {
             errors.push(`${path}[${i}].do[${j}] EndGame outcome invalid`);
+          }
+          break;
+        case 'EmitSignal':
+          if (typeof act.signal !== 'string' || !act.signal) {
+            errors.push(`${path}[${i}].do[${j}] EmitSignal requires non-empty signal`);
+          }
+          break;
+        case 'FloatText':
+          if (typeof act.text !== 'string' || !act.text) {
+            errors.push(`${path}[${i}].do[${j}] FloatText requires non-empty text`);
+          }
+          if (act.color !== undefined && (typeof act.color !== 'string' || !HEX_COLOR_RE.test(act.color))) {
+            errors.push(`${path}[${i}].do[${j}] FloatText color must be a valid hex color`);
+          }
+          if (
+            act.anchor !== undefined &&
+            act.anchor !== 'player' &&
+            act.anchor !== 'self' &&
+            act.anchor !== 'other' &&
+            act.anchor !== 'world'
+          ) {
+            errors.push(`${path}[${i}].do[${j}] FloatText anchor invalid`);
+          }
+          if (act.x !== undefined && !isFiniteNum(act.x)) errors.push(`${path}[${i}].do[${j}] FloatText x must be finite`);
+          if (act.y !== undefined && !isFiniteNum(act.y)) errors.push(`${path}[${i}].do[${j}] FloatText y must be finite`);
+          break;
+        case 'TweenVar':
+          if (
+            typeof act.name !== 'string' ||
+            !act.name ||
+            !isFiniteNum(act.to) ||
+            !isFiniteNum(act.duration) ||
+            act.duration < 0 ||
+            act.duration > 60
+          ) {
+            errors.push(`${path}[${i}].do[${j}] TweenVar requires name, finite to, and duration in [0, 60]`);
+          }
+          if (act.ease !== undefined && !VALID_TWEEN_EASES.has(String(act.ease))) {
+            errors.push(`${path}[${i}].do[${j}] TweenVar ease invalid`);
           }
           break;
         default:
@@ -446,13 +539,43 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
     if (typeof raw.meta.code !== 'string' || !raw.meta.code) errors.push('meta.code must be a non-empty string');
     if (typeof raw.meta.title !== 'string' || !raw.meta.title) errors.push('meta.title must be a non-empty string');
     if (raw.meta.genre !== 'platformer' && raw.meta.genre !== 'shmup') errors.push("meta.genre must be 'platformer' or 'shmup'");
+    if (
+      raw.meta.genreHud !== undefined &&
+      (typeof raw.meta.genreHud !== 'string' || !VALID_GENRE_HUDS.has(raw.meta.genreHud))
+    ) {
+      errors.push("meta.genreHud must be 'platformer' | 'parkour' | 'fighter' | 'card' | 'grid'");
+    }
+  }
+
+  if (raw.cardDeck !== undefined) {
+    if (!Array.isArray(raw.cardDeck) || raw.cardDeck.length > 32) {
+      errors.push('cardDeck must be an array of at most 32 cards');
+    } else {
+      for (let i = 0; i < raw.cardDeck.length; i++) {
+        const card = raw.cardDeck[i];
+        if (!isRecord(card)) {
+          errors.push(`cardDeck[${i}] must be an object`);
+          continue;
+        }
+        if (typeof card.id !== 'string' || !card.id) errors.push(`cardDeck[${i}].id must be a non-empty string`);
+        if (typeof card.name !== 'string' || !card.name) errors.push(`cardDeck[${i}].name must be a non-empty string`);
+        if (!isFiniteNum(card.cost) || card.cost < 0 || card.cost > 20) errors.push(`cardDeck[${i}].cost must be in [0, 20]`);
+        if (!VALID_CARD_KINDS.has(String(card.kind))) {
+          errors.push(`cardDeck[${i}].kind must be 'attack' | 'shield' | 'heal' | 'surge'`);
+        }
+        if (!isFiniteNum(card.power) || card.power < 0 || card.power > 999) errors.push(`cardDeck[${i}].power must be in [0, 999]`);
+        if (card.color !== undefined && (typeof card.color !== 'string' || !HEX_COLOR_RE.test(card.color))) {
+          errors.push(`cardDeck[${i}].color must be a valid hex color`);
+        }
+      }
+    }
   }
 
   if (!isRecord(raw.player)) {
     errors.push('player object is required');
   } else {
-    if (raw.player.controller !== 'platformer' && raw.player.controller !== 'shmup') {
-      errors.push("player.controller must be 'platformer' or 'shmup'");
+    if (typeof raw.player.controller !== 'string' || !VALID_CONTROLLERS.has(raw.player.controller)) {
+      errors.push("player.controller must be 'platformer' | 'shmup' | 'topdown' | 'fighter' | 'card'");
     }
     if (typeof raw.player.sprite !== 'string' || !validSprites.has(raw.player.sprite)) {
       errors.push(`player.sprite '${String(raw.player.sprite)}' is unknown`);
@@ -464,6 +587,25 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
     if (!isFiniteNum(raw.player.h) || raw.player.h <= 0 || raw.player.h > 64) errors.push('player.h must be in (0, 64]');
     if (!isFiniteNum(raw.player.maxHearts) || raw.player.maxHearts < 1 || raw.player.maxHearts > 16) {
       errors.push('player.maxHearts must be in [1, 16]');
+    }
+    if (raw.player.grappleConfig !== undefined) {
+      if (!isRecord(raw.player.grappleConfig)) {
+        errors.push('player.grappleConfig must be an object');
+      } else {
+        const gc = raw.player.grappleConfig;
+        if (gc.enabled !== undefined && typeof gc.enabled !== 'boolean') {
+          errors.push('player.grappleConfig.enabled must be a boolean');
+        }
+        if (gc.attachWalls !== undefined && typeof gc.attachWalls !== 'boolean') {
+          errors.push('player.grappleConfig.attachWalls must be a boolean');
+        }
+        if (gc.maxRange !== undefined && (!isFiniteNum(gc.maxRange) || gc.maxRange <= 0 || gc.maxRange > 512)) {
+          errors.push('player.grappleConfig.maxRange must be in (0, 512]');
+        }
+        if (gc.pullSpeed !== undefined && (!isFiniteNum(gc.pullSpeed) || gc.pullSpeed <= 0 || gc.pullSpeed > 1600)) {
+          errors.push('player.grappleConfig.pullSpeed must be in (0, 1600]');
+        }
+      }
     }
   }
 

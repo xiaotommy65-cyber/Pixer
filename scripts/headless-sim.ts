@@ -11,6 +11,7 @@ import {
   testProceduralDeclarativeCompiler,
 } from './sim/ArchitectureTests.ts';
 import {
+  testCelestialParkourAndGrappleEngine3,
   testCloudberryHop,
   testSandboxBenchmark,
   testSugarStarlight,
@@ -50,6 +51,7 @@ async function runAll() {
   testSandboxBenchmark();
   testEmberkeepDndAndAgentBridge();
   testAstralChronicles();
+  testCelestialParkourAndGrappleEngine3();
   testHd2dDepthPipeline();
   testHalAndInputPipeline();
   testArchitectureBoundariesAndLifecycle();
@@ -60,7 +62,7 @@ async function runAll() {
   testM41DynamicViewportAndCamera();
   testM42M43ChunkedWorldsAndMultiLayerDepth();
   testProceduralDeclarativeCompiler();
-  console.log('[SIM ALL PASSED] Pixel Atelier Engine 3.0 & All 5 Cartridges (PA-01..PA-05) Passed!');
+  console.log('[SIM ALL PASSED] Pixel Atelier Engine 3.0 & All 6 Cartridges (PA-01..PA-06) Passed!');
 }
 
 void runAll().catch((err) => {

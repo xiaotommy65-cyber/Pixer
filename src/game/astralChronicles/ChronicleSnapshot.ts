@@ -47,22 +47,26 @@ function getStaticChapterTiles(chapterIdx: number, gateOpen: boolean): TileDesc[
   }
   for (const wall of ch.walls) {
     const columnSortY = wall.y + wall.h;
+    const isTree = wall.sprite === 'tree_canopy';
+    let segIdx = 0;
     for (let wy = wall.y; wy < wall.y + wall.h; wy += 20) {
       const segH = Math.min(20, wall.y + wall.h - wy);
       const isBottomSeg = wy + segH >= wall.y + wall.h;
+      const jitterX = isTree ? (segIdx % 2 === 1 ? 3 : -2) : 0;
+      segIdx++;
       tiles.push({
         sprite: wall.sprite,
-        x: wall.x,
+        x: wall.x + jitterX,
         y: wy,
-        w: wall.w,
-        h: segH,
+        w: isTree ? Math.max(wall.w, 22) : wall.w,
+        h: isTree ? Math.max(segH, 22) : segH,
         tint: wall.tint,
-        elevationZ: 9,
-        extrudeH: isBottomSeg ? 10 : 0,
-        wallColor: wallFaceHex,
+        elevationZ: isTree ? 2 : 9,
+        extrudeH: isBottomSeg ? (isTree ? 3 : 10) : 0,
+        wallColor: isTree ? '#4f3524' : wallFaceHex,
         wallMaterial:
-          wall.sprite === 'tree_canopy'
-            ? 'earth'
+          isTree
+            ? 'timber'
             : ch.id === 'ch4-frostspire' || ch.id === 'ch5-core'
               ? 'astral'
               : 'stone',
@@ -375,7 +379,8 @@ export function buildChronicleSceneSnapshot(
     });
   }
   if (glow > 0.05) {
-    lights.push({ x: s.hx + 8, y: s.hy + 8, radius: 52, color: '#fff3cc', intensity: 0.52 * glow });
+    const heroLightAlpha = ch.ambientDarkness > 0.25 ? 0.36 : 0.16;
+    lights.push({ x: s.hx + 8, y: s.hy + 8, radius: 44, color: '#fff3cc', intensity: heroLightAlpha * glow });
   }
 
   for (let i = 0; i < s.slashes.length; i++) {

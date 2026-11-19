@@ -68,6 +68,12 @@ export interface TileDesc {
   alpha?: number;
   /** Optional horizontal sprite flip. */
   flipX?: boolean;
+  /** 4-bit N/E/S/W auto-tile bitmask (N=1, E=2, S=4, W=8). */
+  autoMask?: number;
+  /** Optional deterministic variant seed for tile decor. */
+  variant?: number;
+  /** Wind sway intensity multiplier (0 = rigid, >0 = gentle wind lean). */
+  windSway?: number;
 }
 
 export interface EntityDesc {
@@ -120,6 +126,8 @@ export interface ParticleDesc {
   pull?: number;
   damping?: number;
   convergeSnapRadius?: number;
+  curlStrength?: number;
+  curlScale?: number;
 }
 
 export interface LightDesc {
@@ -137,6 +145,25 @@ export interface DebugRectDesc {
   w: number;
   h: number;
   color: string;
+}
+
+export interface HudPrimitiveDesc {
+  kind: 'bar' | 'box' | 'aim_line' | 'text';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  x2?: number;
+  y2?: number;
+  ratio?: number;
+  text?: string;
+  scale?: number;
+  align?: 'left' | 'center' | 'right';
+  shadowColor?: string;
+  color: string;
+  bgColor?: string;
+  alpha?: number;
+  worldSpace?: boolean;
 }
 
 export interface BgCloudDesc {
@@ -198,6 +225,14 @@ export interface Hd2dDepthConfig {
   horizonHazeAlpha?: number;
   /** Soft tilt-shift upper/lower bokeh lens shading alpha. */
   tiltShiftAlpha?: number;
+  /** World-space Y water plane for real-time planar reflection + ripple shader. */
+  waterLevelY?: number;
+  /** Water tint hex color (default '#3a6e9c'). */
+  waterTint?: string;
+  /** Snap world coordinates to integer pixel grid for clean pixel-art crispness. */
+  pixelPerfect?: boolean;
+  /** Optional warm/cool split-tone atmospheric weight. */
+  splitToneWarmth?: number;
 }
 
 export interface RenderSceneSnapshot {
@@ -238,6 +273,8 @@ export interface RenderSceneSnapshot {
   particles: ParticleDesc[];
   lights: LightDesc[];
   debugRects?: DebugRectDesc[];
+  hudPrimitives?: readonly HudPrimitiveDesc[];
+  hideClassicHud?: boolean;
   statusBanner: string;
   stage?: StageProgressInfo;
   bgmTheme?: BgmTheme;

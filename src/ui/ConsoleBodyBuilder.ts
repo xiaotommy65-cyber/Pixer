@@ -65,8 +65,8 @@ export function buildConsoleBodyDom(opts: {
   mLeft.append(stageTag, scoreTag, starTag);
 
   const mRight = el('div', 'screen-metrics');
-  const spriteStatTag = el('span', 'metric-tag', '精靈 0 · 0 draws');
-  const fpsTag = el('span', 'metric-tag', '60 FPS');
+  const spriteStatTag = el('span', 'metric-tag is-debug-metric panel-hidden', '精靈 0 · 0 draws');
+  const fpsTag = el('span', 'metric-tag is-debug-metric panel-hidden', '60 FPS');
   const handheldSettingsBtn = iconBtn('handheld-settings-btn', 'gear', '設定', '開啟進階手感與系統設定', opts.onOpenSettings);
   const exitLandscapeBtn = iconBtn('handheld-exit-btn', 'exit', '離開橫屏', '離開全螢幕橫屏掌機模式', opts.onExitLandscape);
   mRight.append(spriteStatTag, fpsTag, handheldSettingsBtn, exitLandscapeBtn);
