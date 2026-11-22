@@ -8,12 +8,15 @@ import {
   type SpriteId,
 } from './AtlasSpritesData.ts';
 import { AUTO_TILE_SPRITE_GRIDS } from './sprites/AutoTileSprites.ts';
+import { buildCastleSprites } from './sprites/CastleSprites.ts';
+import { buildHdMaterialSprites } from './sprites/HdMaterialSprites.ts';
 import { buildPaletteLutRgba, PALETTE_THEME_COUNT } from './sprites/PaletteData.ts';
 import { PIXEL_FONT_5X7 } from './sprites/PixelFontData.ts';
-import type { SpriteRect } from '../core/gpu/GpuTypes.ts';
+import { MaxRectsBin } from 'maxrects-packer';
+import { MAX_ATLAS_PAGES, type AtlasPoolStats, type SpriteRect } from '../core/gpu/GpuTypes.ts';
 
-export { DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B, PALETTE_THEME_COUNT, TOYBOX_PALETTE };
-export type { SpriteId };
+export { DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B, MAX_ATLAS_PAGES, PALETTE_THEME_COUNT, TOYBOX_PALETTE };
+export type { AtlasPoolStats, SpriteId };
 
 export const ATLAS_SIZE = 1024;
 export const TILE_PX = 16;
@@ -46,10 +49,42 @@ export function parseGridToIndices(grid: readonly string[], out?: Uint8Array): U
 const SLOTS_PER_ROW = ATLAS_SIZE / TILE_PX; // 64 slots per row on 1024x1024
 const DYNAMIC_START_Y = 128; // Reserve top 128px (8 rows x 64 cols = 512 slots) for built-in tiles
 
+const MAXRECTS_BIN_OPTIONS = {
+  smart: false,
+  pot: false,
+  square: false,
+  allowRotation: false,
+  border: 0,
+};
+
+interface DynamicAtlasSlot {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface AtlasExtraPage {
+  pixels: Uint8Array;
+  indexPixels: Uint8Array;
+  bin: MaxRectsBin;
+}
+
+export interface SpriteSheetMeta {
+  sheetId: string;
+  cols: number;
+  rows: number;
+  frameW: number;
+  frameH: number;
+  frameIds: string[];
+  pageIndex: number;
+}
+
 /**
- * Dynamic 1024x1024 Texture Atlas supporting built-in 16-color indexed sprites (with 16xN Palette LUT),
- * live Sprite Atelier hero editing, and runtime 32-bit RGBA / dynamic shelf allocation
- * for plugins and AI-synthesized pixel art.
+ * Multi-page 1024x1024 Texture Atlas Pool (up to 8 pages) supporting built-in 16-color indexed
+ * sprites (with 16xN Palette LUT), live Sprite Atelier hero editing, external PNG sprite-sheet
+ * slicing, and runtime 32-bit RGBA dynamic slot allocation with safe recycling.
  */
 export class TextureAtlas {
   public static readonly FONT_GLYPH_W = 6;
@@ -64,24 +99,28 @@ export class TextureAtlas {
   public readonly paletteRows = PALETTE_THEME_COUNT;
   public readonly rects = new Map<SpriteId, SpriteRect>();
   private readonly glyphRects = new Map<number, SpriteRect>();
+  private readonly dynamicSlots = new Map<string, DynamicAtlasSlot>();
+  private readonly freeDynamicSlots: DynamicAtlasSlot[] = [];
+  private readonly extraPages: AtlasExtraPage[] = [];
+  private readonly spriteSheets = new Map<string, SpriteSheetMeta>();
+  private builtinSpriteCount = 0;
   public readonly heroPixelsA = new Uint8Array(TILE_PX * TILE_PX);
   public readonly heroPixelsB = new Uint8Array(TILE_PX * TILE_PX);
 
-  private shelfX = 0;
-  private shelfY = DYNAMIC_START_Y;
-  private shelfRowH = 0;
+  private page0Bin = new MaxRectsBin(ATLAS_SIZE, ATLAS_SIZE - DYNAMIC_START_Y, 0, MAXRECTS_BIN_OPTIONS);
   private dirty = false;
   private revision = 0;
 
   constructor() {
     this.buildInitialAtlas();
+    this.builtinSpriteCount = this.rects.size;
   }
 
   public getRevision(): number {
     return this.revision;
   }
 
-  private pixelUv(x0: number, y0: number, w: number, h: number): SpriteRect {
+  private pixelUv(x0: number, y0: number, w: number, h: number, page = 0): SpriteRect {
     const pad = 0.075 / ATLAS_SIZE;
     return {
       u0: x0 / ATLAS_SIZE + pad,
@@ -90,6 +129,7 @@ export class TextureAtlas {
       v1: (y0 + h) / ATLAS_SIZE - pad,
       w,
       h,
+      page,
     };
   }
 
@@ -274,6 +314,20 @@ export class TextureAtlas {
 
     // Default procedural 96x48 16-bit twilight mountain + spire silhouette RGBA backdrop
     this.registerDynamicRgbaSprite('parallax_twilight_bg', 96, 48, this.buildProceduralTwilightMountains());
+
+    // Pixer 7.0+ High-Definition 64x64 / 48x48 Procedural Material Sprites (32-bit RGBA)
+    const hdSprites = buildHdMaterialSprites();
+    for (let i = 0; i < hdSprites.length; i++) {
+      const sp = hdSprites[i];
+      this.registerDynamicRgbaSprite(sp.id, sp.width, sp.height, sp.rgba);
+    }
+
+    // Pixer 10.0 HD-2D Demon Castle 32x32 / 32x48 / 48x64 PBR Pixel Architecture & Props
+    const castleSprites = buildCastleSprites();
+    for (let i = 0; i < castleSprites.length; i++) {
+      const sp = castleSprites[i];
+      this.registerDynamicRgbaSprite(sp.id, sp.width, sp.height, sp.rgba);
+    }
   }
 
   private buildProceduralTwilightMountains(): Uint8Array {
@@ -358,23 +412,228 @@ export class TextureAtlas {
     this.revision++;
   }
 
-  private allocateDynamicRegion(w: number, h: number): { x: number; y: number } {
-    if (this.shelfX + w > ATLAS_SIZE) {
-      this.shelfX = 0;
-      this.shelfY += Math.max(TILE_PX, this.shelfRowH);
-      this.shelfRowH = 0;
+  private getPageBuffers(page: number): { pixels: Uint8Array; indexPixels: Uint8Array } {
+    if (page <= 0 || page > this.extraPages.length) {
+      return { pixels: this.pixels, indexPixels: this.indexPixels };
     }
-    if (this.shelfY + h > ATLAS_SIZE) {
-      // Wrap safely within dynamic zone if exhausted by excessive registrations
-      this.shelfX = 0;
-      this.shelfY = DYNAMIC_START_Y;
-      this.shelfRowH = 0;
+    const p = this.extraPages[page - 1];
+    return { pixels: p.pixels, indexPixels: p.indexPixels };
+  }
+
+  private clearAtlasRect(page: number, startX: number, startY: number, w: number, h: number): void {
+    const { pixels, indexPixels } = this.getPageBuffers(page);
+    for (let y = 0; y < h; y++) {
+      const rowBase = (startY + y) * ATLAS_SIZE + startX;
+      indexPixels.fill(0, rowBase, rowBase + w);
+      pixels.fill(0, rowBase * 4, (rowBase + w) * 4);
     }
-    const x = this.shelfX;
-    const y = this.shelfY;
-    this.shelfX += w;
-    this.shelfRowH = Math.max(this.shelfRowH, h);
-    return { x, y };
+  }
+
+  private blitRgbaToPage(page: number, startX: number, startY: number, w: number, h: number, rgba: Uint8Array): void {
+    if (page === 0) {
+      this.blitRgbaBuffer(startX, startY, w, h, rgba);
+      return;
+    }
+    const { pixels, indexPixels } = this.getPageBuffers(page);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const src = (y * w + x) * 4;
+        const a = rgba[src + 3] ?? 0;
+        const dstIdx = (startY + y) * ATLAS_SIZE + (startX + x);
+        const dst = dstIdx * 4;
+        if (a === 0) {
+          indexPixels[dstIdx] = 0;
+          pixels[dst] = 0;
+          pixels[dst + 1] = 0;
+          pixels[dst + 2] = 0;
+          pixels[dst + 3] = 0;
+        } else {
+          indexPixels[dstIdx] = 255;
+          pixels[dst] = rgba[src] ?? 0;
+          pixels[dst + 1] = rgba[src + 1] ?? 0;
+          pixels[dst + 2] = rgba[src + 2] ?? 0;
+          pixels[dst + 3] = a;
+        }
+      }
+    }
+  }
+
+  private allocateDynamicRegion(w: number, h: number): DynamicAtlasSlot | null {
+    // 1. Prefer best-fit recycled free slot to avoid shelf growth and fragmentation
+    let bestIdx = -1;
+    let bestWaste = Infinity;
+    for (let i = 0; i < this.freeDynamicSlots.length; i++) {
+      const slot = this.freeDynamicSlots[i];
+      if (slot.w >= w && slot.h >= h) {
+        const waste = slot.w * slot.h - w * h;
+        if (waste < bestWaste) {
+          bestWaste = waste;
+          bestIdx = i;
+          if (waste === 0) break;
+        }
+      }
+    }
+    if (bestIdx >= 0) {
+      const chosen = this.freeDynamicSlots[bestIdx];
+      const last = this.freeDynamicSlots.pop()!;
+      if (bestIdx < this.freeDynamicSlots.length) {
+        this.freeDynamicSlots[bestIdx] = last;
+      }
+      return chosen;
+    }
+
+    // 2. Pack into primary page 0 dynamic MaxRectsBin (yOffset = DYNAMIC_START_Y)
+    const p0Rect = this.page0Bin.add(w, h, null);
+    if (p0Rect && p0Rect.x + w <= ATLAS_SIZE && p0Rect.y + h <= ATLAS_SIZE - DYNAMIC_START_Y) {
+      return { page: 0, x: p0Rect.x, y: DYNAMIC_START_Y + p0Rect.y, w, h };
+    }
+
+    // 3. Spill into existing extra pages (1..MAX_ATLAS_PAGES-1) via MaxRectsBin
+    for (let i = 0; i < this.extraPages.length; i++) {
+      const ep = this.extraPages[i];
+      const epRect = ep.bin.add(w, h, null);
+      if (epRect && epRect.x + w <= ATLAS_SIZE && epRect.y + h <= ATLAS_SIZE) {
+        return { page: i + 1, x: epRect.x, y: epRect.y, w, h };
+      }
+    }
+
+    // 4. Allocate a brand new atlas page on demand up to MAX_ATLAS_PAGES
+    if (this.extraPages.length + 1 < MAX_ATLAS_PAGES) {
+      const bin = new MaxRectsBin(ATLAS_SIZE, ATLAS_SIZE, 0, MAXRECTS_BIN_OPTIONS);
+      const placed = bin.add(w, h, null);
+      if (!placed) return null;
+      const newPage: AtlasExtraPage = {
+        pixels: new Uint8Array(ATLAS_SIZE * ATLAS_SIZE * 4),
+        indexPixels: new Uint8Array(ATLAS_SIZE * ATLAS_SIZE),
+        bin,
+      };
+      this.extraPages.push(newPage);
+      return { page: this.extraPages.length, x: placed.x, y: placed.y, w, h };
+    }
+
+    return null;
+  }
+
+  /** Releases a previously allocated dynamic sprite slot back to the free-list for safe reuse. */
+  public releaseDynamicSprite(id: string): boolean {
+    const slot = this.dynamicSlots.get(id);
+    if (!slot) return false;
+    this.dynamicSlots.delete(id);
+    this.rects.delete(id);
+    this.clearAtlasRect(slot.page, slot.x, slot.y, slot.w, slot.h);
+    this.freeDynamicSlots.push(slot);
+    if (this.dynamicSlots.size === 0) {
+      this.freeDynamicSlots.length = 0;
+      this.page0Bin = new MaxRectsBin(ATLAS_SIZE, ATLAS_SIZE - DYNAMIC_START_Y, 0, MAXRECTS_BIN_OPTIONS);
+      this.extraPages.length = 0;
+    }
+    this.dirty = true;
+    this.revision++;
+    return true;
+  }
+
+  /** Releases all dynamic sprites matching a prefix (e.g. on cartridge unload). */
+  public releaseDynamicByPrefix(prefix: string): number {
+    if (!prefix) return 0;
+    let released = 0;
+    for (const id of [...this.dynamicSlots.keys()]) {
+      if (id.startsWith(prefix) && this.releaseDynamicSprite(id)) {
+        released++;
+      }
+    }
+    return released;
+  }
+
+  public getDynamicSlotCount(): number {
+    return this.dynamicSlots.size;
+  }
+
+  public getPageCount(): number {
+    return 1 + this.extraPages.length;
+  }
+
+  public getPagePixels(page: number): Uint8Array | null {
+    if (page === 0) return this.pixels;
+    return this.extraPages[page - 1]?.pixels ?? null;
+  }
+
+  public getPageIndexPixels(page: number): Uint8Array | null {
+    if (page === 0) return this.indexPixels;
+    return this.extraPages[page - 1]?.indexPixels ?? null;
+  }
+
+  public getExtraPages(): { pixels: Uint8Array; indexPixels: Uint8Array }[] {
+    return this.extraPages.map((p) => ({ pixels: p.pixels, indexPixels: p.indexPixels }));
+  }
+
+  public getAtlasStats(): AtlasPoolStats {
+    const pageCount = this.getPageCount();
+    const bytesPerPage = ATLAS_SIZE * ATLAS_SIZE * 5; // 4B RGBA + 1B index
+    return {
+      pageCount,
+      maxPages: MAX_ATLAS_PAGES,
+      pageSize: ATLAS_SIZE,
+      builtinSprites: this.builtinSpriteCount,
+      dynamicSprites: this.dynamicSlots.size,
+      spriteSheets: this.spriteSheets.size,
+      totalBytes: pageCount * bytesPerPage,
+    };
+  }
+
+  public listSpriteSheets(): SpriteSheetMeta[] {
+    return Array.from(this.spriteSheets.values()).map((s) => ({
+      ...s,
+      frameIds: [...s.frameIds],
+    }));
+  }
+
+  /**
+   * Slices an external or procedurally generated RGBA sprite sheet into `cols x rows` frames
+   * and registers them as `${sheetId}:0..N-1` inside the multi-page dynamic atlas pool.
+   */
+  public importSpriteSheet(
+    sheetId: string,
+    rgba: Uint8Array,
+    imgW: number,
+    imgH: number,
+    cols: number,
+    rows: number,
+  ): SpriteSheetMeta {
+    const safeCols = Math.max(1, Math.min(32, Math.round(cols)));
+    const safeRows = Math.max(1, Math.min(32, Math.round(rows)));
+    const frameW = Math.max(1, Math.min(512, Math.floor(imgW / safeCols)));
+    const frameH = Math.max(1, Math.min(256, Math.floor(imgH / safeRows)));
+    const frameBuf = new Uint8Array(frameW * frameH * 4);
+    const frameIds: string[] = [];
+    let lastPage = 0;
+
+    let idx = 0;
+    for (let r = 0; r < safeRows; r++) {
+      for (let c = 0; c < safeCols; c++) {
+        for (let y = 0; y < frameH; y++) {
+          const srcY = r * frameH + y;
+          const srcRow = (srcY * imgW + c * frameW) * 4;
+          const dstRow = y * frameW * 4;
+          frameBuf.set(rgba.subarray(srcRow, srcRow + frameW * 4), dstRow);
+        }
+        const fid = `${sheetId}:${idx++}`;
+        const rect = this.registerDynamicRgbaSprite(fid, frameW, frameH, frameBuf);
+        lastPage = rect.page ?? 0;
+        frameIds.push(fid);
+      }
+    }
+
+    const meta: SpriteSheetMeta = {
+      sheetId,
+      cols: safeCols,
+      rows: safeRows,
+      frameW,
+      frameH,
+      frameIds,
+      pageIndex: lastPage,
+    };
+    this.spriteSheets.set(sheetId, meta);
+    return { ...meta, frameIds: [...meta.frameIds] };
   }
 
   /**
@@ -384,20 +643,28 @@ export class TextureAtlas {
   public registerDynamicRgbaSprite(id: string, w: number, h: number, rgba: Uint8Array): SpriteRect {
     const safeW = Math.max(1, Math.min(512, Math.round(w)));
     const safeH = Math.max(1, Math.min(256, Math.round(h)));
-    const existing = this.rects.get(id);
-    if (existing && existing.w === safeW && existing.h === safeH) {
-      const startX = Math.floor(existing.u0 * ATLAS_SIZE);
-      const startY = Math.floor(existing.v0 * ATLAS_SIZE);
-      if (startY >= DYNAMIC_START_Y) {
-        this.blitRgbaBuffer(startX, startY, safeW, safeH, rgba);
-        this.dirty = true;
-        this.revision++;
-        return existing;
+    const existingSlot = this.dynamicSlots.get(id);
+    if (existingSlot && existingSlot.w >= safeW && existingSlot.h >= safeH) {
+      if (existingSlot.w !== safeW || existingSlot.h !== safeH) {
+        this.clearAtlasRect(existingSlot.page, existingSlot.x, existingSlot.y, existingSlot.w, existingSlot.h);
       }
+      this.blitRgbaToPage(existingSlot.page, existingSlot.x, existingSlot.y, safeW, safeH, rgba);
+      const rect = this.pixelUv(existingSlot.x, existingSlot.y, safeW, safeH, existingSlot.page);
+      this.rects.set(id, rect);
+      this.dirty = true;
+      this.revision++;
+      return rect;
     }
-    const { x, y } = this.allocateDynamicRegion(safeW, safeH);
-    this.blitRgbaBuffer(x, y, safeW, safeH, rgba);
-    const rect = this.pixelUv(x, y, safeW, safeH);
+    if (existingSlot) {
+      this.releaseDynamicSprite(id);
+    }
+    const slot = this.allocateDynamicRegion(safeW, safeH);
+    if (!slot) {
+      return this.rects.get('solid')!;
+    }
+    this.dynamicSlots.set(id, slot);
+    this.blitRgbaToPage(slot.page, slot.x, slot.y, safeW, safeH, rgba);
+    const rect = this.pixelUv(slot.x, slot.y, safeW, safeH, slot.page);
     this.rects.set(id, rect);
     this.dirty = true;
     this.revision++;
@@ -409,20 +676,41 @@ export class TextureAtlas {
     const safeH = Math.max(1, Math.min(128, grid.length));
     const safeW = Math.max(1, Math.min(128, grid[0]?.length ?? TILE_PX));
     const indices = parseGridToIndices(grid);
-    const existing = this.rects.get(id);
-    if (existing && existing.w === safeW && existing.h === safeH) {
-      const startX = Math.floor(existing.u0 * ATLAS_SIZE);
-      const startY = Math.floor(existing.v0 * ATLAS_SIZE);
-      if (startY >= DYNAMIC_START_Y) {
-        this.blitIndexBufferAt(startX, startY, indices, safeW, safeH);
-        this.dirty = true;
-        this.revision++;
-        return existing;
+    const existingSlot = this.dynamicSlots.get(id);
+    if (existingSlot && existingSlot.page === 0 && existingSlot.w >= safeW && existingSlot.h >= safeH) {
+      if (existingSlot.w !== safeW || existingSlot.h !== safeH) {
+        this.clearAtlasRect(0, existingSlot.x, existingSlot.y, existingSlot.w, existingSlot.h);
       }
+      this.blitIndexBufferAt(existingSlot.x, existingSlot.y, indices, safeW, safeH);
+      const rect = this.pixelUv(existingSlot.x, existingSlot.y, safeW, safeH, 0);
+      this.rects.set(id, rect);
+      this.dirty = true;
+      this.revision++;
+      return rect;
     }
-    const { x, y } = this.allocateDynamicRegion(safeW, safeH);
-    this.blitIndexBufferAt(x, y, indices, safeW, safeH);
-    const rect = this.pixelUv(x, y, safeW, safeH);
+    if (existingSlot) {
+      this.releaseDynamicSprite(id);
+    }
+    const slot = this.allocateDynamicRegion(safeW, safeH);
+    if (!slot) {
+      return this.rects.get('solid')!;
+    }
+    this.dynamicSlots.set(id, slot);
+    if (slot.page === 0) {
+      this.blitIndexBufferAt(slot.x, slot.y, indices, safeW, safeH);
+    } else {
+      const rgba = new Uint8Array(safeW * safeH * 4);
+      for (let i = 0; i < safeW * safeH; i++) {
+        const idx = indices[i] ?? 0;
+        const c = PALETTE_RGB[idx] ?? [0, 0, 0, 0];
+        rgba[i * 4] = c[0];
+        rgba[i * 4 + 1] = c[1];
+        rgba[i * 4 + 2] = c[2];
+        rgba[i * 4 + 3] = c[3];
+      }
+      this.blitRgbaToPage(slot.page, slot.x, slot.y, safeW, safeH, rgba);
+    }
+    const rect = this.pixelUv(slot.x, slot.y, safeW, safeH, slot.page);
     this.rects.set(id, rect);
     this.dirty = true;
     this.revision++;

@@ -1,12 +1,24 @@
+import {
+  buildCamera3DViewProjMatrix,
+  computeCamera3D,
+  createComputedCamera3D,
+} from '../math/Perspective3DMath.ts';
 import { appLogger } from '../runtime/AppLogger.ts';
 import {
   FLOATS_PER_INSTANCE,
+  FLOATS_PER_QUAD3D,
   GAME_H,
   GAME_W,
+  MAX_ATLAS_PAGES,
   MAX_DYNAMIC_LIGHTS,
   MAX_INSTANCES_PER_PASS,
+  MAX_QUAD3D_INSTANCES,
+  OCCLUSION_GRID_MAX,
   OVERSCAN_PAD,
+  type AtlasPageData,
+  type GpuOcclusionState,
   type IGpuBackend,
+  type Quad3DPassData,
   type SkyGradient,
 } from './GpuTypes.ts';
 import {
@@ -14,6 +26,8 @@ import {
   BLOOM_DOWN_FS,
   COMPOSITE_FS,
   POST_VS,
+  QUAD3D_FS,
+  QUAD3D_VS,
   SKY_FS,
   SKY_VS,
   SPRITE_FS,
@@ -21,6 +35,7 @@ import {
 } from './WebGl2Shaders.ts';
 
 const DEFAULT_PALETTE_ROWS = 8;
+const MAX_QUAD3D_BLEND_INSTANCES = 4096;
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const sh = gl.createShader(type);
@@ -79,6 +94,7 @@ interface GlRenderTargets {
   bloomW: number;
   bloomH: number;
   mrtFbo: WebGLFramebuffer;
+  depthRb: WebGLRenderbuffer;
   sceneTex: WebGLTexture;
   emissiveTex: WebGLTexture;
   bloomFboA: WebGLFramebuffer;
@@ -93,17 +109,29 @@ export class WebGl2Backend implements IGpuBackend {
   private gl: WebGL2RenderingContext;
   private skyProg: WebGLProgram;
   private spriteProg: WebGLProgram;
+  private quad3dProg: WebGLProgram;
   private bloomDownProg: WebGLProgram;
   private bloomBlurProg: WebGLProgram;
   private compositeProg: WebGLProgram;
   private skyVao: WebGLVertexArrayObject;
-  private spriteVao: WebGLVertexArrayObject;
-  private instanceBuffer: WebGLBuffer;
+  private alphaVao: WebGLVertexArrayObject;
+  private addVao: WebGLVertexArrayObject;
+  private quad3dOpaqueVao: WebGLVertexArrayObject;
+  private quad3dAlphaVao: WebGLVertexArrayObject;
+  private quad3dAddVao: WebGLVertexArrayObject;
+  private alphaBuffer: WebGLBuffer;
+  private addBuffer: WebGLBuffer;
+  private quad3dOpaqueBuffer: WebGLBuffer;
+  private quad3dAlphaBuffer: WebGLBuffer;
+  private quad3dAddBuffer: WebGLBuffer;
   private atlasTexture: WebGLTexture;
   private indexAtlasTexture: WebGLTexture;
   private paletteLutTexture: WebGLTexture;
+  private occlusionTexture: WebGLTexture;
   private paletteRows = DEFAULT_PALETTE_ROWS;
   private targets: GlRenderTargets | null = null;
+  private lastOcclusionVersion = -1;
+  private readonly occUploadBuf = new Uint8Array(OCCLUSION_GRID_MAX * OCCLUSION_GRID_MAX);
 
   private uTopLoc: WebGLUniformLocation | null;
   private uMidLoc: WebGLUniformLocation | null;
@@ -116,6 +144,16 @@ export class WebGl2Backend implements IGpuBackend {
   private uLightCountLoc: WebGLUniformLocation | null;
   private uLightPosRadLoc: WebGLUniformLocation | null;
   private uLightColIntLoc: WebGLUniformLocation | null;
+  private uOccParamsLoc: WebGLUniformLocation | null;
+  private uOccDimsLoc: WebGLUniformLocation | null;
+  private u3dViewProjLoc: WebGLUniformLocation | null;
+  private u3dViewSizeLoc: WebGLUniformLocation | null;
+  private u3dPaletteRowsLoc: WebGLUniformLocation | null;
+  private u3dLightCountLoc: WebGLUniformLocation | null;
+  private u3dLightPosRadLoc: WebGLUniformLocation | null;
+  private u3dLightColIntLoc: WebGLUniformLocation | null;
+  private u3dOccWorldLoc: WebGLUniformLocation | null;
+  private u3dOccDimsLoc: WebGLUniformLocation | null;
   private uDownOffsetLoc: WebGLUniformLocation | null;
   private uBlurStepLoc: WebGLUniformLocation | null;
   private uCompGlowLoc: WebGLUniformLocation | null;
@@ -126,8 +164,11 @@ export class WebGl2Backend implements IGpuBackend {
   private uCompWaterLevelLoc: WebGLUniformLocation | null;
   private uCompWaterTintLoc: WebGLUniformLocation | null;
   private uCompTimeLoc: WebGLUniformLocation | null;
+  private uCompTiltShiftLoc: WebGLUniformLocation | null;
   private readonly lightPosRadData = new Float32Array(MAX_DYNAMIC_LIGHTS * 4);
   private readonly lightColIntData = new Float32Array(MAX_DYNAMIC_LIGHTS * 4);
+  private readonly cam3dScratch = createComputedCamera3D();
+  private readonly viewProj3d = new Float32Array(16);
 
   private onLostListener?: (e: Event) => void;
   private canvasEl: HTMLCanvasElement;
@@ -142,12 +183,14 @@ export class WebGl2Backend implements IGpuBackend {
     initialIndexPixels?: Uint8Array,
     initialPaletteLut?: Uint8Array,
     initialPaletteRows = DEFAULT_PALETTE_ROWS,
+    initialExtraPages?: readonly AtlasPageData[],
   ) {
     this.canvasEl = canvas;
     this.gl = gl;
     this.paletteRows = Math.max(1, initialPaletteRows);
     this.skyProg = linkProgram(gl, SKY_VS, SKY_FS);
     this.spriteProg = linkProgram(gl, SPRITE_VS, SPRITE_FS);
+    this.quad3dProg = linkProgram(gl, QUAD3D_VS, QUAD3D_FS);
     this.bloomDownProg = linkProgram(gl, POST_VS, BLOOM_DOWN_FS);
     this.bloomBlurProg = linkProgram(gl, POST_VS, BLOOM_BLUR_FS);
     this.compositeProg = linkProgram(gl, POST_VS, COMPOSITE_FS);
@@ -163,14 +206,36 @@ export class WebGl2Backend implements IGpuBackend {
     const uAtlasLoc = gl.getUniformLocation(this.spriteProg, 'uAtlas');
     const uIdxLoc = gl.getUniformLocation(this.spriteProg, 'uIndexAtlas');
     const uLutLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteLut');
+    const uOccTexLoc = gl.getUniformLocation(this.spriteProg, 'uOcclusionTex');
     this.uSpriteViewSizeLoc = gl.getUniformLocation(this.spriteProg, 'uViewSize');
     this.uPaletteRowsLoc = gl.getUniformLocation(this.spriteProg, 'uPaletteRows');
     this.uLightCountLoc = gl.getUniformLocation(this.spriteProg, 'uLightCount');
     this.uLightPosRadLoc = gl.getUniformLocation(this.spriteProg, 'uLightPosRad');
     this.uLightColIntLoc = gl.getUniformLocation(this.spriteProg, 'uLightColInt');
+    this.uOccParamsLoc = gl.getUniformLocation(this.spriteProg, 'uOccParams');
+    this.uOccDimsLoc = gl.getUniformLocation(this.spriteProg, 'uOccDims');
     if (uAtlasLoc) gl.uniform1i(uAtlasLoc, 0);
     if (uIdxLoc) gl.uniform1i(uIdxLoc, 1);
     if (uLutLoc) gl.uniform1i(uLutLoc, 2);
+    if (uOccTexLoc) gl.uniform1i(uOccTexLoc, 3);
+
+    gl.useProgram(this.quad3dProg);
+    const u3dAtlasLoc = gl.getUniformLocation(this.quad3dProg, 'uAtlas');
+    const u3dIdxLoc = gl.getUniformLocation(this.quad3dProg, 'uIndexAtlas');
+    const u3dLutLoc = gl.getUniformLocation(this.quad3dProg, 'uPaletteLut');
+    const u3dOccTexLoc = gl.getUniformLocation(this.quad3dProg, 'uOcclusionTex');
+    this.u3dViewProjLoc = gl.getUniformLocation(this.quad3dProg, 'uViewProj');
+    this.u3dViewSizeLoc = gl.getUniformLocation(this.quad3dProg, 'uViewSize');
+    this.u3dPaletteRowsLoc = gl.getUniformLocation(this.quad3dProg, 'uPaletteRows');
+    this.u3dLightCountLoc = gl.getUniformLocation(this.quad3dProg, 'uLightCount');
+    this.u3dLightPosRadLoc = gl.getUniformLocation(this.quad3dProg, 'uLightPosRad');
+    this.u3dLightColIntLoc = gl.getUniformLocation(this.quad3dProg, 'uLightColInt');
+    this.u3dOccWorldLoc = gl.getUniformLocation(this.quad3dProg, 'uOccWorld');
+    this.u3dOccDimsLoc = gl.getUniformLocation(this.quad3dProg, 'uOccDims');
+    if (u3dAtlasLoc) gl.uniform1i(u3dAtlasLoc, 0);
+    if (u3dIdxLoc) gl.uniform1i(u3dIdxLoc, 1);
+    if (u3dLutLoc) gl.uniform1i(u3dLutLoc, 2);
+    if (u3dOccTexLoc) gl.uniform1i(u3dOccTexLoc, 3);
 
     gl.useProgram(this.bloomDownProg);
     const uDownTexLoc = gl.getUniformLocation(this.bloomDownProg, 'uTexA');
@@ -193,38 +258,87 @@ export class WebGl2Backend implements IGpuBackend {
     this.uCompWaterLevelLoc = gl.getUniformLocation(this.compositeProg, 'uWaterLevel');
     this.uCompWaterTintLoc = gl.getUniformLocation(this.compositeProg, 'uWaterTint');
     this.uCompTimeLoc = gl.getUniformLocation(this.compositeProg, 'uTimeSec');
+    this.uCompTiltShiftLoc = gl.getUniformLocation(this.compositeProg, 'uTiltShift');
     if (uSceneTexLoc) gl.uniform1i(uSceneTexLoc, 0);
     if (uBloomTexLoc) gl.uniform1i(uBloomTexLoc, 1);
 
     this.skyVao = gl.createVertexArray()!;
-    this.spriteVao = gl.createVertexArray()!;
-    this.instanceBuffer = gl.createBuffer()!;
+    this.alphaVao = gl.createVertexArray()!;
+    this.addVao = gl.createVertexArray()!;
+    this.quad3dOpaqueVao = gl.createVertexArray()!;
+    this.quad3dAlphaVao = gl.createVertexArray()!;
+    this.quad3dAddVao = gl.createVertexArray()!;
+    this.alphaBuffer = gl.createBuffer()!;
+    this.addBuffer = gl.createBuffer()!;
+    this.quad3dOpaqueBuffer = gl.createBuffer()!;
+    this.quad3dAlphaBuffer = gl.createBuffer()!;
+    this.quad3dAddBuffer = gl.createBuffer()!;
     this.atlasTexture = gl.createTexture()!;
     this.indexAtlasTexture = gl.createTexture()!;
     this.paletteLutTexture = gl.createTexture()!;
-
-    gl.bindVertexArray(this.spriteVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE * 4, gl.DYNAMIC_DRAW);
+    this.occlusionTexture = gl.createTexture()!;
 
     const stride = FLOATS_PER_INSTANCE * 4;
-    for (let loc = 0; loc < 5; loc++) {
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, stride, loc * 16);
-      gl.vertexAttribDivisor(loc, 1);
-    }
+    const setupInstanceVao = (vao: WebGLVertexArrayObject, buf: WebGLBuffer) => {
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, MAX_INSTANCES_PER_PASS * stride, gl.DYNAMIC_DRAW);
+      for (let loc = 0; loc < 6; loc++) {
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, stride, loc * 16);
+        gl.vertexAttribDivisor(loc, 1);
+      }
+    };
+    setupInstanceVao(this.alphaVao, this.alphaBuffer);
+    setupInstanceVao(this.addVao, this.addBuffer);
+
+    const stride3d = FLOATS_PER_QUAD3D * 4;
+    const setupQuad3dVao = (vao: WebGLVertexArrayObject, buf: WebGLBuffer, maxInstances: number) => {
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, maxInstances * stride3d, gl.DYNAMIC_DRAW);
+      for (let loc = 0; loc < 7; loc++) {
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, 4, gl.FLOAT, false, stride3d, loc * 16);
+        gl.vertexAttribDivisor(loc, 1);
+      }
+    };
+    setupQuad3dVao(this.quad3dOpaqueVao, this.quad3dOpaqueBuffer, MAX_QUAD3D_INSTANCES);
+    setupQuad3dVao(this.quad3dAlphaVao, this.quad3dAlphaBuffer, MAX_QUAD3D_BLEND_INSTANCES);
+    setupQuad3dVao(this.quad3dAddVao, this.quad3dAddBuffer, MAX_QUAD3D_BLEND_INSTANCES);
     gl.bindVertexArray(null);
 
-    const initNearestTex = (tex: WebGLTexture) => {
+    const initNearestTex2D = (tex: WebGLTexture) => {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     };
-    initNearestTex(this.atlasTexture);
-    initNearestTex(this.indexAtlasTexture);
-    initNearestTex(this.paletteLutTexture);
+    const initNearestTexArray = (tex: WebGLTexture) => {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    };
+    initNearestTexArray(this.atlasTexture);
+    initNearestTexArray(this.indexAtlasTexture);
+    initNearestTex2D(this.paletteLutTexture);
+    initNearestTex2D(this.occlusionTexture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R8,
+      OCCLUSION_GRID_MAX,
+      OCCLUSION_GRID_MAX,
+      0,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      this.occUploadBuf,
+    );
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
 
     this.uploadAtlas(
       atlasWidth,
@@ -233,6 +347,7 @@ export class WebGl2Backend implements IGpuBackend {
       initialIndexPixels ?? new Uint8Array(atlasWidth * atlasHeight).fill(255),
       initialPaletteLut ?? new Uint8Array(16 * this.paletteRows * 4).fill(255),
       this.paletteRows,
+      initialExtraPages,
     );
 
     // Validate MRT FBO support eagerly so tryCreate can degrade cleanly if needed
@@ -260,6 +375,7 @@ export class WebGl2Backend implements IGpuBackend {
     initialIndexPixels?: Uint8Array,
     initialPaletteLut?: Uint8Array,
     initialPaletteRows = DEFAULT_PALETTE_ROWS,
+    initialExtraPages?: readonly AtlasPageData[],
   ): WebGl2Backend | null {
     try {
       const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
@@ -277,6 +393,7 @@ export class WebGl2Backend implements IGpuBackend {
         initialIndexPixels,
         initialPaletteLut,
         initialPaletteRows,
+        initialExtraPages,
       );
     } catch (err) {
       appLogger.warn('gpu', 'webgl2.tryCreate', 'WebGL2 初始化發生例外，退回 Canvas 2D', err);
@@ -288,6 +405,7 @@ export class WebGl2Backend implements IGpuBackend {
     if (!this.targets) return;
     const gl = this.gl;
     gl.deleteFramebuffer(this.targets.mrtFbo);
+    gl.deleteRenderbuffer(this.targets.depthRb);
     gl.deleteFramebuffer(this.targets.bloomFboA);
     gl.deleteFramebuffer(this.targets.bloomFboB);
     gl.deleteTexture(this.targets.sceneTex);
@@ -318,10 +436,14 @@ export class WebGl2Backend implements IGpuBackend {
 
     const sceneTex = createRenderTexture(gl, osW, osH, gl.NEAREST);
     const emissiveTex = createRenderTexture(gl, osW, osH, gl.LINEAR);
+    const depthRb = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, osW, osH);
     const mrtFbo = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, mrtFbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, emissiveTex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
       throw new Error('WebGL2 MRT framebuffer incomplete');
@@ -351,6 +473,7 @@ export class WebGl2Backend implements IGpuBackend {
       bloomW,
       bloomH,
       mrtFbo,
+      depthRb,
       sceneTex,
       emissiveTex,
       bloomFboA,
@@ -368,15 +491,55 @@ export class WebGl2Backend implements IGpuBackend {
     indexPixels?: Uint8Array,
     paletteLut?: Uint8Array,
     paletteRows?: number,
+    extraPages?: readonly AtlasPageData[],
   ): void {
     const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const extraCount = extraPages ? Math.min(MAX_ATLAS_PAGES - 1, extraPages.length) : 0;
+    const layerCount = 1 + extraCount;
+
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.atlasTexture);
+    gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGBA8, width, height, layerCount, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, width, height, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    if (extraPages) {
+      for (let i = 0; i < extraCount; i++) {
+        gl.texSubImage3D(
+          gl.TEXTURE_2D_ARRAY,
+          0,
+          0,
+          0,
+          i + 1,
+          width,
+          height,
+          1,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          extraPages[i].pixels,
+        );
+      }
+    }
 
     if (indexPixels) {
-      gl.bindTexture(gl.TEXTURE_2D, this.indexAtlasTexture);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.indexAtlasTexture);
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, width, height, 0, gl.RED, gl.UNSIGNED_BYTE, indexPixels);
+      gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.R8, width, height, layerCount, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, width, height, 1, gl.RED, gl.UNSIGNED_BYTE, indexPixels);
+      if (extraPages) {
+        for (let i = 0; i < extraCount; i++) {
+          gl.texSubImage3D(
+            gl.TEXTURE_2D_ARRAY,
+            0,
+            0,
+            0,
+            i + 1,
+            width,
+            height,
+            1,
+            gl.RED,
+            gl.UNSIGNED_BYTE,
+            extraPages[i].indexPixels,
+          );
+        }
+      }
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     }
 
@@ -400,6 +563,8 @@ export class WebGl2Backend implements IGpuBackend {
     timeSec: number,
     lightsData?: Float32Array,
     lightCount = 0,
+    occlusion?: GpuOcclusionState,
+    quad3d?: Quad3DPassData,
   ): number {
     const gl = this.gl;
     const w = Math.max(1, gl.canvas.width);
@@ -415,6 +580,8 @@ export class WebGl2Backend implements IGpuBackend {
 
     let drawCalls = 1;
     gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
     gl.useProgram(this.skyProg);
     gl.bindVertexArray(this.skyVao);
     const mid = sky.mid;
@@ -431,12 +598,7 @@ export class WebGl2Backend implements IGpuBackend {
     gl.uniform2f(this.uSkyViewSizeLoc, vw, vh);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    gl.useProgram(this.spriteProg);
-    gl.bindVertexArray(this.spriteVao);
-    gl.uniform2f(this.uSpriteViewSizeLoc, vw, vh);
-    gl.uniform1f(this.uPaletteRowsLoc, this.paletteRows);
     const safeLights = lightsData ? Math.max(0, Math.min(MAX_DYNAMIC_LIGHTS, lightCount | 0)) : 0;
-    gl.uniform1i(this.uLightCountLoc, safeLights);
     if (safeLights > 0) {
       for (let i = 0; i < safeLights; i++) {
         const src = i * 8;
@@ -450,23 +612,172 @@ export class WebGl2Backend implements IGpuBackend {
         this.lightColIntData[dst + 2] = lightsData![src + 6];
         this.lightColIntData[dst + 3] = lightsData![src + 3];
       }
-      gl.uniform4fv(this.uLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
-      gl.uniform4fv(this.uLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
     }
+
+    const occOn = Boolean(
+      occlusion?.enabled &&
+        occlusion.data &&
+        occlusion.cols > 0 &&
+        occlusion.rows > 0 &&
+        occlusion.shadowStrength > 0.001,
+    );
+    if (occOn && occlusion && occlusion.data && occlusion.version !== this.lastOcclusionVersion) {
+      const len = Math.min(this.occUploadBuf.length, occlusion.data.length);
+      this.occUploadBuf.fill(0);
+      this.occUploadBuf.set(occlusion.data.subarray(0, len), 0);
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.occlusionTexture);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        OCCLUSION_GRID_MAX,
+        OCCLUSION_GRID_MAX,
+        gl.RED,
+        gl.UNSIGNED_BYTE,
+        this.occUploadBuf,
+      );
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      this.lastOcclusionVersion = occlusion.version;
+    }
+
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.atlasTexture);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.indexAtlasTexture);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.indexAtlasTexture);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.paletteLutTexture);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.occlusionTexture);
+
+    // Optional True 3D Perspective HD-2D Scene Pass (Hardware Depth Buffer)
+    const use3D = Boolean(quad3d && quad3d.camera.enabled);
+    if (use3D && quad3d) {
+      const cam = quad3d.camera;
+      computeCamera3D(
+        {
+          camCenterX: cam.camCenterX,
+          camCenterY: cam.camCenterY,
+          zoom: cam.zoom,
+          pitchDeg: cam.pitchDeg,
+          fovDeg: cam.fovDeg,
+          viewW: vw,
+          viewH: vh,
+        },
+        this.cam3dScratch,
+      );
+      buildCamera3DViewProjMatrix(this.cam3dScratch, false, this.viewProj3d);
+
+      gl.depthMask(true);
+      gl.clearDepth(1.0);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+
+      gl.useProgram(this.quad3dProg);
+      gl.uniformMatrix4fv(this.u3dViewProjLoc, false, this.viewProj3d);
+      gl.uniform2f(this.u3dViewSizeLoc, vw, vh);
+      gl.uniform1f(this.u3dPaletteRowsLoc, this.paletteRows);
+      gl.uniform1i(this.u3dLightCountLoc, safeLights);
+      if (safeLights > 0) {
+        gl.uniform4fv(this.u3dLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
+        gl.uniform4fv(this.u3dLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
+      }
+      const occCols = occOn && occlusion ? Math.min(OCCLUSION_GRID_MAX, occlusion.cols) : 0;
+      const occRows = occOn && occlusion ? Math.min(OCCLUSION_GRID_MAX, occlusion.rows) : 0;
+      const occStr = occOn && occlusion ? occlusion.shadowStrength : 0;
+      const occSoft = occOn && occlusion ? occlusion.shadowSoftness : 0.35;
+      gl.uniform4f(
+        this.u3dOccWorldLoc,
+        cam.occOriginWorldX,
+        cam.occOriginWorldY,
+        Math.max(1, cam.occTileSizeWorld),
+        occSoft,
+      );
+
+      const safe3dOpaque = Math.min(quad3d.opaqueCount, MAX_QUAD3D_INSTANCES);
+      const safe3dAlpha = Math.min(quad3d.alphaCount, MAX_QUAD3D_BLEND_INSTANCES);
+      const safe3dAdd = Math.min(quad3d.additiveCount, MAX_QUAD3D_BLEND_INSTANCES);
+
+      if (safe3dOpaque > 0) {
+        gl.disable(gl.BLEND);
+        gl.depthMask(true);
+        gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 1.0);
+        gl.bindVertexArray(this.quad3dOpaqueVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dOpaqueBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.opaqueData.subarray(0, safe3dOpaque * FLOATS_PER_QUAD3D));
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dOpaque);
+        drawCalls++;
+      }
+
+      if (safe3dAlpha > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 0.0);
+        gl.bindVertexArray(this.quad3dAlphaVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dAlphaBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.alphaData.subarray(0, safe3dAlpha * FLOATS_PER_QUAD3D));
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dAlpha);
+        drawCalls++;
+      }
+
+      if (safe3dAdd > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.depthMask(false);
+        gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 0.0);
+        gl.bindVertexArray(this.quad3dAddVao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dAddBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.additiveData.subarray(0, safe3dAdd * FLOATS_PER_QUAD3D));
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dAdd);
+        drawCalls++;
+      }
+
+      gl.depthMask(true);
+      gl.disable(gl.DEPTH_TEST);
+    }
 
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);
     const safeAdd = Math.min(additiveCount, MAX_INSTANCES_PER_PASS);
 
+    if (safeAlpha > 0 || safeAdd > 0) {
+      gl.useProgram(this.spriteProg);
+      gl.uniform2f(this.uSpriteViewSizeLoc, vw, vh);
+      gl.uniform1f(this.uPaletteRowsLoc, this.paletteRows);
+      gl.uniform1i(this.uLightCountLoc, use3D ? 0 : safeLights);
+      if (!use3D && safeLights > 0) {
+        gl.uniform4fv(this.uLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
+        gl.uniform4fv(this.uLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
+      }
+      if (!use3D && occOn && occlusion) {
+        gl.uniform4f(
+          this.uOccParamsLoc,
+          occlusion.originScreenX,
+          occlusion.originScreenY,
+          Math.max(1, occlusion.tileSizePx),
+          occlusion.shadowSoftness,
+        );
+        gl.uniform4f(
+          this.uOccDimsLoc,
+          Math.min(OCCLUSION_GRID_MAX, occlusion.cols),
+          Math.min(OCCLUSION_GRID_MAX, occlusion.rows),
+          occlusion.shadowStrength,
+          0,
+        );
+      } else {
+        gl.uniform4f(this.uOccParamsLoc, 0, 0, 32, 0.35);
+        gl.uniform4f(this.uOccDimsLoc, 0, 0, 0, 0);
+      }
+    }
+
     if (safeAlpha > 0) {
       gl.enable(gl.BLEND);
       gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+      gl.bindVertexArray(this.alphaVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.alphaBuffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, alphaItems.subarray(0, safeAlpha * FLOATS_PER_INSTANCE));
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safeAlpha);
       drawCalls++;
@@ -475,7 +786,8 @@ export class WebGl2Backend implements IGpuBackend {
     if (safeAdd > 0) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuffer);
+      gl.bindVertexArray(this.addVao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.addBuffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, additiveItems.subarray(0, safeAdd * FLOATS_PER_INSTANCE));
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safeAdd);
       drawCalls++;
@@ -529,6 +841,7 @@ export class WebGl2Backend implements IGpuBackend {
       wt ? wt[2] : 0.612,
     );
     gl.uniform1f(this.uCompTimeLoc, timeSec);
+    gl.uniform2f(this.uCompTiltShiftLoc, sky.tiltShiftBlur ?? 0, sky.tiltShiftFocusY ?? 0.52);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     drawCalls++;
 
@@ -542,14 +855,24 @@ export class WebGl2Backend implements IGpuBackend {
     }
     this.destroyRenderTargets();
     const gl = this.gl;
-    gl.deleteBuffer(this.instanceBuffer);
+    gl.deleteBuffer(this.alphaBuffer);
+    gl.deleteBuffer(this.addBuffer);
+    gl.deleteBuffer(this.quad3dOpaqueBuffer);
+    gl.deleteBuffer(this.quad3dAlphaBuffer);
+    gl.deleteBuffer(this.quad3dAddBuffer);
     gl.deleteTexture(this.atlasTexture);
     gl.deleteTexture(this.indexAtlasTexture);
     gl.deleteTexture(this.paletteLutTexture);
+    gl.deleteTexture(this.occlusionTexture);
     gl.deleteVertexArray(this.skyVao);
-    gl.deleteVertexArray(this.spriteVao);
+    gl.deleteVertexArray(this.alphaVao);
+    gl.deleteVertexArray(this.addVao);
+    gl.deleteVertexArray(this.quad3dOpaqueVao);
+    gl.deleteVertexArray(this.quad3dAlphaVao);
+    gl.deleteVertexArray(this.quad3dAddVao);
     gl.deleteProgram(this.skyProg);
     gl.deleteProgram(this.spriteProg);
+    gl.deleteProgram(this.quad3dProg);
     gl.deleteProgram(this.bloomDownProg);
     gl.deleteProgram(this.bloomBlurProg);
     gl.deleteProgram(this.compositeProg);

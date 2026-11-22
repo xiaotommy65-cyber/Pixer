@@ -1,4 +1,9 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
+import type {
+  OrthogonalArtBlueprint,
+  OrthogonalFacing,
+  OrthogonalPose,
+} from '../sim/OrthogonalArt.ts';
 import type { CartridgeId } from './CartridgeTypes.ts';
 import type {
   ChronicleHudSnapshot,
@@ -88,7 +93,9 @@ export interface EntityDesc {
   anchorY?: number; // 0 = top, 0.5 = center (default), 1 = feet bottom
   flash?: number; // 0..1 white hit-flash in GPU shader
   skewX?: number; // Horizontal shear factor for sprint lean / impact tilt
-  emissive?: number; // 0..1.5 extra self-illumination for Pass 2 bloom
+  emissive?: number; // 0..2.0 extra self-illumination for Pass 2 bloom
+  roughness?: number; // 0.05..1.0 PBR-Lite specular spread (lower = sharper highlight)
+  metallic?: number; // 0..1.0 PBR-Lite metallic reflectance tint & diffuse conservation
   paletteRow?: number; // Override 16xN Palette LUT row (0..7)
   flipX?: boolean;
   rot?: number;
@@ -105,6 +112,18 @@ export interface EntityDesc {
   shadowRadius?: number;
   /** Explicit depth sort baseline Y (world px, defaults to foot bottom in 2.5D scenes). */
   sortY?: number;
+  /** 4-Axis Orthogonal Art Blueprint ID (expands across Facing × Layers × Palette LUT × Pose). */
+  artBlueprintId?: string;
+  /** Explicit facing override for Orthogonal Art ('front' | 'back' | 'side' | 'viewmodel' | 'portrait'). */
+  artFacing?: OrthogonalFacing;
+  /** Standardized animation pose ('idle' | 'walk' | 'windup' | 'strike' | 'guard' | 'hurt'). */
+  artPose?: OrthogonalPose;
+  /** World-space facing angle in radians (used for 1P 2.5D directional billboard angle resolution). */
+  yawRad?: number;
+  /** Optional vertical height scale multiplier when rendered as a 1P billboard (default 1.0). */
+  billboardScale?: number;
+  /** If true, entity is omitted in 1P raycast view (e.g. the player's own 3P body). */
+  hideInFirstPerson?: boolean;
 }
 
 export interface ParticleDesc {
@@ -214,6 +233,22 @@ export interface RectBox {
   unlockable?: boolean;
 }
 
+export interface OcclusionGridDesc {
+  cols: number;
+  rows: number;
+  originX: number;
+  originY: number;
+  tileSize: number;
+  /** Row-major Uint8Array of length >= cols*rows (0 = open, >=128 = opaque shadow-casting wall). */
+  data: Uint8Array;
+  /** Monotonic counter incremented when wall geometry changes to avoid per-frame GPU texture uploads. */
+  version: number;
+  /** Shadow attenuation strength 0..1 (default 0.86). */
+  shadowStrength?: number;
+  /** Shadow penumbra softness 0..1 (default 0.36). */
+  shadowSoftness?: number;
+}
+
 export interface Hd2dDepthConfig {
   enabled: boolean;
   /** Interleaves 2.5D extruded walls/columns and entities sorted by foot Y coordinate. */
@@ -225,6 +260,10 @@ export interface Hd2dDepthConfig {
   horizonHazeAlpha?: number;
   /** Soft tilt-shift upper/lower bokeh lens shading alpha. */
   tiltShiftAlpha?: number;
+  /** Real GPU Pass-3 Tilt-Shift Depth-of-Field micro-bokeh blur intensity 0..1 (preserves center sharpness). */
+  tiltShiftBlur?: number;
+  /** Vertical focal plane Y in normalized screen space 0.1..0.9 (default 0.52). */
+  tiltShiftFocusY?: number;
   /** World-space Y water plane for real-time planar reflection + ripple shader. */
   waterLevelY?: number;
   /** Water tint hex color (default '#3a6e9c'). */
@@ -233,6 +272,50 @@ export interface Hd2dDepthConfig {
   pixelPerfect?: boolean;
   /** Optional warm/cool split-tone atmospheric weight. */
   splitToneWarmth?: number;
+  /** Enables true 3D perspective box-wall + upright pixel billboard GPU rendering (`hd2d_3d`). */
+  mode3d?: boolean;
+  /** 3D camera pitch angle in degrees above ground plane (default 42). */
+  pitchDeg?: number;
+  /** 3D camera vertical field of view in degrees (default 38). */
+  fovDeg?: number;
+  /** Wall & column height multiplier (default 1.15). */
+  wallHeightScale?: number;
+  /** Backward tilt angle (degrees) for 3D pixel billboards (default 12). */
+  billboardTiltDeg?: number;
+  /** 45-degree oblique directional wall drop shadow alpha in 3/4 hd2d_iso mode (default 0.42). */
+  obliqueShadowAlpha?: number;
+}
+
+export interface PerspectiveProjectionDesc {
+  mode: 'third_person' | 'first_person';
+  /** Smooth transition blend factor (0 = pure 3P, 1 = pure 1P). */
+  blend01: number;
+  viewerX: number;
+  viewerY: number;
+  viewerYawRad: number;
+  fovRad: number;
+  maxDist: number;
+  tileSize: number;
+  wallCols: number;
+  wallRows: number;
+  /** Flat row-major Uint8Array (0 = open, 1..N = wall material index into wallSpriteIds). */
+  wallGrid: Uint8Array;
+  wallSpriteIds: readonly SpriteId[];
+  ceilTopColor?: string;
+  ceilHorizonColor?: string;
+  floorHorizonColor?: string;
+  floorBottomColor?: string;
+  fogColor?: string;
+  wallHeightScale?: number;
+  pitchOffsetPx?: number;
+  columnStepPx?: number;
+  /** Held 1P viewmodel Orthogonal Art Blueprint ID (e.g. 'fp_lantern_blade'). */
+  viewmodelBlueprintId?: string;
+  viewmodelPose?: OrthogonalPose;
+  viewmodelBob?: number;
+  viewmodelSwing?: number;
+  /** Draws a crisp corner radar minimap in 1P mode using pure GPU rects. */
+  showMinimap?: boolean;
 }
 
 export interface RenderSceneSnapshot {
@@ -264,6 +347,9 @@ export interface RenderSceneSnapshot {
   screenFlashAlpha?: number;
   screenFlashColor?: string;
   hd2dDepth?: Hd2dDepthConfig;
+  occlusion?: OcclusionGridDesc;
+  perspective?: PerspectiveProjectionDesc;
+  customArtBlueprints?: Readonly<Record<string, OrthogonalArtBlueprint>>;
   bgStars: BgStarDesc[];
   bgParallaxLayers?: BgParallaxLayerDesc[];
   bgClouds: BgCloudDesc[];

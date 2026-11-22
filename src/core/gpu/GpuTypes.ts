@@ -3,21 +3,28 @@ export const GAME_H = 180;
 export const OVERSCAN_PAD = 1;
 export const OVERSCAN_W = GAME_W + OVERSCAN_PAD * 2;
 export const OVERSCAN_H = GAME_H + OVERSCAN_PAD * 2;
-export const FLOATS_PER_INSTANCE = 20;
+export const FLOATS_PER_INSTANCE = 24;
 export const MAX_INSTANCES_PER_PASS = 16384;
+export const FLOATS_PER_QUAD3D = 28;
+export const MAX_QUAD3D_INSTANCES = 12288;
 export const MAX_DYNAMIC_LIGHTS = 24;
+
+export const MAX_ATLAS_PAGES = 8;
 
 export interface LogicalViewport {
   width: number;
   height: number;
 }
 
-export type ViewportPreset = 'classic' | 'wide' | 'hd';
+export type ViewportPreset = 'classic' | 'wide' | 'hd' | 'hd_plus' | 'qhd' | 'hd720';
 
 export const VIEWPORT_PRESETS: Record<ViewportPreset, LogicalViewport> = {
   classic: { width: 320, height: 180 },
   wide: { width: 426, height: 240 },
   hd: { width: 480, height: 270 },
+  hd_plus: { width: 640, height: 360 },
+  qhd: { width: 960, height: 540 },
+  hd720: { width: 1280, height: 720 },
 };
 
 export function resolveLogicalViewport(
@@ -25,8 +32,14 @@ export function resolveLogicalViewport(
 ): LogicalViewport {
   if (!raw) return VIEWPORT_PRESETS.classic;
   if (typeof raw === 'string') return VIEWPORT_PRESETS[raw] ?? VIEWPORT_PRESETS.classic;
-  const w = typeof raw.width === 'number' && Number.isFinite(raw.width) ? Math.max(160, Math.min(640, Math.round(raw.width))) : GAME_W;
-  const h = typeof raw.height === 'number' && Number.isFinite(raw.height) ? Math.max(120, Math.min(360, Math.round(raw.height))) : GAME_H;
+  const w =
+    typeof raw.width === 'number' && Number.isFinite(raw.width)
+      ? Math.max(160, Math.min(1280, Math.round(raw.width)))
+      : GAME_W;
+  const h =
+    typeof raw.height === 'number' && Number.isFinite(raw.height)
+      ? Math.max(120, Math.min(720, Math.round(raw.height)))
+      : GAME_H;
   return { width: w, height: h };
 }
 
@@ -46,6 +59,17 @@ export interface SpriteRect {
   v1: number;
   w: number;
   h: number;
+  page?: number;
+}
+
+export interface AtlasPoolStats {
+  pageCount: number;
+  maxPages: number;
+  pageSize: number;
+  builtinSprites: number;
+  dynamicSprites: number;
+  spriteSheets: number;
+  totalBytes: number;
 }
 
 export interface BatchDrawItem {
@@ -72,6 +96,45 @@ export interface BatchDrawItem {
   additive: boolean;
 }
 
+export const OCCLUSION_GRID_MAX = 64;
+
+export interface GpuOcclusionState {
+  enabled: boolean;
+  cols: number;
+  rows: number;
+  originScreenX: number;
+  originScreenY: number;
+  tileSizePx: number;
+  shadowStrength: number;
+  shadowSoftness: number;
+  data: Uint8Array | null;
+  version: number;
+}
+
+export interface GpuCamera3DState {
+  enabled: boolean;
+  camCenterX: number;
+  camCenterY: number;
+  zoom: number;
+  pitchDeg: number;
+  fovDeg: number;
+  viewW: number;
+  viewH: number;
+  occOriginWorldX: number;
+  occOriginWorldY: number;
+  occTileSizeWorld: number;
+}
+
+export interface Quad3DPassData {
+  camera: GpuCamera3DState;
+  opaqueData: Float32Array;
+  opaqueCount: number;
+  alphaData: Float32Array;
+  alphaCount: number;
+  additiveData: Float32Array;
+  additiveCount: number;
+}
+
 export interface SkyGradient {
   top: [number, number, number];
   bottom: [number, number, number];
@@ -86,6 +149,8 @@ export interface SkyGradient {
   viewH?: number;
   waterLevelNorm?: number;
   waterTint?: [number, number, number];
+  tiltShiftBlur?: number;
+  tiltShiftFocusY?: number;
 }
 
 export interface GpuFrameStats {
@@ -94,6 +159,11 @@ export interface GpuFrameStats {
   spriteCount: number;
   lightCount: number;
   frameTimeMs: number;
+}
+
+export interface AtlasPageData {
+  pixels: Uint8Array;
+  indexPixels: Uint8Array;
 }
 
 export interface IGpuBackend {
@@ -105,6 +175,7 @@ export interface IGpuBackend {
     indexPixels?: Uint8Array,
     paletteLut?: Uint8Array,
     paletteRows?: number,
+    extraPages?: readonly AtlasPageData[],
   ): void;
   renderFrame(
     sky: SkyGradient,
@@ -115,6 +186,8 @@ export interface IGpuBackend {
     timeSec: number,
     lightsData?: Float32Array,
     lightCount?: number,
+    occlusion?: GpuOcclusionState,
+    quad3d?: Quad3DPassData,
   ): number; // returns draw calls executed
   resize(pixelWidth: number, pixelHeight: number): void;
   dispose(): void;

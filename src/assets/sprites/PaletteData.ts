@@ -9,6 +9,7 @@ import {
   rgb01ToHex,
   srgbToLinear,
 } from '../../core/math/ColorMath.ts';
+import type { CastleSpriteId } from './CastleSprites.ts';
 
 // Curated Cozy Toybox 16-Color Master Palette (0 = transparent, 1..13 = standard, 14..15 = emissive candidates)
 export const TOYBOX_PALETTE: readonly string[] = [
@@ -359,7 +360,8 @@ export type BuiltinSpriteId =
   | 'grass_m15'
   | 'vine_hang'
   | 'pebble_decal'
-  | 'parallax_twilight_bg';
+  | 'parallax_twilight_bg'
+  | CastleSpriteId;
 
 export type SpriteId = BuiltinSpriteId | (string & {});
 

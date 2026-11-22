@@ -9,7 +9,6 @@ import type { CartridgeId } from './core/types/WorldTypes.ts';
 import { exportCartridgeCardPngDataUrl } from './ui/CardArt.ts';
 import type { ConsoleView } from './ui/ConsoleView.ts';
 import { setElementIconLabel } from './ui/PixelIcons.ts';
-import type { StudioWorkbenchView } from './ui/StudioWorkbenchView.ts';
 import type { ShellTheme, SystemSettingsDrawerView } from './ui/SystemSettingsDrawerView.ts';
 
 export type StationId = 'play' | 'editor';
@@ -469,11 +468,10 @@ export function recoverFromFrameError(params: {
   gpuEngine: GpuEngine;
   host: EngineHost;
   consoleView: ConsoleView;
-  studioWorkbench: StudioWorkbenchView | null;
   utilityBar: HTMLElement;
   onGpuKindChange: (kind: GpuBackendKind) => void;
 }): number {
-  const { step, frameErr, gpuEngine, host, consoleView, studioWorkbench, utilityBar, onGpuKindChange } = params;
+  const { step, frameErr, gpuEngine, host, consoleView, utilityBar, onGpuKindChange } = params;
   appLogger.error('lifecycle', 'app.frameRecovery', `主迴圈第 ${step} 階異常自動復原`, frameErr, {
     step,
     shellPhase: consoleView.getShellPhase(),
@@ -481,7 +479,6 @@ export function recoverFromFrameError(params: {
   });
   if (step === 1) {
     gpuEngine.syncAtlasToGpu();
-    studioWorkbench?.hide();
     utilityBar.classList.remove('panel-hidden');
     consoleView.setInEditor(false);
     return step;

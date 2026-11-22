@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { registerBuiltinCartridges } from '../src/game/BuiltinCartridges.ts';
+import { registerAllBuiltinCartridges } from '../src/game/BuiltinCartridges.ts';
 import {
   testArchitectureBoundariesAndLifecycle,
   testHd2dDepthPipeline,
@@ -33,9 +33,15 @@ import {
 } from './sim/CoreSubsystemTests.ts';
 import { testExtensibilityAndAiSpis } from './sim/ExtensibilityAiTests.ts';
 import { testHalAndInputPipeline } from './sim/HalAndInputTests.ts';
+import {
+  testEngine5OrthogonalFoundations,
+  testOrthogonalCartridgesPA07toPA09,
+} from './sim/OrthogonalEngineTests.ts';
+import { testPixer7EcsMultiPageAtlasAndSlimCore } from './sim/Pixer7Tests.ts';
+import { testStudio6AndSkywardForgePA10 } from './sim/StudioEditorTests.ts';
 
 async function runAll() {
-  registerBuiltinCartridges();
+  await registerAllBuiltinCartridges();
 
   testCoreSubsystems();
   testModule1ColorMathAndShaderParity();
@@ -62,7 +68,11 @@ async function runAll() {
   testM41DynamicViewportAndCamera();
   testM42M43ChunkedWorldsAndMultiLayerDepth();
   testProceduralDeclarativeCompiler();
-  console.log('[SIM ALL PASSED] Pixel Atelier Engine 3.0 & All 6 Cartridges (PA-01..PA-06) Passed!');
+  testEngine5OrthogonalFoundations();
+  testOrthogonalCartridgesPA07toPA09();
+  await testStudio6AndSkywardForgePA10();
+  testPixer7EcsMultiPageAtlasAndSlimCore();
+  console.log('[SIM ALL PASSED] Pixer 7.0 Engine & All 11 Cartridges (PA-01..PA-11) Passed!');
 }
 
 void runAll().catch((err) => {

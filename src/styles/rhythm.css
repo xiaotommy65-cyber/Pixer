@@ -1,0 +1,1850 @@
+/* ==========================================================================
+   Engine 10.0 — PA-13 «星脈共鳴 Pulse Resonance» Standalone App Stylesheet
+   Zero-Backdrop-Filter over Live 3D Stage · Zero-Pill Discipline · 60-30-10
+   Oxanium Display · Plus Jakarta Sans · Noto Sans TC · JetBrains Mono
+   ========================================================================== */
+
+:root {
+  --rhy-font-display: 'Oxanium', 'Plus Jakarta Sans', 'Noto Sans TC', sans-serif;
+  --rhy-font-sans: 'Plus Jakarta Sans', 'Noto Sans TC', system-ui, sans-serif;
+  --rhy-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --rhy-bg: #050811;
+  --rhy-panel: rgba(9, 14, 28, 0.88);
+  --rhy-panel-solid: #0d1527;
+  --rhy-panel-elev: rgba(15, 23, 42, 0.94);
+  --rhy-border: rgba(148, 163, 184, 0.22);
+  --rhy-border-strong: rgba(248, 250, 252, 0.28);
+  --rhy-text: #f8fafc;
+  --rhy-muted: #94a3b8;
+  --rhy-cyan: #38bdf8;
+  --rhy-amber: #f59e0b;
+  --rhy-rose: #f43f5e;
+}
+
+.rhy-root {
+  position: fixed;
+  inset: 0;
+  z-index: 135;
+  background: var(--rhy-bg);
+  color: var(--rhy-text);
+  font-family: var(--rhy-font-sans);
+  overflow: hidden;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Persistent Full-Viewport 3D Celestial Stage Canvas */
+.rhy-stage-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 1;
+  touch-action: none;
+}
+
+.rhy-touch-zones {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  touch-action: none;
+}
+
+/* Shared Overlay Layer (Pointer pass-through by default, auto on interactive children) */
+.rhy-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  animation: rhyFadeIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes rhyFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Shared Buttons & Inputs */
+.rhy-btn {
+  appearance: none;
+  pointer-events: auto;
+  border: 1px solid var(--rhy-border);
+  border-radius: 6px;
+  background: rgba(13, 21, 39, 0.9);
+  color: var(--rhy-text);
+  font-family: var(--rhy-font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: border-color 140ms ease, background 140ms ease, transform 120ms ease;
+}
+
+.rhy-btn:hover {
+  border-color: var(--rhy-cyan);
+  background: rgba(20, 32, 58, 0.96);
+}
+
+.rhy-btn:active {
+  transform: translateY(1px);
+}
+
+.rhy-btn:focus-visible,
+.rhy-util-btn:focus-visible,
+.rhy-lobby-item:focus-visible,
+.rhy-song-row:focus-visible,
+.rhy-diff-btn:focus-visible {
+  outline: 2px solid var(--rhy-amber);
+  outline-offset: 2px;
+}
+
+.rhy-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rhy-btn-primary {
+  border-color: var(--rhy-amber);
+  background: var(--rhy-amber);
+  color: #070b14;
+}
+
+.rhy-btn-primary:hover {
+  background: #fbbf24;
+  border-color: #fde68a;
+  color: #070b14;
+}
+
+.rhy-btn-accent {
+  border-color: rgba(56, 189, 248, 0.65);
+  background: rgba(14, 116, 144, 0.35);
+  color: #e0f2fe;
+}
+
+.rhy-btn-accent:hover {
+  background: rgba(14, 116, 144, 0.58);
+  border-color: #7dd3fc;
+}
+
+.rhy-btn-ghost {
+  background: rgba(9, 14, 28, 0.62);
+  border-color: rgba(148, 163, 184, 0.22);
+  color: #cbd5e1;
+}
+
+.rhy-btn-ghost:hover {
+  color: #ffffff;
+  border-color: rgba(248, 250, 252, 0.45);
+}
+
+.rhy-btn-danger {
+  border-color: rgba(244, 63, 94, 0.55);
+  color: #fda4af;
+  background: rgba(136, 19, 55, 0.35);
+}
+
+.rhy-btn-danger:hover {
+  background: rgba(190, 18, 60, 0.55);
+  border-color: #fb7185;
+}
+
+.rhy-btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.rhy-util-btn {
+  appearance: none;
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 38px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(8, 13, 26, 0.84);
+  color: #e2e8f0;
+  font-family: var(--rhy-font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.rhy-util-btn.has-label {
+  padding: 0 14px;
+}
+
+.rhy-util-btn:hover {
+  border-color: var(--rhy-cyan);
+  color: #ffffff;
+  background: rgba(15, 23, 42, 0.96);
+}
+
+.rhy-input {
+  background: #09101f;
+  border: 1px solid var(--rhy-border);
+  border-radius: 6px;
+  color: var(--rhy-text);
+  font-family: var(--rhy-font-sans);
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+}
+
+.rhy-input:focus {
+  border-color: var(--rhy-cyan);
+}
+
+.rhy-mono {
+  font-family: var(--rhy-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-meta-kicker {
+  font-family: var(--rhy-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--rhy-cyan);
+  text-transform: uppercase;
+}
+
+/* ==========================================================================
+   ACT 1: TITLE SCREEN (Orbital 3D Stage + Asymmetric Left-Third Lockup)
+   ========================================================================== */
+.rhy-title-overlay {
+  justify-content: space-between;
+  padding: 28px 48px 26px;
+  background: linear-gradient(
+    90deg,
+    rgba(4, 8, 19, 0.84) 0%,
+    rgba(4, 8, 19, 0.48) 42%,
+    rgba(4, 8, 19, 0.04) 76%
+  );
+}
+
+.rhy-corner-utility {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.rhy-title-lockup {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+.rhy-crest-svg {
+  margin-bottom: 6px;
+  filter: drop-shadow(0 6px 18px rgba(56, 189, 248, 0.35));
+}
+
+.rhy-title-en {
+  font-family: var(--rhy-font-display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  color: #7dd3fc;
+}
+
+.rhy-title-zh {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: clamp(48px, 6.2vw, 76px);
+  font-weight: 800;
+  line-height: 1.04;
+  letter-spacing: 0.06em;
+  color: #f8fafc;
+  text-shadow: 0 8px 28px rgba(4, 8, 19, 0.85);
+}
+
+.rhy-title-sub {
+  margin: 2px 0 18px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #cbd5e1;
+  max-width: 420px;
+}
+
+.rhy-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rhy-btn-start {
+  padding: 13px 28px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  background: var(--rhy-amber);
+  border-color: #fde68a;
+  color: #060a14;
+  box-shadow: 0 10px 26px rgba(245, 158, 11, 0.28);
+}
+
+.rhy-btn-start:hover {
+  background: #fbbf24;
+  border-color: #ffffff;
+  color: #060a14;
+}
+
+.rhy-title-hint {
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: rgba(203, 213, 225, 0.78);
+}
+
+/* ==========================================================================
+   ACT 2: STANDALONE HOME LOBBY (Left-Third Editorial Menu + Rating Card)
+   ========================================================================== */
+.rhy-lobby-overlay {
+  padding: 24px 44px 32px;
+  justify-content: space-between;
+  background: linear-gradient(
+    90deg,
+    rgba(5, 9, 20, 0.82) 0%,
+    rgba(5, 9, 20, 0.36) 44%,
+    rgba(5, 9, 20, 0.05) 78%
+  );
+}
+
+.rhy-lobby-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.rhy-lobby-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.rhy-lobby-wordmark {
+  font-family: var(--rhy-font-display);
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #f8fafc;
+}
+
+.rhy-lobby-submark {
+  font-family: var(--rhy-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: #94a3b8;
+}
+
+.rhy-corner-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rhy-lobby-body {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  padding-top: 24px;
+}
+
+.rhy-lobby-menu {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto;
+  margin-bottom: auto;
+}
+
+.rhy-lobby-item {
+  appearance: none;
+  pointer-events: auto;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 15px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(9, 14, 28, 0.86);
+  color: var(--rhy-text);
+  font-family: var(--rhy-font-sans);
+  cursor: pointer;
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms ease, background 150ms ease;
+}
+
+.rhy-lobby-item:hover {
+  transform: translateX(8px);
+  border-color: var(--rhy-cyan);
+  background: rgba(15, 25, 48, 0.94);
+}
+
+.rhy-lobby-item.is-primary {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.72);
+}
+
+.rhy-lobby-item.is-primary:hover {
+  background: rgba(245, 158, 11, 0.24);
+  border-color: #fde68a;
+}
+
+.rhy-lobby-item-code {
+  font-family: var(--rhy-font-display);
+  font-size: 19px;
+  font-weight: 800;
+  color: var(--rhy-amber);
+  font-variant-numeric: tabular-nums;
+  min-width: 28px;
+}
+
+.rhy-lobby-item:not(.is-primary) .rhy-lobby-item-code {
+  color: var(--rhy-cyan);
+}
+
+.rhy-lobby-item-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.rhy-lobby-item-copy strong {
+  font-size: 16px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rhy-lobby-item-copy span {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.35;
+}
+
+.rhy-lobby-profile-card {
+  appearance: none;
+  pointer-events: auto;
+  text-align: right;
+  padding: 18px 22px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(9, 14, 28, 0.86);
+  color: var(--rhy-text);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  cursor: pointer;
+  min-width: 240px;
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+
+.rhy-lobby-profile-card:hover {
+  border-color: var(--rhy-amber);
+  transform: translateY(-2px);
+}
+
+.rhy-lobby-rating-num {
+  font-family: var(--rhy-font-display);
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--rhy-amber);
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-lobby-rank-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.rhy-lobby-stats-line {
+  font-family: var(--rhy-font-mono);
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+/* ==========================================================================
+   SHARED SUBPAGE HEADER (Select / Course / Profile)
+   ========================================================================== */
+.rhy-select-overlay,
+.rhy-course-overlay,
+.rhy-profile-overlay {
+  padding: 20px 36px 26px;
+  gap: 18px;
+  background: linear-gradient(
+    180deg,
+    rgba(5, 9, 20, 0.82) 0%,
+    rgba(5, 9, 20, 0.56) 55%,
+    rgba(5, 9, 20, 0.82) 100%
+  );
+}
+
+.rhy-subpage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.rhy-subpage-title-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.rhy-subpage-h2 {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: #f8fafc;
+}
+
+.rhy-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   ACT 3: SONG SELECT CAROUSEL (Real HD Album Art + Density + Modifiers)
+   ========================================================================== */
+.rhy-select-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 370px minmax(0, 1fr);
+  gap: 24px;
+  align-items: stretch;
+}
+
+.rhy-song-rail {
+  pointer-events: auto;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.rhy-song-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rhy-song-row {
+  appearance: none;
+  pointer-events: auto;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(9, 14, 28, 0.86);
+  color: var(--rhy-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.rhy-song-row:hover {
+  border-color: var(--row-accent, var(--rhy-cyan));
+  transform: translateX(4px);
+}
+
+.rhy-song-row.is-selected {
+  border-color: var(--row-accent, var(--rhy-amber));
+  background: rgba(16, 26, 48, 0.94);
+  box-shadow: 0 0 0 1px var(--row-accent, var(--rhy-amber));
+}
+
+.rhy-song-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(248, 250, 252, 0.14);
+  flex-shrink: 0;
+}
+
+.rhy-song-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.rhy-song-thumb-img.is-hidden,
+.rhy-jacket-img.is-hidden {
+  display: none;
+}
+
+.rhy-song-row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.rhy-song-row-copy strong {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rhy-song-row-copy span {
+  font-size: 12px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rhy-song-row-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  font-family: var(--rhy-font-mono);
+}
+
+.rhy-song-lv {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--rhy-cyan);
+}
+
+.rhy-song-grade {
+  font-family: var(--rhy-font-display);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--rhy-amber);
+}
+
+/* Right Spotlight Panel */
+.rhy-spotlight {
+  pointer-events: auto;
+  background: var(--rhy-panel);
+  border: 1px solid var(--rhy-border);
+  border-radius: 10px;
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rhy-spotlight-hero {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.rhy-jacket-frame {
+  width: 176px;
+  height: 176px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(248, 250, 252, 0.24);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
+  flex-shrink: 0;
+}
+
+.rhy-jacket-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.rhy-spotlight-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rhy-spot-title {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: clamp(24px, 2.8vw, 34px);
+  font-weight: 800;
+  color: #f8fafc;
+  line-height: 1.1;
+}
+
+.rhy-spot-sub {
+  margin: 0;
+  font-size: 14px;
+  color: #cbd5e1;
+}
+
+.rhy-spot-meta {
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  color: #7dd3fc;
+  margin-top: 4px;
+}
+
+.rhy-best-summary {
+  margin-top: 8px;
+  font-family: var(--rhy-font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: #fde68a;
+  padding-top: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.rhy-diff-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rhy-diff-btn {
+  appearance: none;
+  pointer-events: auto;
+  padding: 11px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(11, 18, 34, 0.85);
+  color: #cbd5e1;
+  font-family: var(--rhy-font-display);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.rhy-diff-btn.is-easy.is-active {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.2);
+  color: #dcfce7;
+}
+.rhy-diff-btn.is-normal.is-active {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.22);
+  color: #e0f2fe;
+}
+.rhy-diff-btn.is-hard.is-active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.22);
+  color: #fef3c7;
+}
+.rhy-diff-btn.is-master.is-active {
+  border-color: #c084fc;
+  background: rgba(192, 132, 252, 0.24);
+  color: #f3e8ff;
+}
+
+.rhy-density-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rhy-mini-label {
+  font-family: var(--rhy-font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+
+.rhy-density-canvas {
+  width: 100%;
+  height: 54px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  display: block;
+}
+
+.rhy-mod-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rhy-mod-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(7, 12, 24, 0.8);
+}
+
+.rhy-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rhy-step-btn {
+  appearance: none;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 4px;
+  background: #131f38;
+  color: #f8fafc;
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.rhy-step-btn:hover {
+  border-color: var(--rhy-cyan);
+}
+
+.rhy-stepper-val {
+  font-family: var(--rhy-font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-mod-toggle {
+  padding: 8px 13px;
+  font-size: 12px;
+}
+
+.rhy-launch-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rhy-play-cta {
+  flex: 1;
+  padding: 14px 24px;
+  font-family: var(--rhy-font-display);
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+
+/* ==========================================================================
+   ACT 3B: COURSE MODE HALL (段位巡演)
+   ========================================================================== */
+.rhy-course-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+  align-items: stretch;
+  overflow-y: auto;
+}
+
+.rhy-course-card {
+  pointer-events: auto;
+  background: var(--rhy-panel);
+  border: 1px solid var(--rhy-border);
+  border-top: 3px solid var(--course-accent, var(--rhy-cyan));
+  border-radius: 10px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rhy-course-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rhy-course-tier {
+  font-family: var(--rhy-font-display);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--course-accent, var(--rhy-cyan));
+}
+
+.rhy-course-medal {
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.rhy-course-medal.is-gold {
+  color: #fde68a;
+}
+.rhy-course-medal.is-silver {
+  color: #e2e8f0;
+}
+.rhy-course-medal.is-bronze {
+  color: #fdba74;
+}
+
+.rhy-course-title {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: 22px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rhy-course-sub {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.rhy-course-tracks {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rhy-course-track-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(7, 12, 24, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.rhy-course-stage-num {
+  font-family: var(--rhy-font-display);
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--course-accent, var(--rhy-cyan));
+}
+
+.rhy-course-track-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rhy-course-track-diff {
+  font-family: var(--rhy-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.rhy-course-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rhy-course-best {
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* ==========================================================================
+   ACT 3C: PROFILE & ACHIEVEMENTS SANCTUM
+   ========================================================================== */
+.rhy-profile-summary {
+  pointer-events: auto;
+  background: var(--rhy-panel);
+  border: 1px solid var(--rhy-border);
+  border-radius: 10px;
+  padding: 22px 28px;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 28px;
+  align-items: center;
+}
+
+.rhy-profile-rating-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+  padding-right: 22px;
+}
+
+.rhy-profile-rating-num {
+  font-family: var(--rhy-font-display);
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--rhy-amber);
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-profile-rank-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rhy-profile-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.rhy-profile-stat-cell {
+  background: rgba(7, 12, 24, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rhy-profile-stat-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.rhy-profile-stat-val {
+  font-family: var(--rhy-font-display);
+  font-size: 22px;
+  font-weight: 800;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-ach-grid {
+  pointer-events: auto;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  align-content: start;
+}
+
+.rhy-ach-card {
+  background: rgba(9, 14, 28, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  padding: 15px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  opacity: 0.72;
+}
+
+.rhy-ach-card.is-unlocked {
+  opacity: 1;
+  border-color: rgba(56, 189, 248, 0.58);
+  background: rgba(14, 24, 46, 0.92);
+}
+
+.rhy-ach-card.is-unlocked.is-tier-gold {
+  border-color: rgba(245, 158, 11, 0.75);
+}
+
+.rhy-ach-card.is-unlocked.is-tier-prism {
+  border-color: rgba(192, 132, 252, 0.85);
+}
+
+.rhy-ach-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rhy-ach-title {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rhy-ach-progress {
+  font-family: var(--rhy-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--rhy-cyan);
+}
+
+.rhy-ach-card.is-unlocked .rhy-ach-progress {
+  color: var(--rhy-amber);
+}
+
+.rhy-ach-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #94a3b8;
+}
+
+/* ==========================================================================
+   ACT 4: STAGE FLY-IN INTRO SLATE
+   ========================================================================== */
+.rhy-intro-overlay {
+  align-items: center;
+  justify-content: center;
+}
+
+.rhy-intro-slate {
+  text-align: center;
+  padding: 26px 46px;
+  border-top: 1px solid rgba(245, 158, 11, 0.55);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.55);
+  background: rgba(5, 9, 20, 0.78);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.rhy-intro-course-tag {
+  font-family: var(--rhy-font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--rhy-amber);
+}
+
+.rhy-intro-title {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: 0.04em;
+}
+
+.rhy-intro-meta {
+  font-family: var(--rhy-font-mono);
+  font-size: 13px;
+  color: #7dd3fc;
+}
+
+.rhy-intro-skip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* ==========================================================================
+   ACT 5: LIVE 4K PERFORMANCE HUD (Compact Perimeter Clusters, >=88% Clear)
+   ========================================================================== */
+.rhy-play-hud {
+  padding: 16px 24px;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.rhy-hud-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 210px;
+  max-width: 310px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: rgba(6, 10, 22, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.rhy-hud-course {
+  font-family: var(--rhy-font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--rhy-amber);
+}
+
+.rhy-hud-song {
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rhy-hud-diff {
+  font-family: var(--rhy-font-mono);
+  font-size: 11px;
+  color: #7dd3fc;
+}
+
+.rhy-hud-progress {
+  margin-top: 4px;
+  height: 3px;
+  width: 100%;
+  background: rgba(148, 163, 184, 0.22);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.rhy-hud-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #38bdf8, #f59e0b);
+}
+
+.rhy-hud-right {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.rhy-hud-score-wrap {
+  text-align: right;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: rgba(6, 10, 22, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.rhy-hud-score {
+  font-family: var(--rhy-font-display);
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-hud-acc {
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: #7dd3fc;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-hud-hp {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(6, 10, 22, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  min-width: 124px;
+}
+
+.rhy-hud-hp-lbl {
+  font-family: var(--rhy-font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #94a3b8;
+}
+
+.rhy-hud-hp-track {
+  height: 7px;
+  width: 100%;
+  border-radius: 3px;
+  background: rgba(30, 41, 59, 0.9);
+  overflow: hidden;
+}
+
+.rhy-hud-hp-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #38bdf8, #34d399);
+  transition: width 90ms linear;
+}
+
+.rhy-hud-hp-fill.is-low {
+  background: #f43f5e;
+}
+
+.rhy-hud-icon-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rhy-countdown {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--rhy-font-display);
+  font-size: 96px;
+  font-weight: 800;
+  color: #f8fafc;
+  background: rgba(5, 8, 18, 0.45);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   ACT 6: RESULT SHOWCASE (Spotlight Pull-Back over Live 3D Stage)
+   ========================================================================== */
+.rhy-result-overlay {
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(5, 8, 18, 0.48);
+}
+
+.rhy-result-card {
+  pointer-events: auto;
+  width: min(920px, 100%);
+  background: var(--rhy-panel);
+  border: 1px solid var(--rhy-border-strong);
+  border-radius: 12px;
+  padding: 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+}
+
+.rhy-result-top {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 26px;
+  align-items: center;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.rhy-result-rank-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+  padding-right: 20px;
+}
+
+.rhy-result-grade {
+  font-family: var(--rhy-font-display);
+  font-size: 88px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--rhy-amber);
+}
+
+.rhy-result-grade[data-grade='PHI'] {
+  color: #7dd3fc;
+}
+
+.rhy-result-badge {
+  margin-top: 6px;
+  font-family: var(--rhy-font-display);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #38bdf8;
+  text-align: center;
+}
+
+.rhy-result-meta-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rhy-result-course-summary {
+  font-family: var(--rhy-font-mono);
+  font-size: 12px;
+  color: #fde68a;
+}
+
+.rhy-result-title {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: 26px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rhy-result-nums {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.rhy-res-num {
+  background: rgba(7, 12, 24, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rhy-res-num span {
+  font-family: var(--rhy-font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #94a3b8;
+}
+
+.rhy-res-num strong {
+  font-family: var(--rhy-font-display);
+  font-size: 20px;
+  font-weight: 800;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-result-mid {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 24px;
+  align-items: stretch;
+}
+
+.rhy-result-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rhy-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-radius: 6px;
+  background: rgba(7, 12, 24, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  font-family: var(--rhy-font-display);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rhy-count-row strong {
+  font-family: var(--rhy-font-mono);
+  font-size: 15px;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.rhy-hist-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rhy-hist-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.rhy-hist-mean {
+  font-family: var(--rhy-font-mono);
+  color: #7dd3fc;
+}
+
+.rhy-hist-canvas {
+  width: 100%;
+  height: 104px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  display: block;
+}
+
+.rhy-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   MODALS: PAUSE & SETTINGS / CALIBRATION
+   ========================================================================== */
+.rhy-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(4, 7, 16, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.rhy-modal-card {
+  width: min(400px, 100%);
+  background: var(--rhy-panel-solid);
+  border: 1px solid var(--rhy-border-strong);
+  border-radius: 10px;
+  padding: 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.65);
+}
+
+.rhy-modal-card h3 {
+  margin: 0;
+  font-family: var(--rhy-font-display);
+  font-size: 20px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.rhy-modal-sub {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #94a3b8;
+}
+
+.rhy-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.rhy-calib-card {
+  width: min(440px, 100%);
+  align-items: center;
+  text-align: center;
+}
+
+.rhy-calib-ring {
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  border: 3px solid var(--rhy-cyan);
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.2), rgba(9, 14, 28, 0.96));
+  color: #f8fafc;
+  font-family: var(--rhy-font-display);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 16px;
+  cursor: pointer;
+  transition: transform 90ms ease, border-color 90ms ease;
+}
+
+.rhy-calib-ring.is-beat {
+  transform: scale(1.07);
+  border-color: var(--rhy-amber);
+}
+
+.rhy-calib-readout {
+  font-family: var(--rhy-font-mono);
+  font-size: 13px;
+  color: #7dd3fc;
+}
+
+/* ==========================================================================
+   DAW CHART STUDIO (Preserved & Polished)
+   ========================================================================== */
+.rhy-studio {
+  position: relative;
+  z-index: 20;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #090c14;
+}
+
+.rhy-studio-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #0e1424;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.rhy-studio-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rhy-time-readout {
+  font-size: 13px;
+  color: #38bdf8;
+  min-width: 84px;
+  text-align: center;
+}
+
+.rhy-studio-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.rhy-timeline-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.rhy-timeline-hint {
+  padding: 7px 14px;
+  font-size: 12px;
+  color: #94a3b8;
+  background: #0c111f;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.rhy-timeline-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: block;
+  cursor: crosshair;
+}
+
+.rhy-scrub-bar {
+  padding: 8px 16px;
+  background: #0e1424;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.rhy-scrub-range {
+  width: 100%;
+  accent-color: #f59e0b;
+}
+
+.rhy-studio-inspector {
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #0c111f;
+}
+
+.rhy-status-line {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #7dd3fc;
+  padding: 9px 11px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 6px;
+}
+
+.rhy-studio-card {
+  background: #11182b;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rhy-studio-card-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #cbd5e1;
+}
+
+.rhy-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rhy-field-label {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.rhy-inline-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.rhy-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.rhy-slider-head {
+  display: flex;
+  justify-content: space-between;
+}
+
+.rhy-cam-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.rhy-cam-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.rhy-cam-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: #0c1221;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 5px;
+  padding: 4px 8px;
+}
+
+.rhy-cam-jump {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  font-family: var(--rhy-font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  flex: 1;
+}
+
+.rhy-cam-del {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.rhy-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rhy-health-cell {
+  background: #0c1221;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 6px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rhy-health-k {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.rhy-health-v {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+@media (max-width: 1080px) {
+  .rhy-select-grid,
+  .rhy-course-grid,
+  .rhy-studio-body,
+  .rhy-result-top,
+  .rhy-result-mid,
+  .rhy-profile-summary {
+    grid-template-columns: 1fr;
+  }
+  .rhy-ach-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rhy-result-rank-block,
+  .rhy-profile-rating-hero {
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+    padding-right: 0;
+    padding-bottom: 14px;
+  }
+}

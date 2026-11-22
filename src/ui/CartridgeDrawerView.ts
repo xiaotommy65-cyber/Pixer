@@ -90,30 +90,49 @@ export class CartridgeDrawerView {
   private rebuildList(): void {
     this.listEl.innerHTML = '';
     const activeId = this.host.activeCartridge;
-    for (const meta of this.host.listCartridges()) {
-      const isActive = activeId === meta.id;
-      const item = btn(isActive ? 'drawer-cart-btn is-active' : 'drawer-cart-btn', '');
-      const img = el('img', 'drawer-cart-thumb');
-      img.alt = meta.title;
-      img.src = renderCardArt(this.atlas, meta.id);
+    const all = this.host.listCartridges();
+    const fullGameIds = new Set(['pulse-resonance', 'sugar-starlight', 'astral-chronicles', 'astral-deck']);
+    const groups: { title: string; items: typeof all }[] = [
+      { title: '完整獨立遊戲', items: all.filter((m) => fullGameIds.has(m.id)) },
+      { title: '引擎範例與單關卡匣', items: all.filter((m) => !fullGameIds.has(m.id)) },
+    ];
 
-      const info = el('div', 'drawer-cart-info');
-      info.append(
-        el('strong', undefined, `${meta.code} · ${meta.title}`),
-        el('span', undefined, isActive ? '● 遊玩中（點選繼續）' : meta.genre),
-      );
-      item.append(img, info);
+    for (const group of groups) {
+      if (group.items.length === 0) continue;
+      const heading = el('div', 'drawer-group-heading', group.title);
+      heading.style.gridColumn = '1 / -1';
+      heading.style.fontSize = '11px';
+      heading.style.fontWeight = '700';
+      heading.style.letterSpacing = '0.08em';
+      heading.style.opacity = '0.72';
+      heading.style.padding = '6px 4px 2px';
+      this.listEl.appendChild(heading);
 
-      item.addEventListener(
-        'click',
-        () => {
-          this.close();
-          this.cb.onSelectCartridge(meta.id);
-        },
-        { signal: this.ac.signal },
-      );
+      for (const meta of group.items) {
+        const isActive = activeId === meta.id;
+        const item = btn(isActive ? 'drawer-cart-btn is-active' : 'drawer-cart-btn', '');
+        const img = el('img', 'drawer-cart-thumb');
+        img.alt = meta.title;
+        img.src = renderCardArt(this.atlas, meta.id);
 
-      this.listEl.appendChild(item);
+        const info = el('div', 'drawer-cart-info');
+        info.append(
+          el('strong', undefined, `${meta.code} · ${meta.title}`),
+          el('span', undefined, isActive ? '遊玩中（點選繼續）' : meta.genre),
+        );
+        item.append(img, info);
+
+        item.addEventListener(
+          'click',
+          () => {
+            this.close();
+            this.cb.onSelectCartridge(meta.id);
+          },
+          { signal: this.ac.signal },
+        );
+
+        this.listEl.appendChild(item);
+      }
     }
   }
 

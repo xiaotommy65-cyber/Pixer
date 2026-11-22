@@ -119,7 +119,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   const coreFiles = collectTsFiles(path.join(rootDir, 'src/core'));
   const assetFiles = collectTsFiles(path.join(rootDir, 'src/assets'));
   const gameFiles = collectTsFiles(path.join(rootDir, 'src/game'));
-  const pureCoreDirs = ['ai', 'hal', 'input', 'math', 'runtime', 'sim', 'types'];
+  const pureCoreDirs = ['ai', 'ecs', 'editor', 'hal', 'input', 'interop', 'math', 'rhythm', 'runtime', 'sim', 'types'];
   const pureCoreFiles = pureCoreDirs.flatMap((sub) => {
     const dir = path.join(rootDir, 'src/core', sub);
     return fs.existsSync(dir) ? collectTsFiles(dir) : [];
@@ -198,14 +198,6 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       gamepadSrc.includes('touchAutofire: this.touchAutofire && !this.autofireBlockedByCartridge'),
     'VirtualGamepadInput must expose clearAllInputs(), destroy(), and syncVisual() autofire bypass parity',
   );
-  const workshopSrc = fs.readFileSync(path.join(rootDir, 'src/ui/WorkshopView.ts'), 'utf8');
-  check(
-    workshopSrc.includes('public destroy()') &&
-      workshopSrc.includes('new AbortController()') &&
-      workshopSrc.includes('workshop-canvas') &&
-      !workshopSrc.includes('workshop-level-cell'),
-    'WorkshopView must manage DOM listeners with AbortController, expose destroy(), and use Canvas Workbench 3.0 (workshop-canvas without workshop-level-cell div grid)',
-  );
   const atelierSrc = fs.readFileSync(path.join(rootDir, 'src/ui/SpriteAtelierView.ts'), 'utf8');
   check(
     atelierSrc.includes('atelier-pixel-canvas') &&
@@ -220,23 +212,57 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'HomeLobbyView.ts',
     'AngledSystemMenuView.ts',
     'CartridgeDrawerView.ts',
-    'StudioWorkbenchView.ts',
+    'PixerPlatformShell.ts',
+    'EcsWorkbenchView.ts',
     'IrisWipeTransition.ts',
     'TransitionMascot.ts',
     'ConsoleShellRouter.ts',
     'SystemLogPanelView.ts',
     'WindowDioramaView.ts',
+    'ConsoleHudPresenter.ts',
+    'RpgOverlayView.ts',
+    'ShmupOverlayView.ts',
+    'ChronicleOverlayView.ts',
+    'RhythmWorkspaceView.ts',
+    'RhythmChartStudioView.ts',
+    'ExternalImportModalView.ts',
   ];
   for (const viewFile of newUiViews) {
     const viewSrc = fs.readFileSync(path.join(rootDir, 'src/ui', viewFile), 'utf8');
     check(
       viewSrc.includes('public destroy()'),
-      `Lobby/Workbench module ${viewFile} must expose public destroy() for clean teardown`,
+      `Lobby/Workbench/Overlay module ${viewFile} must expose public destroy() for clean teardown`,
     );
   }
-  const mainSrc = fs.readFileSync(path.join(rootDir, 'src/main.ts'), 'utf8');
+  for (const overlayFile of [
+    'RpgOverlayView.ts',
+    'ShmupOverlayView.ts',
+    'ChronicleOverlayView.ts',
+    'RhythmWorkspaceView.ts',
+    'RhythmChartStudioView.ts',
+  ]) {
+    const ovSrc = fs.readFileSync(path.join(rootDir, 'src/ui', overlayFile), 'utf8');
+    check(
+      ovSrc.includes('new AbortController()') && ovSrc.includes('this.ac.abort()'),
+      `Overlay/Panel ${overlayFile} must manage DOM listeners via AbortController`,
+    );
+  }
+  const toySynthSrc = fs.readFileSync(path.join(rootDir, 'src/core/audio/ToySynth.ts'), 'utf8');
   check(
-    mainSrc.includes('workshopView.destroy()') &&
+    toySynthSrc.includes('chargeRouteNode') && toySynthSrc.includes('routeNode.disconnect()'),
+    'ToySynth must track and disconnect chargeRouteNode in stopCharge()',
+  );
+  const webGpuSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGpuBackend.ts'), 'utf8');
+  check(
+    webGpuSrc.includes('removeEventListener(\'uncapturederror\''),
+    'WebGpuBackend must detach uncapturederror listener in dispose()',
+  );
+  const mainSrc = fs.readFileSync(path.join(rootDir, 'src/main.ts'), 'utf8');
+  const ecsWorkbenchSrc = fs.readFileSync(path.join(rootDir, 'src/ui/EcsWorkbenchView.ts'), 'utf8');
+  check(
+    mainSrc.includes('ensureArcadeGpuInit') &&
+      ecsWorkbenchSrc.includes('ensurePreviewGpuInit') &&
+      mainSrc.includes('spriteAtelierView.destroy()') &&
       mainSrc.includes('gpuEngine.dispose()') &&
       mainSrc.includes('host.destroy()') &&
       mainSrc.includes('host.bindAtlas(atlas)') &&
@@ -244,16 +270,35 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       mainSrc.includes('forceCanvas2DFallback') &&
       mainSrc.includes('consoleView.syncPauseState()') &&
       mainSrc.includes('createAppSafe'),
-    'main.ts must register built-in cartridges, bind TextureAtlas, guard startup/frame crashes, and tear down cleanly',
+    'main.ts & EcsWorkbenchView must enforce lazy GPU lifecycle, bind TextureAtlas, guard crashes, and tear down cleanly',
   );
   const c2dSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/Canvas2DBackend.ts'), 'utf8');
   check(
     c2dSrc.includes('export class Canvas2DBackend') && c2dSrc.includes("kind = 'canvas2d'"),
     'Canvas2DBackend must implement canvas2d fallback backend cleanly',
   );
+  // Engine-First Phase A Hygiene Guardrails: zero legacy duplicate UI editors, zero AI JPEG wallpapers, zero orphan public assets
+  for (const retired of [
+    'src/ui/WorkshopView.ts',
+    'src/ui/StudioWorkbenchView.ts',
+    'src/ui/StudioOrthogonalPanels.ts',
+    'public/assets/aistudio',
+    'src/assets/images',
+  ]) {
+    check(
+      !fs.existsSync(path.join(rootDir, retired)),
+      `Engine-First guardrail: retired/deviant path "${retired}" must remain removed`,
+    );
+  }
+  const srcAssetImages = fs.existsSync(path.join(rootDir, 'src/assets'))
+    ? fs
+        .readdirSync(path.join(rootDir, 'src/assets'), { recursive: true })
+        .map((f) => String(f))
+        .filter((f) => /\.(jpe?g|webp)$/i.test(f))
+    : [];
   check(
-    !fs.existsSync(path.join(rootDir, 'public/assets/aistudio/Feedback_93b75d50.js')),
-    'Standalone Feedback_93b75d50.js must remain removed after distilling into JuiceSystem/ToySynth/EngineHost',
+    srcAssetImages.length === 0,
+    `Engine-First guardrail: photorealistic JPEG/WebP assets are forbidden in src/assets/ (found: ${srcAssetImages.join(', ')})`,
   );
 
   // 3b. Security, CI/lockfile, PWA subpath, and public/ hygiene guards
@@ -410,7 +455,7 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   const atlas = new TextureAtlas();
   check(ATLAS_SIZE === 1024 && atlas.width === 1024 && atlas.height === 1024, `TextureAtlas should be 1024x1024 (got ${atlas.width}x${atlas.height})`);
   check(MAX_INSTANCES_PER_PASS === 16384, `MAX_INSTANCES_PER_PASS should be 16384 for M4.3 (got ${MAX_INSTANCES_PER_PASS})`);
-  check(FLOATS_PER_INSTANCE === 20, `FLOATS_PER_INSTANCE should be 20 for M1 deform/LUT packing (got ${FLOATS_PER_INSTANCE})`);
+  check(FLOATS_PER_INSTANCE === 24, `FLOATS_PER_INSTANCE should be 24 for Pixer 8.0 PBR/multi-page packing (got ${FLOATS_PER_INSTANCE})`);
   check(
     atlas.indexPixels.length === ATLAS_SIZE * ATLAS_SIZE &&
       atlas.paletteLut.length === 16 * atlas.paletteRows * 4 &&

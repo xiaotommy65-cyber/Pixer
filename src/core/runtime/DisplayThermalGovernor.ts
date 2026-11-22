@@ -104,9 +104,15 @@ export class DisplayThermalGovernor {
   }
 
   public getTargetPixelSize(): { width: number; height: number } {
+    let effScale: number = this.scaleFactor;
+    if (this.viewW > 480) {
+      while (effScale > 1 && (this.viewW * effScale > 1920 || this.viewH * effScale > 1080)) {
+        effScale--;
+      }
+    }
     return {
-      width: this.viewW * this.scaleFactor,
-      height: this.viewH * this.scaleFactor,
+      width: this.viewW * effScale,
+      height: this.viewH * effScale,
     };
   }
 

@@ -19,6 +19,8 @@ export class RpgOverlayView {
   private readonly dialogEl: HTMLElement;
   private readonly actionsEl: HTMLElement;
   private readonly onCommand: (commandId: string) => void;
+  private readonly ac = new AbortController();
+  private actionAc: AbortController | null = null;
   private lastActionsKey = '';
 
   constructor(callbacks: RpgOverlayCallbacks) {
@@ -33,9 +35,15 @@ export class RpgOverlayView {
 
     const rpgTopRight = el('div', 'rpg-cluster');
     this.enemyEl = el('span', 'rpg-pill is-enemy panel-hidden');
-    this.agentBtn = btn('rpg-agent-btn', '🤖 AI 託管', '開啟／關閉內建探索戰鬥 AI 代理', () => {
-      this.onCommand('toggle_agent');
-    });
+    this.agentBtn = btn(
+      'rpg-agent-btn',
+      '🤖 AI 託管',
+      '開啟／關閉內建探索戰鬥 AI 代理',
+      () => {
+        this.onCommand('toggle_agent');
+      },
+      this.ac.signal,
+    );
     rpgTopRight.append(this.enemyEl, this.agentBtn);
     rpgTop.append(rpgTopLeft, rpgTopRight);
 
@@ -50,6 +58,14 @@ export class RpgOverlayView {
   public reset(): void {
     this.element.classList.add('panel-hidden');
     this.lastActionsKey = '';
+  }
+
+  public destroy(): void {
+    this.actionAc?.abort();
+    this.actionAc = null;
+    this.ac.abort();
+    this.reset();
+    this.actionsEl.textContent = '';
   }
 
   public render(hud: RpgHudSnapshot | undefined, isRunning: boolean): void {
@@ -95,11 +111,20 @@ export class RpgOverlayView {
         this.dialogEl.classList.add('panel-hidden');
       }
 
+      this.actionAc?.abort();
+      this.actionAc = new AbortController();
+      const actSig = this.actionAc.signal;
       this.actionsEl.textContent = '';
       opts.forEach((opt, i) => {
-        const b = btn(`rpg-act-btn${i === selIdx ? ' is-selected' : ''}`, opt.label, undefined, () => {
-          this.onCommand(opt.id);
-        });
+        const b = btn(
+          `rpg-act-btn${i === selIdx ? ' is-selected' : ''}`,
+          opt.label,
+          undefined,
+          () => {
+            this.onCommand(opt.id);
+          },
+          actSig,
+        );
         b.disabled = !opt.enabled;
         this.actionsEl.appendChild(b);
       });

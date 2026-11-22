@@ -99,6 +99,7 @@ export class CartridgeRunner {
   }
 
   public switchCartridge(id: CartridgeId, savedSram?: unknown): boolean {
+    this.instance?.dispose?.();
     this.cartridgeId = id;
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
@@ -119,6 +120,7 @@ export class CartridgeRunner {
           err,
           { cartridgeId: id },
         );
+        this.instance.dispose?.();
         this.instance = this.createInstance(id);
         resumed = false;
       }
@@ -132,6 +134,7 @@ export class CartridgeRunner {
   }
 
   public restart(): void {
+    this.instance?.dispose?.();
     this.accumulator = 0;
     this.lastEmittedStageIdx = -1;
     this.hasPendingLatch = false;
@@ -151,6 +154,7 @@ export class CartridgeRunner {
     if (this.instance.retryStage) {
       this.instance.retryStage();
     } else {
+      this.instance?.dispose?.();
       this.instance = this.createInstance(this.cartridgeId);
     }
     this.events.emit('cartridge:restarted', { id: this.cartridgeId });

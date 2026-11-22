@@ -834,11 +834,13 @@ function isCrateBlockedByEntity(
   playerSlot: number,
   nx: number,
   ny: number,
+  querySlots: Int32Array,
 ): boolean {
   const cw = pool.w[crateSlot];
   const ch = pool.h[crateSlot];
-  for (let i = 0; i < pool.activeCount; i++) {
-    const s = pool.activeIndices[i];
+  const count = pool.queryRect(nx - 2, ny - 2, nx + cw + 2, ny + ch + 2, querySlots);
+  for (let i = 0; i < count; i++) {
+    const s = querySlots[i];
     if (s === crateSlot || s === playerSlot || (pool.flags[s] & EF_ALIVE) === 0) continue;
     if ((pool.flags[s] & EF_SOLID) === 0) continue;
     if (
@@ -930,6 +932,9 @@ export function stepTopdownController(
   }
   pool.y[p] = nextY;
 
+  // Build SpatialHash before crate pushing & switch queries to eliminate O(N^2) loops
+  pool.rebuildSpatialHash();
+
   // Step NPCs / enemies & pushable crates
   for (let i = pool.activeCount - 1; i >= 0; i--) {
     const s = pool.activeIndices[i];
@@ -949,7 +954,7 @@ export function stepTopdownController(
         const cx = clamp(pool.x[s] + pushDx, 0, Math.max(0, ctx.stageWorldW - pool.w[s]));
         const cy = clamp(pool.y[s] + pushDy, 0, Math.max(0, ctx.stageWorldH - pool.h[s]));
         const tileBlocked = isTopdownRectBlocked(ctx.tilemap, cx + 1, cy + 1, pool.w[s] - 2, pool.h[s] - 2);
-        const entBlocked = isCrateBlockedByEntity(pool, s, p, cx, cy);
+        const entBlocked = isCrateBlockedByEntity(pool, s, p, cx, cy, ctx.querySlots);
         if (!tileBlocked && !entBlocked) {
           pool.x[s] = cx;
           pool.y[s] = cy;
@@ -1006,14 +1011,16 @@ export function stepTopdownController(
     }
   }
 
-  // Check if any crate rests on a logic_switch
+  // Rebuild SpatialHash once after entity movement for O(1) crate-on-switch & player trigger queries
+  pool.rebuildSpatialHash();
   for (let i = 0; i < pool.activeCount; i++) {
     const cr = pool.activeIndices[i];
     if ((pool.flags[cr] & EF_PUSHABLE_CRATE) === 0 || (pool.flags[cr] & EF_ALIVE) === 0) continue;
     const ccx = pool.x[cr] + pool.w[cr] * 0.5;
     const ccy = pool.y[cr] + pool.h[cr] * 0.5;
-    for (let j = 0; j < pool.activeCount; j++) {
-      const sw = pool.activeIndices[j];
+    const nearCount = pool.queryRect(ccx - 16, ccy - 16, ccx + 16, ccy + 16, ctx.querySlots);
+    for (let j = 0; j < nearCount; j++) {
+      const sw = ctx.querySlots[j];
       if ((pool.flags[sw] & EF_LOGIC_SWITCH) === 0 || pool.aiState[sw] !== 0) continue;
       const scx = pool.x[sw] + pool.w[sw] * 0.5;
       const scy = pool.y[sw] + pool.h[sw] * 0.5;

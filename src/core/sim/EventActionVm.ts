@@ -1,9 +1,11 @@
 import { appLogger } from '../runtime/AppLogger.ts';
 import type { FeedbackPreset, SimEvent } from '../types/WorldTypes.ts';
+import { MAX_ENTITIES } from './SoaEntityPool.ts';
 import type { TweenEase } from './TweenSystem.ts';
 
 export const MAX_VM_OPS_PER_TICK = 512;
 export const MAX_VM_SIGNALS_PER_TICK = 32;
+export const ENTITY_LOCAL_VAR_SLOTS = 8;
 
 export const MULTIGENRE_VAR_DEFAULTS: Readonly<Record<'combo' | 'mana' | 'p1Hp' | 'p2Hp' | 'turn' | 'switches', number>> = {
   combo: 0,
@@ -17,12 +19,14 @@ export const MULTIGENRE_VAR_DEFAULTS: Readonly<Record<'combo' | 'mana' | 'p1Hp' 
 export type VmCompareOp = '==' | '!=' | '<' | '<=' | '>' | '>=';
 export type VmButtonId = 'jump' | 'action' | 'skillX' | 'skillY' | 'shoulderL' | 'shoulderR';
 export type VmButtonEdge = 'pressed' | 'held' | 'released';
-export type VmVarOp = '=' | '+=' | '-=' | 'clamp';
+export type VmVarOp = '=' | '+=' | '-=' | '*=' | '/=' | 'clamp';
 
 export interface VmCondition {
   varName: string;
   op: VmCompareOp;
   value: number;
+  /** Optional second variable name (`global`, `self.x`, `other.x`) overriding literal `value`. */
+  valueVar?: string;
 }
 
 export type VmTrigger =
@@ -30,7 +34,7 @@ export type VmTrigger =
   | { type: 'OnEvery'; intervalTicks: number }
   | { type: 'OnCollide'; sourceTag: string; targetTag: string }
   | { type: 'OnButton'; button: VmButtonId; edge?: VmButtonEdge }
-  | { type: 'OnVar'; varName: string; op: VmCompareOp; value: number; edge?: boolean }
+  | { type: 'OnVar'; varName: string; op: VmCompareOp; value: number; valueVar?: string; edge?: boolean }
   | { type: 'OnSignal'; signal: string };
 
 export type VmAction =
@@ -45,7 +49,16 @@ export type VmAction =
     }
   | { type: 'Destroy'; target: 'self' | 'other' | 'byTag'; tag?: string }
   | { type: 'Impulse'; target: 'self' | 'other' | 'player'; vx: number; vy: number; setVelocity?: boolean }
-  | { type: 'SetVar'; name: string; op: VmVarOp; value: number; min?: number; max?: number }
+  | {
+      type: 'SetVar';
+      name: string;
+      op: VmVarOp;
+      value: number;
+      /** Optional RHS variable name (`global`, `self.k`, `other.k`) for var-to-var arithmetic. */
+      valueVar?: string;
+      min?: number;
+      max?: number;
+    }
   | { type: 'PlaySfx'; preset: SimEvent; comboVar?: string }
   | {
       type: 'Juice';
@@ -73,7 +86,11 @@ export interface VmRule {
   id?: string;
   when: VmTrigger;
   if?: readonly VmCondition[];
+  /** Logical combinator for `if` conditions: `'all'` (AND, default) or `'any'` (OR). */
+  ifMode?: 'all' | 'any';
   do: readonly VmAction[];
+  /** Optional branch executed when `when` triggers and `if` evaluates to false. */
+  else?: readonly VmAction[];
 }
 
 export interface VmCollisionPair {
@@ -91,7 +108,7 @@ export interface VmHostBridge {
   playSfx(preset: SimEvent): void;
   triggerJuice(action: Extract<VmAction, { type: 'Juice' }>, selfSlot: number): void;
   endGame(outcome: 'won' | 'lost' | 'nextStage', targetStage?: number): void;
-  emitSignal?(signal: string): void;
+  emitSignal?(signal: string, selfSlot?: number, otherSlot?: number): void;
   floatText?(
     text: string,
     color: string | undefined,
@@ -122,11 +139,16 @@ function evalCompare(lhs: number, op: VmCompareOp, rhs: number): boolean {
 }
 
 /**
- * Deterministic, bounded Event-Action VM (`When -> If -> Do`) with zero string evaluation.
- * Enforces `MAX_VM_OPS_PER_TICK = 512` and `MAX_VM_SIGNALS_PER_TICK = 32` to guard against recursive loops.
+ * Engine 5.0 Deterministic, bounded Event-Action VM (`When -> If (AND/OR) -> Do / Else`) with zero string evaluation.
+ * Supports global vars, per-entity local vars (`self.<name>`, `other.<name>`), var-to-var arithmetic,
+ * and signal slot context preservation while enforcing `MAX_VM_OPS_PER_TICK = 512`.
  */
 export class EventActionVm {
   private readonly vars = new Map<string, number>();
+  private readonly entityLocalKeyIds = new Map<string, number>();
+  private readonly entityLocalBank = new Float32Array(MAX_ENTITIES * ENTITY_LOCAL_VAR_SLOTS);
+  private nextEntityLocalKey = 0;
+
   private prevVarConds = new Uint8Array(64);
   private rules: readonly VmRule[] = [];
   private tickCount = 0;
@@ -136,6 +158,8 @@ export class EventActionVm {
   private abortedThisTick = false;
   private readonly stepResult = { opsExecuted: 0, abortedByBudget: false };
   private readonly signalQueue: string[] = new Array<string>(MAX_VM_SIGNALS_PER_TICK).fill('');
+  private readonly signalSelfSlots = new Int16Array(MAX_VM_SIGNALS_PER_TICK).fill(-1);
+  private readonly signalOtherSlots = new Int16Array(MAX_VM_SIGNALS_PER_TICK).fill(-1);
   private signalHead = 0;
   private signalTail = 0;
   private signalCount = 0;
@@ -143,6 +167,9 @@ export class EventActionVm {
   public loadRules(rules: readonly VmRule[], initialVars?: Record<string, number>): void {
     this.rules = rules;
     this.vars.clear();
+    this.entityLocalKeyIds.clear();
+    this.entityLocalBank.fill(0);
+    this.nextEntityLocalKey = 0;
     if (rules.length > this.prevVarConds.length) {
       this.prevVarConds = new Uint8Array(rules.length);
     } else {
@@ -167,18 +194,74 @@ export class EventActionVm {
     this.clearSignals();
   }
 
+  public clearEntityVars(slot: number): void {
+    if (slot < 0 || slot >= MAX_ENTITIES) return;
+    const base = slot * ENTITY_LOCAL_VAR_SLOTS;
+    this.entityLocalBank.fill(0, base, base + ENTITY_LOCAL_VAR_SLOTS);
+  }
+
+  private resolveLocalKeySlot(key: string, createIfMissing: boolean): number {
+    const existing = this.entityLocalKeyIds.get(key);
+    if (existing !== undefined) return existing;
+    if (!createIfMissing || this.nextEntityLocalKey >= ENTITY_LOCAL_VAR_SLOTS) return -1;
+    const idx = this.nextEntityLocalKey++;
+    this.entityLocalKeyIds.set(key, idx);
+    return idx;
+  }
+
+  public getEntityVar(slot: number, key: string, fallback = 0): number {
+    if (slot < 0 || slot >= MAX_ENTITIES) return fallback;
+    const idx = this.resolveLocalKeySlot(key, false);
+    if (idx < 0) return fallback;
+    return this.entityLocalBank[slot * ENTITY_LOCAL_VAR_SLOTS + idx];
+  }
+
+  public setEntityVar(slot: number, key: string, value: number): void {
+    if (slot < 0 || slot >= MAX_ENTITIES || !Number.isFinite(value)) return;
+    const idx = this.resolveLocalKeySlot(key, true);
+    if (idx < 0) return;
+    this.entityLocalBank[slot * ENTITY_LOCAL_VAR_SLOTS + idx] = value;
+  }
+
+  private readScopedVar(name: string, selfSlot: number, otherSlot: number, fallback = 0): number {
+    if (name.startsWith('self.')) {
+      return this.getEntityVar(selfSlot, name.slice(5), fallback);
+    }
+    if (name.startsWith('other.')) {
+      return this.getEntityVar(otherSlot, name.slice(6), fallback);
+    }
+    return this.vars.get(name) ?? fallback;
+  }
+
+  private writeScopedVar(name: string, value: number, selfSlot: number, otherSlot: number): void {
+    if (!Number.isFinite(value)) return;
+    if (name.startsWith('self.')) {
+      this.setEntityVar(selfSlot, name.slice(5), value);
+      return;
+    }
+    if (name.startsWith('other.')) {
+      this.setEntityVar(otherSlot, name.slice(6), value);
+      return;
+    }
+    this.vars.set(name, value);
+  }
+
   public clearSignals(): void {
     this.signalHead = 0;
     this.signalTail = 0;
     this.signalCount = 0;
     this.signalQueue.fill('');
+    this.signalSelfSlots.fill(-1);
+    this.signalOtherSlots.fill(-1);
   }
 
-  public emitSignal(signal: string): boolean {
+  public emitSignal(signal: string, selfSlot = -1, otherSlot = -1): boolean {
     if (!signal || this.signalCount >= MAX_VM_SIGNALS_PER_TICK) {
       return false;
     }
     this.signalQueue[this.signalTail] = signal;
+    this.signalSelfSlots[this.signalTail] = selfSlot;
+    this.signalOtherSlots[this.signalTail] = otherSlot;
     this.signalTail = (this.signalTail + 1) % MAX_VM_SIGNALS_PER_TICK;
     this.signalCount++;
     return true;
@@ -210,13 +293,36 @@ export class EventActionVm {
     return out;
   }
 
-  private evalConditions(conditions: readonly VmCondition[] | undefined): boolean {
+  private evalConditions(
+    conditions: readonly VmCondition[] | undefined,
+    ifMode: 'all' | 'any' | undefined,
+    selfSlot: number,
+    otherSlot: number,
+  ): boolean {
     if (!conditions || conditions.length === 0) return true;
+    const isAny = ifMode === 'any';
     for (let i = 0; i < conditions.length; i++) {
       const c = conditions[i];
-      if (!evalCompare(this.getVar(c.varName), c.op, c.value)) {
-        return false;
-      }
+      const lhs = this.readScopedVar(c.varName, selfSlot, otherSlot, 0);
+      const rhs = c.valueVar ? this.readScopedVar(c.valueVar, selfSlot, otherSlot, c.value) : c.value;
+      const passed = evalCompare(lhs, c.op, rhs);
+      if (isAny && passed) return true;
+      if (!isAny && !passed) return false;
+    }
+    return !isAny;
+  }
+
+  private executeRuleBranch(
+    host: VmHostBridge,
+    rule: VmRule,
+    selfSlot: number,
+    otherSlot: number,
+  ): boolean {
+    if (this.evalConditions(rule.if, rule.ifMode, selfSlot, otherSlot)) {
+      return this.executeActions(host, rule.do, selfSlot, otherSlot);
+    }
+    if (rule.else && rule.else.length > 0) {
+      return this.executeActions(host, rule.else, selfSlot, otherSlot);
     }
     return true;
   }
@@ -254,15 +360,18 @@ export class EventActionVm {
           host.impulse(act.target, act.vx, act.vy, act.setVelocity ?? false, selfSlot, otherSlot);
           break;
         case 'SetVar': {
-          const cur = this.vars.get(act.name) ?? 0;
+          const cur = this.readScopedVar(act.name, selfSlot, otherSlot, 0);
+          const rhs = act.valueVar ? this.readScopedVar(act.valueVar, selfSlot, otherSlot, act.value) : act.value;
           let next = cur;
-          if (act.op === '=') next = act.value;
-          else if (act.op === '+=') next = cur + act.value;
-          else if (act.op === '-=') next = cur - act.value;
-          else if (act.op === 'clamp') next = cur + act.value;
+          if (act.op === '=') next = rhs;
+          else if (act.op === '+=') next = cur + rhs;
+          else if (act.op === '-=') next = cur - rhs;
+          else if (act.op === '*=') next = cur * rhs;
+          else if (act.op === '/=') next = Math.abs(rhs) > 1e-6 ? cur / rhs : cur;
+          else if (act.op === 'clamp') next = cur + rhs;
           if (act.min !== undefined && next < act.min) next = act.min;
           if (act.max !== undefined && next > act.max) next = act.max;
-          if (Number.isFinite(next)) this.vars.set(act.name, next);
+          this.writeScopedVar(act.name, next, selfSlot, otherSlot);
           break;
         }
         case 'PlaySfx':
@@ -275,8 +384,8 @@ export class EventActionVm {
           host.endGame(act.outcome, act.targetStage);
           break;
         case 'EmitSignal':
-          this.emitSignal(act.signal);
-          host.emitSignal?.(act.signal);
+          this.emitSignal(act.signal, selfSlot, otherSlot);
+          host.emitSignal?.(act.signal, selfSlot, otherSlot);
           break;
         case 'FloatText':
           host.floatText?.(
@@ -314,39 +423,40 @@ export class EventActionVm {
       if (w.type === 'OnSignal') {
         continue;
       } else if (w.type === 'OnStart') {
-        if (!this.startFired && this.evalConditions(rule.if)) {
-          if (!this.executeActions(host, rule.do, -1, -1)) break;
+        if (!this.startFired) {
+          if (!this.executeRuleBranch(host, rule, -1, -1)) break;
         }
       } else if (w.type === 'OnEvery') {
         const iv = Math.max(1, Math.floor(w.intervalTicks));
-        if (this.tickCount % iv === 0 && this.evalConditions(rule.if)) {
-          if (!this.executeActions(host, rule.do, -1, -1)) break;
+        if (this.tickCount % iv === 0) {
+          if (!this.executeRuleBranch(host, rule, -1, -1)) break;
         }
       } else if (w.type === 'OnButton') {
-        if (host.isButton(w.button, w.edge ?? 'pressed') && this.evalConditions(rule.if)) {
-          if (!this.executeActions(host, rule.do, -1, -1)) break;
+        if (host.isButton(w.button, w.edge ?? 'pressed')) {
+          if (!this.executeRuleBranch(host, rule, -1, -1)) break;
         }
       } else if (w.type === 'OnVar') {
-        const cond = evalCompare(this.getVar(w.varName), w.op, w.value);
+        const rhs = w.valueVar ? this.getVar(w.valueVar, w.value) : w.value;
+        const cond = evalCompare(this.getVar(w.varName), w.op, rhs);
         const wasTrue = this.prevVarConds[r] === 1;
         this.prevVarConds[r] = cond ? 1 : 0;
         const shouldFire = w.edge ? cond && !wasTrue : cond;
-        if (shouldFire && this.evalConditions(rule.if)) {
-          if (!this.executeActions(host, rule.do, -1, -1)) break;
+        if (shouldFire) {
+          if (!this.executeRuleBranch(host, rule, -1, -1)) break;
         }
       } else if (w.type === 'OnCollide') {
         for (let c = 0; c < collisionCount; c++) {
           const cp = collisions[c];
           if (cp.selfTag === w.sourceTag && cp.otherTag === w.targetTag) {
-            if (this.evalConditions(rule.if) && !this.executeActions(host, rule.do, cp.selfSlot, cp.otherSlot)) break;
+            if (!this.executeRuleBranch(host, rule, cp.selfSlot, cp.otherSlot)) break;
           } else if (cp.otherTag === w.sourceTag && cp.selfTag === w.targetTag) {
-            if (this.evalConditions(rule.if) && !this.executeActions(host, rule.do, cp.otherSlot, cp.selfSlot)) break;
+            if (!this.executeRuleBranch(host, rule, cp.otherSlot, cp.selfSlot)) break;
           }
         }
       }
     }
 
-    // Drain circular signal queue up to MAX_VM_SIGNALS_PER_TICK signals per tick
+    // Drain circular signal queue while preserving originating selfSlot / otherSlot context
     let signalsProcessed = 0;
     while (
       this.signalCount > 0 &&
@@ -354,7 +464,11 @@ export class EventActionVm {
       !this.abortedThisTick
     ) {
       const sig = this.signalQueue[this.signalHead];
+      const sigSelf = this.signalSelfSlots[this.signalHead];
+      const sigOther = this.signalOtherSlots[this.signalHead];
       this.signalQueue[this.signalHead] = '';
+      this.signalSelfSlots[this.signalHead] = -1;
+      this.signalOtherSlots[this.signalHead] = -1;
       this.signalHead = (this.signalHead + 1) % MAX_VM_SIGNALS_PER_TICK;
       this.signalCount--;
       signalsProcessed++;
@@ -362,8 +476,8 @@ export class EventActionVm {
       for (let r = 0; r < this.rules.length; r++) {
         if (this.abortedThisTick) break;
         const rule = this.rules[r];
-        if (rule.when.type === 'OnSignal' && rule.when.signal === sig && this.evalConditions(rule.if)) {
-          if (!this.executeActions(host, rule.do, -1, -1)) break;
+        if (rule.when.type === 'OnSignal' && rule.when.signal === sig) {
+          if (!this.executeRuleBranch(host, rule, sigSelf, sigOther)) break;
         }
       }
     }

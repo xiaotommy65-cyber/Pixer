@@ -1,83 +1,44 @@
-# Pixer (Pixel Atelier) — Agent Engineering Rules & File Map
+# Pixer (Pixel Atelier) — Engine-First Constitution & File Map
 
-## 1. Project Identity (One Core, Two Future Editions)
-- **Core (`src/core/`, `src/assets/`)**: Lightweight, zero-GC, multi-backend (WebGPU / WebGL2 / Canvas 2D) 2D/2.5D fantasy console engine with deterministic simulation, `1024×1024` TextureAtlas, and Web Audio synthesizer.
-- **Arcade Edition (Current Focus)**: Tactile Switch-inspired creative handheld (`PA-01`–`PA-06`), shaders/HD-2D effects, Studio editors, PWA, and Capacitor native iOS/Android app.
-- **Edu Edition (Future Phase)**: Scratch-parallel white-box AI cartridge player & embeddable widget (transparent editable blocks/sprites, buggy-cartridge debugging, PNG homework).
-- Read [`docs/ROADMAP.md`](docs/ROADMAP.md) **ONLY** when planning or executing a milestone.
+## 1. Engine-First Identity (Pixel-Craft PBR GPU Engine)
+- **Core Mandate**: Pixer is a Zero-GC, vanilla TypeScript **HD-2D Pixel PBR-Lite Engine** (`WebGPU` WGSL / `WebGL2` GLSL ES 3.00 / `Canvas2DBackend` fallback, `1280×720` viewport ceiling, 24-float PBR instancing, 8-page `1024×1024` `Texture2DArray` Atlas Pool, True Generational `EcsCoreWorld` + 5-phase 14-system pipeline + Sandboxed Script VM, pure data-driven Multi-Room HD-2D Tilemap & Top-Down Adventure runtime, 6DoF `CameraRigDirector`, `GameFlowController`, and Web Audio synth).
+- **Unified Shells**: Single primary **True ECS Workstation** (`EcsWorkbenchView` + `EcsMapDesignerPanel` + `EventGraphEditorView` + `SpriteAtelierView` modal) + tactile Switch **Arcade Showcase** (`ConsoleView`, `PA-01..PA-14`) + **Standalone Immersive Game Host** (`PA-13`).
+- Read `docs/ROADMAP.md` for Engine 10.5 → M1..M4 milestones and `docs/HANDOFF.md` + `docs/NEXT_CHAT_PROMPT.md` for session handoff.
 
 ## 2. Repository & File Guide Map (Read this first instead of broad grep)
 
 ### Root & Configuration
-- `src/main.ts` — App bootstrap (`createAppSafe()`), RAF loop, `DisplayThermalGovernor`, `EngineHost`, `GpuEngine`, `ConsoleView`, `StudioWorkbenchView`, and `window.__PIXEL_ATELIER_AGENT__`.
+- `src/main.ts` — App bootstrap (`createAppSafe()`), single RAF loop, lazy on-demand `GpuEngine` lifecycle (`ensureArcadeGpuInit`), `DisplayThermalGovernor`, `EngineHost`, `PixerPlatformShell`, `EcsWorkbenchView` (defaults to `PA-14`), `SpriteAtelierView` modal, `ConsoleView`, `RhythmWorkspaceView`, and `window.__PIXEL_ATELIER_AGENT__`.
 - `src/AppShellHelpers.ts` — OS utility bar, landscape orientation controller, PNG card capture/share, global error handlers, 3-step `recoverFromFrameError` ladder.
-- `vite.config.ts` — Vite + `VitePWA` (`base: './'`, relative PWA manifest paths, Rolldown `codeSplitting`).
-- `capacitor.config.ts` — Native iOS/Android Capacitor shell (`com.pixelatelier.console`).
-- `tsconfig.json` — Strict TypeScript (`ES2023`, `strict: true`, `noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly`, `resolveJsonModule`).
+- `vite.config.ts` / `capacitor.config.ts` / `tsconfig.json` — Vite + `VitePWA` (`base: './'`, lazy `legacy-cartridges`), Capacitor shell, strict TS (`strict`, `noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly`).
 
-### `src/core/` — Pure Engine Core (MUST stay DOM-free except `gpu/`, never import `ui/` or `game/`)
-- `src/core/gpu/` — Multi-backend instanced 2D/2.5D renderer:
-  - `GpuEngine.ts` (20-float instance packing, `alphaItems`/`addItems` Float32Array batches, auto fallback)
-  - `WebGpuBackend.ts` & `WebGpuShaders.ts` (WGSL)
-  - `WebGl2Backend.ts` & `WebGl2Shaders.ts` (GLSL ES 3.00)
-  - `Canvas2DBackend.ts` (software fallback)
-  - `GpuTypes.ts` (`LogicalViewport`, `GAME_W=320`, `GAME_H=180`, `FLOATS_PER_INSTANCE=20`, `MAX_INSTANCES_PER_PASS=16384`, `RenderPerformanceProfile`)
-- `src/core/runtime/` — Engine orchestration, lifecycle & persistence:
-  - `EngineHost.ts` — **Sole facade** for UI views (`loadCartridge`, `mount`, `getSnapshot`; never access `.runner` from `src/ui/`).
-  - `CartridgeRunner.ts` — Fixed-timestep (`STEP_DT = 1/60`) simulation loop, cartridge switching, SRAM serialize/hydrate, 1,150+ sprite benchmark.
-  - `CartridgeRegistry.ts` & `CartridgePngCodec.ts` — Cartridge plugin registry (`registerCartridgePlugin`, `getCartridgeJson`) & Polaroid PNG `iTXt` (`pixer-cartridge-v1`) lossless codec with Bomb/CRC guards.
-  - `SceneGpuBridge.ts` — Projects `RenderSceneSnapshot` (HD-2D Y-depth sorting, mode 1/3/4/5 shader primitives) into `GpuEngine`.
-  - `DisplayThermalGovernor.ts` — Integer resolution scaling (`1x–3x`) & idle frame pacing (30fps/20fps).
-  - `SaveService.ts` — `localStorage` + in-memory fallback for records, SRAM, hero sprites, shell/input/perf settings.
-  - `AppLogger.ts` & `LogPersistence.ts` — Circular-safe JSONL structured logging (`IndexedDB` + `localStorage` mirror).
-  - `EventBus.ts` & `SeededRng.ts` — Typed `EngineEventBus` and deterministic RNG.
-- `src/core/sim/` — Shared 2D/2.5D simulation primitives:
-  - `WorldKernel.ts`, `WorldEntitiesStep.ts`, `WorldHeroPhysics.ts`, `WorldSnapshot.ts`, `WorldInternalTypes.ts`
-  - `CartridgeSchema.ts`, `ProceduralStageCompiler.ts`, `DataCartridgeRuntime.ts`, `DataRuntimeShmup.ts`, `GenreControllers.ts`, `TweenSystem.ts`, `SoaEntityPool.ts`, `TilemapGrid.ts`, `EventActionVm.ts`
-  - `CameraDirector.ts`, `CutsceneSequencer.ts`, `JuiceSystem.ts` (`FEEDBACK_RECIPES`), `BehaviorTree.ts`, `GridPathfinder.ts`, `RuleMatrix.ts`, `Archetypes.ts`
-- `src/core/audio/` — Zero-dependency scale-locked Web Audio synthesizer (`ToySynth.ts`, `AudioBus.ts`, `BgmSequencer.ts`, `SynthPresets.ts`).
-- `src/core/input/` — Input DSP & hardware gamepad (`InputPipeline.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `InputMap.ts`, `WebGamepadSampler.ts`).
-- `src/core/hal/` — Hardware Abstraction Layer (`SystemHal.ts`, `HapticEngine.ts` stereo dual-rumble & acoustic fallback).
-- `src/core/ai/` — AI & Agent Bridge (`AgentBridge.ts`, `HybridAiDirector.ts`, `LocalAiProvider.ts`, `RemoteAiProvider.ts`, `ObservationSerializer.ts`, `AiTypes.ts`).
-- `src/core/math/` — Pure zero-GC math/algorithm primitives (`ColorMath.ts`, `NoiseMath.ts`, `SpringDynamics.ts`, `SpatialHash.ts`, `Visibility2D.ts`).
-- `src/core/types/` — Shared contracts (`WorldTypes.ts`, `CartridgeTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `SceneTypes.ts`).
+### `src/core/` — Pure Engine Core (100% DOM-free except `gpu/` & `audio/`, never import `ui/` or `game/`)
+- `src/core/gpu/` — Multi-backend instanced 2D/HD-2D PBR-Lite renderer:
+  - `GpuEngine.ts`, `WebGpuBackend.ts` & `WebGpuShaders.ts` (WGSL), `WebGl2Backend.ts` & `WebGl2Shaders.ts` (GLSL ES 3.00), `Canvas2DBackend.ts`, `GpuTypes.ts` (`MAX_ATLAS_PAGES=8`, `FLOATS_PER_INSTANCE=24`), `Stage3DPipeline.ts` (slated for M4 `GpuEngine` migration).
+- `src/core/ecs/` — True Zero-GC Generational ECS + Multi-Room HD-2D WorldMap + Sandboxed Script VM:
+  - `EntityManager.ts`, `ComponentStore.ts` (17 sparse-set stores), `EcsCoreWorld.ts`, `EcsProjectSchema.ts`, `EcsWorld.ts`, `SandboxScriptVm.ts`, `EcsEventGraph.ts`, `EcsActionPhysicsSystems.ts`, `EcsTilemapTypes.ts` (3-layer tilemaps, `tileDefs`, `heroConfig`, `interactions`, `aiProfiles`), `EcsWorldMapController.ts` (100% data-driven top-down/portal/AI runtime), `EcsCartridgeRuntime.ts` (14 systems + 2D/HD-2D/1P 2.5D), `EcsStudioSession.ts` (26 transactional Undo/Redo commands including `stamp_room_ascii`, `ECS_COMMAND_CATALOG`).
+- `src/core/runtime/` — Orchestration, 6DoF camera, multi-scene flow & persistence:
+  - `EngineHost.ts` (**Sole facade** for `src/ui/`; never access `.runner`), `CameraRigDirector.ts`, `GameFlowController.ts`, `CartridgeRunner.ts`, `CartridgeRegistry.ts`, `CartridgePngCodec.ts`, `SceneGpuBridge.ts`, `DisplayThermalGovernor.ts`, `SaveService.ts`, `AppLogger.ts`, `LogPersistence.ts`, `EventBus.ts`, `SeededRng.ts`.
+- `src/core/sim/` & `src/core/editor/` — Shared 2D/2.5D primitives (`WorldKernel`, `DataCartridgeRuntime`, `TilemapGrid`, `SoaEntityPool`, `EventActionVm`, `OrthogonalArt`, `DualPerspectiveRuntime`, `JuiceSystem`, `CameraDirector`, `CutsceneSequencer`) & DOM-free `StudioSession`/`StudioCommands` (powers `PA-10`).
+- `src/core/rhythm/` & `src/core/audio/` — DOM-free 4K rhythm engine (`RhythmTypes`, `RhythmAutoCharter`, `RhythmBuiltinSongs`, `RhythmJudgeEngine`, `RhythmProgression`, `RhythmChartSession`) + Web Audio (`ToySynth`, `AudioBus`, `BgmSequencer`, `RhythmAudioEngine` w/ 32-band `AnalyserNode`).
+- `src/core/input/`, `src/core/hal/`, `src/core/ai/`, `src/core/math/`, `src/core/types/` — Input DSP, HAL, AI-Native Editor Stack (`AgentBridge`, `PixerMcpProtocol`, `EcsSpatialOracle` w/ `renderRoomAscii` + `analyzeWorldMapReachability` BFS solver, `EcsPlaytestVerifier` w/ `in_room` & `boss_hp_lte`), Oklab/Bayer `ColorMath`, `NoiseMath`, `SpringDynamics`, `SpatialHash`, `Visibility2D`, and shared types.
 
-### `src/assets/` — Procedural Sprites, Atlas & Audio Data (DOM-free, never import `ui/` or `game/`)
-- `TextureAtlas.ts` — `1024×1024` RGBA atlas with `>=128px` dynamic sprite region & hot-reload dirty tracking.
-- `AtlasSpritesData.ts`, `src/assets/sprites/*` (incl. `ParkourSprites.ts`, `AutoTileSprites.ts`, `PixelFontData.ts`), `AudioPatterns.ts`, `WorkshopRecipes.ts`.
+### `src/assets/` & `src/game/` — Procedural Pixel Atlas & Cartridges (100% DOM-free)
+- `src/assets/` — `TextureAtlas.ts` (8-page `1024×1024` Atlas Pool + PNG Slicer), `AtlasSpritesData.ts`, `src/assets/sprites/*` (`CastleSprites` 31 PBR 32px/48×64 sprites, `HdMaterialSprites`, `ParkourSprites`, `AutoTileSprites`, `PixelFontData`), `AudioPatterns.ts`, `WorkshopRecipes.ts`.
+- `src/game/` — `BuiltinCartridges.ts` (`PA-01`, `PA-02`, `PA-07`, `PA-08`, `PA-10`, `PA-11`, `PA-12`, `PA-13`, `PA-14`), `obsidianCitadel/ObsidianCitadelProject.ts` (pure data-driven `PA-14`), + lazy `LegacyCartridgePack.ts` (`PA-03..PA-06`, `PA-09`).
 
-### `src/game/` — Playable Cartridges (DOM-free, never import `ui/`)
-- `BuiltinCartridges.ts` — Registers all 6 cartridges (`PA-01`..`PA-06`) and D&D campaign generator via `registerBuiltinCartridges()`.
-- `cloudberry/cloudberry.cartridge.json` (`PA-01`) · `sugarStarlight/sugarStarlight.cartridge.json` (`PA-02`) · `sandbox/` (`PA-03`) · `emberkeep/` (`PA-04`) · `astralChronicles/` (`PA-05`) · `celestialParkour/` (`PA-06`, incl. `celestialParkour.cartridge.json`).
+### `src/ui/` & `src/styles/` — Single Workstation, Handheld Showcase & Standalone Game Host
+- Workstation & Rhythm: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (lazy `previewGpu`), `EcsMapDesignerPanel.ts` (multi-room 32px tile painter, custom `tileDefs` palette, prefab stamps & portals), `EventGraphEditorView.ts`, `SpriteAtelierView.ts`, `RhythmWorkspaceView.ts`, `RhythmOverlays.ts`, `RhythmArtRegistry.ts`, `RhythmStageRenderer.ts`, `RhythmChartStudioView.ts`, `RhythmStorage.ts`.
+- Arcade Shell: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`, `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `MomoMascot.ts`, `CardArt.ts`, `BrowserAssetLoader.ts`.
+- HUDs/Native/Styles: `ShmupOverlayView.ts`, `RpgOverlayView.ts`, `ChronicleOverlayView.ts`, `SystemSettingsDrawerView.ts`, `VirtualGamepadInput.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `PixelIcons.ts`, `dom.ts`; `src/styles/{studio7,rhythm,atelier,switch,lobby}.css`.
 
-### `src/ui/` & `src/styles/` — Handheld OS Shell & Editors
-- Shell & Routing: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`.
-- Lobby & Overlays: `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts`, `ProceduralSurfaceTextures.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `TransitionMascot.ts`, `MomoMascot.ts`, `CardArt.ts`, `BrowserAssetLoader.ts`.
-- Cartridge HUDs & Studios: `ShmupOverlayView.ts`, `RpgOverlayView.ts`, `ChronicleOverlayView.ts`, `ChronicleModalViews.ts`, `StudioWorkbenchView.ts`, `SpriteAtelierView.ts`, `WorkshopView.ts`, `WorkshopTemplates.ts`.
-- System, Input & Native: `SystemSettingsDrawerView.ts`, `SettingsDrawerTypes.ts`, `SystemLogPanelView.ts`, `VirtualGamepadInput.ts`, `TouchControlsBuilder.ts`, `TouchStateMerger.ts`, `GamepadHardwareBridge.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `PixelIcons.ts`, `dom.ts`.
-- Styles: `src/styles/atelier.css`, `src/styles/switch.css`, `src/styles/lobby.css`.
+### `scripts/` — Verification & MCP Server
+- `scripts/headless-sim.ts` (`npm run sim`), `scripts/pixer-mcp.ts` (`npm run mcp`), `scripts/sim/*` (`ArchitectureTests.ts`, `WorldMap.test.ts` w/ Engine Core Purity Gate & MCP Dogfooding, `Engine10Core.test.ts`, `RhythmCore.test.ts`, `Pixer7Tests.ts`, `StudioEditorTests.ts`, `CoreSubsystemTests.ts`, `CartridgeActionTests.ts`, `CartridgeRpgTests.ts`, `HalAndInputTests.ts`, `ExtensibilityAiTests.ts`, `OrthogonalEngineTests.ts`).
 
-### `scripts/` — Headless Simulation & Architecture Verification
-- `scripts/headless-sim.ts` — Entry point for `npm run sim`; `scripts/normalize-sprites.py`.
-- `scripts/sim/` — `SimTestHarness.ts`, `CoreSubsystemTests.ts`, `CartridgeActionTests.ts`, `CartridgeRpgTests.ts`, `HalAndInputTests.ts`, `ExtensibilityAiTests.ts`, `ArchitectureTests.ts`.
-
-## 3. Non-Negotiable Constraints (Ponytail + Zero-GC)
-- **Zero-GC hot paths**: Never allocate per-frame objects/arrays inside `src/core/gpu/`, `src/core/sim/`, `src/core/runtime/SceneGpuBridge.ts`, or `src/game/` `step()`/`snapshot()` loops; reuse pre-allocated pools / `Float32Array` buffers.
-- **Zero external bloat**: Keep vanilla TypeScript + WebGPU/WebGL2 + Web Audio (reuse `EngineHost`, `WorldKernel`, `JuiceSystem`, `ToySynth`, `dom.ts`). Do NOT install external rendering, physics, state, or audio libraries.
-- **Backend parity**: Any visual or shader change MUST keep WebGPU (`WGSL`) and WebGL2 (`GLSL ES 3.00`) visually identical (and degrade cleanly to `Canvas2DBackend`).
-- **Scope discipline**: Never implement backend AI servers, SaaS auth, or future milestone features unless explicitly requested.
-- **Core / Edition separation (One Core, Two Shells)**: Keep `src/core/`, `src/assets/`, and `src/game/` 100% UI-agnostic and free of `@capacitor/*` imports; expose edition capabilities via clean config/feature flags (`enableCRT`, `enableAdvancedBlocks`, `showPerfTelemetry`, `allowedBlockIds`) when needed so Arcade and future Edu shells share one core.
-- **Layer & security boundaries** (enforced by `ArchitectureTests.ts`):
-  - `src/core/` & `src/assets/` MUST NOT import `src/ui/`, `src/game/`, `@capacitor`, or `virtual:pwa-register`.
-  - `src/core/{ai,hal,input,math,runtime,sim,types}/`, `src/assets/`, and `src/game/` MUST remain 100% DOM-free and `@capacitor`-free.
-  - `src/ui/` MUST use `EngineHost` (never `.runner`), manage listeners with `AbortController`, and expose `public destroy()`.
-  - `src/` MUST NOT use `eval()` or `new Function()`.
-- **Tooling**: If `codegraph_explore` MCP is available locally, use it before broad `grep`; in cloud sandboxes, jump directly via the File Guide Map above.
-
-## 4. Verification & End-of-Task Micro-Iteration
-- After edits, run `npm run lint && npm run sim` (plus `npm run build` for shader/UI/build changes) before finishing.
-- **Micro-Iteration Gate (strictly <= 3 checks, skip if none apply)**:
-  1. Added/moved/deleted a module -> update 1 line in Section 2 File Map.
-  2. Hit a preventable bug or invariant -> add 1 assertion in `scripts/sim/ArchitectureTests.ts`.
-  3. Found a non-obvious, untestable pitfall -> add 1 line to `.agents/rules/` or `AGENTS.md` (if `AGENTS.md` nears 120 lines, merge/delete stale lines first).
-
+## 3. Non-Negotiable Engine-First Constraints (Enforced by `ArchitectureTests.ts` & `WorldMap.test.ts`)
+- **Native GPU Pixel PBR Mandate**: All flagship stages MUST render via Pixer's WebGPU/WebGL2 PBR-Lite + Multi-Page Pixel Atlas (`GpuEngine`) with nearest/pixelated scaling, Oklab palettes, and Bayer 4×4 dithering. **NEVER** drop photorealistic AI-generated `.jpg`/`.png` wallpapers into `src/assets/` or `public/assets/`, and never ship isolated Canvas 2D shadow renderers bypassing `GpuEngine`.
+- **Pure Data-Driven Core & AI-Native Authoring**: `src/core/ecs/` and `src/ui/` MUST contain ZERO game-specific hardcoding (enforced by Engine Core Purity Gate in `WorldMap.test.ts`). Every new engine capability MUST be authorable via transactional `EcsStudioCommand`s + exposed through `PixerMcpProtocol` / `AgentBridge`.
+- **Single Workstation & Lazy GPU Lifecycle**: Keep ONE authoring workstation (`EcsWorkbenchView` + `SpriteAtelierView` modal). Never reintroduce deleted legacy Studio 6.0 UI shells. Lazy-initialize GPU contexts on demand.
+- **Zero-GC & Zero External Bloat**: No per-frame allocations in hot loops (`gpu/`, `ecs/`, `sim/`, `SceneGpuBridge`, `game/`). Keep vanilla TypeScript + WebGPU/WebGL2 + Web Audio; do NOT install external rendering, physics, or audio frameworks.
+- **Layer & Security Boundaries**: `src/core/` & `src/assets/` MUST NOT import `src/ui/`, `src/game/`, `@capacitor`, or `virtual:pwa-register`. `src/core/{ai,ecs,editor,hal,input,math,rhythm,runtime,sim,types}/`, `src/assets/`, `src/game/` stay 100% DOM-free. `src/ui/` uses `EngineHost` (never `.runner`), `AbortController`, and `public destroy()`. Zero `eval()`/`new Function()`. Zero orphan assets in `public/assets/`.
+- **Verification Gate**: After edits, run `npm run lint && npm run sim` + unit tests (`npx --yes tsx --test src/core/ecs/EcsCore.test.ts scripts/sim/Engine10Core.test.ts scripts/sim/RhythmCore.test.ts scripts/sim/WorldMap.test.ts`) (+ `npm run build` for shader/UI/build changes). Keep `AGENTS.md <= 120` lines.

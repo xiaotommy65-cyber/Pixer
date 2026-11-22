@@ -8,6 +8,10 @@ export class SeededRng {
     this.state = seed >>> 0;
   }
 
+  public reset(seed = 0x51a7e11a): void {
+    this.state = seed >>> 0;
+  }
+
   public next(): number {
     let t = (this.state += 0x6d2b79f5);
     t = Math.imul(t ^ (t >>> 15), t | 1);

@@ -1,23 +1,167 @@
 import { SANDBOX_DEFAULT_SCRIPT } from '../assets/WorkshopRecipes.ts';
-import { registerDndCampaignGenerator } from '../core/ai/LocalAiProvider.ts';
+import { EcsCartridgeRuntime } from '../core/ecs/EcsCartridgeRuntime.ts';
 import {
   registerCartridgePlugin,
   type CartridgePluginDefinition,
 } from '../core/runtime/CartridgeRegistry.ts';
 import type { CartridgeJsonV1 } from '../core/sim/CartridgeSchema.ts';
 import { DataCartridgeRuntime } from '../core/sim/DataCartridgeRuntime.ts';
-import { AstralChroniclesGame } from './astralChronicles/AstralChroniclesGame.ts';
-import { CelestialParkourGame } from './celestialParkour/CelestialParkourGame.ts';
-import celestialParkourJson from './celestialParkour/celestialParkour.cartridge.json' with { type: 'json' };
+import astralDeckJson from './astralDeck/astralDeck.cartridge.json' with { type: 'json' };
+import { ASTRAL_RIFT_PROJECT } from './astralRift/AstralRiftProject.ts';
+import atelierBrawlerJson from './atelierBrawler/atelierBrawler.cartridge.json' with { type: 'json' };
 import cloudberryJson from './cloudberry/cloudberry.cartridge.json' with { type: 'json' };
-import { generateEmberkeepCampaign, verifyModuleSolvability } from './emberkeep/DungeonGenerator.ts';
-import { DEFAULT_DND_MODULE_JSON, EmberkeepDndGame } from './emberkeep/EmberkeepDndGame.ts';
-import { SandboxToyboxGame } from './sandbox/SandboxToyboxGame.ts';
+import { OBSIDIAN_CITADEL_PROJECT } from './obsidianCitadel/ObsidianCitadelProject.ts';
+import { PulseResonanceCartridge } from './pulseResonance/PulseResonanceCartridge.ts';
+import { RHYTHM_BASTION_PROJECT } from './rhythmBastion/RhythmBastionProject.ts';
+import { SKYWARD_FORGE_CARTRIDGE } from './skywardForge/SkywardForgeBuilder.ts';
 import sugarStarlightJson from './sugarStarlight/sugarStarlight.cartridge.json' with { type: 'json' };
 
-export const DND_DEFAULT_MODULE_JSON = DEFAULT_DND_MODULE_JSON;
+export const DND_DEFAULT_MODULE_JSON = JSON.stringify(
+  {
+    title: '餘燼深淵自訂模組',
+    seed: 2026,
+    floors: 8,
+    heroName: '星火見習生',
+  },
+  null,
+  2,
+);
 
-export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
+/**
+ * Lean Core Cartridges (Zero hand-written legacy gameplay TS):
+ * - PA-11: Pixer 7.0 True ECS + Sandboxed Script VM 640x360 HD-2D Flagship
+ * - PA-10: Studio 6.0 Command-Built Parkour Flagship
+ * - PA-01, PA-02, PA-07, PA-08: Pure JSON Data-Driven Cartridges
+ */
+export const CORE_DATA_PLUGINS: readonly CartridgePluginDefinition[] = [
+  {
+    meta: {
+      id: 'obsidian-citadel',
+      code: 'PA-14',
+      title: '黑曜魔王城：赤月王座',
+      subtitle: 'HD-2D 32×32 像素城塞 × 48×64 魔王王座 × 三廳探險',
+      genre: 'HD-2D 魔王城旗艦',
+      accentHex: '#ef4444',
+      badgeText: '32px 多層地圖 · 48×64 魔王戰 · 動態火炬 PBR',
+      controlsHint: '方向移動・A/J 揮劍斬擊・B/Space 翻滾衝刺・探索三廳討伐魔王馬拉科爾！',
+      goalHint: '奪取外庭鑰匙寶箱開啟城門 → 彩窗長廊啟動雙機關 → 踏入赤月王座殿擊敗魔王！',
+      defaultScript: SANDBOX_DEFAULT_SCRIPT,
+    },
+    factory: () => new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT),
+    resolveControlProfile: () => ({
+      a: '揮劍斬擊',
+      b: '翻滾衝刺',
+      x: '視角',
+      y: '互動',
+      l: '重試',
+      r: '地圖',
+      rightStick: '視口',
+      legend: '方向鍵移動 · A 揮劍斬擊 · B 翻滾衝刺 · L 重試 · 三廳捲動 HD-2D 魔王城',
+    }),
+  },
+  {
+    meta: {
+      id: 'pulse-resonance',
+      code: 'PA-13',
+      title: '星脈共鳴：4K 舞台',
+      subtitle: '4K 垂直下落 × 自動識譜 DSP × 動態鏡頭運鏡',
+      genre: '音樂節奏旗艦',
+      accentHex: '#38bdf8',
+      badgeText: '4K Tap/Hold/雙押 · 4 首原創曲 + MP3 自動識譜',
+      controlsHint: '←/↓/B/A 對應 4K 音軌・L 切歌・R 切難度・點擊頂部「音遊譜面」開啟完整曲庫與自動識譜工作站！',
+      goalHint: '抓準判定線擊打 4K 單點、長壓與白金雙押，衝擊 1,000,000 分與 φ 全完美評級！',
+      defaultScript: SANDBOX_DEFAULT_SCRIPT,
+      preserveActionHold: true,
+    },
+    factory: () => new PulseResonanceCartridge(),
+    resolveControlProfile: () => ({
+      a: '第4軌 (K)',
+      b: '第3軌 (J)',
+      x: '檢視',
+      y: '第3軌',
+      l: '切曲目',
+      r: '切難度',
+      rightStick: '軌道',
+      legend: '←/↓/B/A 對應 4K 音軌 · L 切換曲目 · R 切換難度 · 頂部「音遊譜面」開啟完整工作站',
+    }),
+  },
+  {
+    meta: {
+      id: 'rhythm-bastion',
+      code: 'PA-11',
+      title: '星軌節奏塔防',
+      subtitle: '640×360 HD-2D · 真 ECS 節奏×塔防混合',
+      genre: 'ECS 7.0 旗艦',
+      accentHex: '#f59e0b',
+      badgeText: '真 ECS + 沙盒腳本 VM · 640×360 HD-2D',
+      controlsHint: 'A 鍵打擊上軌星拍・B 鍵打擊下軌蒼拍・充能驅動自律星塔攔截虛空魔潮！',
+      goalHint: '抓準金線節拍按下 A / B 充能，驅動三座星軌砲塔攔截 12 隻虛空入侵者守衛聖核！',
+      defaultScript: SANDBOX_DEFAULT_SCRIPT,
+    },
+    factory: () => new EcsCartridgeRuntime(RHYTHM_BASTION_PROJECT),
+    resolveControlProfile: () => ({
+      a: '上軌星拍',
+      b: '下軌蒼拍',
+      x: '檢視',
+      y: '重試',
+      l: '重試',
+      r: '檢視',
+      rightStick: '視口',
+      legend: 'A 打擊上軌星拍 · B 打擊下軌蒼拍 · L 重試 · 640×360 HD-2D 真 ECS 運行時',
+    }),
+  },
+  {
+    meta: {
+      id: 'astral-rift',
+      code: 'PA-12',
+      title: '時空裂隙：星界迴廊',
+      subtitle: '640×360 HD-2D · 純 ECS 多維位面 × 飛鉤 × 事件圖旗艦',
+      genre: 'ECS 9.0 旗艦',
+      accentHex: '#38bdf8',
+      badgeText: 'Spatial3D 位面切換 + 飛鉤動作 + 事件圖',
+      controlsHint: '← → 移動・B 跳躍・A 鉤索擺盪・R 切換表裡世界・抵達右側星界傳送門！',
+      goalHint: '收集表世界與裡世界星晶，按 R 切換維度顯現幽影星橋，飛鉤跨越裂隙抵達星門！',
+      defaultScript: SANDBOX_DEFAULT_SCRIPT,
+    },
+    factory: () => new EcsCartridgeRuntime(ASTRAL_RIFT_PROJECT),
+    resolveControlProfile: () => ({
+      a: '鉤索/衝刺',
+      b: '跳躍',
+      x: '視角',
+      y: '互動',
+      l: '重試',
+      r: '表裡切界',
+      rightStick: '視口',
+      legend: '←→ 移動 · B 跳躍 · A 鉤索擺盪 · R 切換表裡世界 · L 重試',
+    }),
+  },
+  {
+    meta: {
+      id: 'skyward-forge',
+      code: 'PA-10',
+      title: '蒼穹鍛爐：正交試煉',
+      subtitle: '100% 編輯器指令建構 × PA-06 級視效',
+      genre: 'AI 工坊旗艦',
+      accentHex: '#ff9f43',
+      badgeText: '零手寫遊戲碼 × Verlet/IK × 飛鉤跑酷',
+      controlsHint: '方向移動・B 跳躍/蹬牆・A 衝刺/波浪跳・Y 飛鉤擺盪・R 高速牽引・X 遠眺・L 重試',
+      goalHint: '完全由編輯器指令生成的旗艦雙幕飛鉤試煉：駕馭波浪衝刺、碎裂瓦片與星塵流場衝向蒼穹之巔！',
+      defaultScript: SANDBOX_DEFAULT_SCRIPT,
+      preserveActionHold: true,
+    },
+    cartridgeJson: SKYWARD_FORGE_CARTRIDGE,
+    factory: () => new DataCartridgeRuntime(SKYWARD_FORGE_CARTRIDGE),
+    resolveControlProfile: () => ({
+      a: '波浪衝刺',
+      b: '跳躍/甩',
+      x: '遠眺',
+      y: '擺盪/左鍵',
+      l: '重試',
+      r: '牽引/右鍵',
+      rightStick: '360°瞄準',
+      legend: 'L 重試 · X 遠眺 · Y/左鍵 飛鉤擺盪 · R/右鍵 牽引 · B 跳躍/蹬牆 · A 波浪衝刺',
+    }),
+  },
   {
     meta: {
       id: 'cloudberry-hop',
@@ -89,173 +233,106 @@ export const BUILTIN_PLUGINS: readonly CartridgePluginDefinition[] = [
   },
   {
     meta: {
-      id: 'sandbox-toybox',
-      code: 'PA-03',
-      title: '積木秘密基地',
-      subtitle: '10 關解謎 × 創作沙盒',
-      genre: '解謎／創作',
-      accentHex: '#56d39c',
-      badgeText: '10 關機關 × 傳送門 × 腳本',
-      controlsHint: '← → 推箱・B 跳躍・A/R 火花・Y 遙控引爆・X 線索／配方・L 重置',
-      goalHint: '挑戰 10 關傳送門／移動浮橋／爆破謎題，或在積木工房自製關卡！',
+      id: 'astral-deck',
+      code: 'PA-07',
+      title: '星紋牌陣',
+      subtitle: '四區牌庫 × 狀態連攜 × 正交卡圖',
+      genre: '策略卡牌',
+      accentHex: '#a78bfa',
+      badgeText: '牌庫/手牌/棄牌/消耗 × 3 連戰選牌',
+      controlsHint: '← → 選牌・↑↓/L/R 切敵人目標・A/左鍵 打出・Y/右鍵 結束回合',
+      goalHint: '運用四區牌組循環、易傷/灼燒/力量疊層與戰利品選牌，擊敗三波星紋守衛與餘燼龍王！',
       defaultScript: SANDBOX_DEFAULT_SCRIPT,
     },
-    aiCapabilities: ['stage-gen', 'sprite-gen', 'tactical-advisor'],
-    factory: (ctx) => new SandboxToyboxGame(ctx.sandboxScript, ctx.params),
+    cartridgeJson: astralDeckJson as unknown as CartridgeJsonV1,
+    aiCapabilities: ['tactical-advisor'],
+    factory: () => new DataCartridgeRuntime(astralDeckJson),
     resolveControlProfile: () => ({
-      a: '火花',
-      b: '跳躍',
-      x: '線索/方',
-      y: '遙控爆',
-      l: '重置',
-      r: '火花',
-      rightStick: '視野',
-      legend: 'L 重置本關 · X 機關提示/配方 · Y 遙控引爆 · B 跳躍 · A/R 火花 · 右搖桿預覽',
+      a: '打出/選牌',
+      b: '確認',
+      x: '檢視',
+      y: '結束回合',
+      l: '切目標',
+      r: '切目標',
+      rightStick: '指標',
+      legend: '←→ 選牌 · L/R/↑↓ 切換敵人目標 · A/左鍵 打出卡牌 · Y/右鍵 結束回合',
     }),
   },
   {
     meta: {
-      id: 'emberkeep-dnd',
-      code: 'PA-04',
-      title: '龍與地城：餘燼',
-      subtitle: '8 層混合生成 CRPG',
-      genre: 'CRPG 迷宮',
-      accentHex: '#e0aaff',
-      badgeText: '8 層地下城 × d20 × AI',
-      controlsHint: '方向移動・A 執行・B 切指令・Y 喝藥水・X 開關 AI 託管・L/R 上下指令',
-      goalHint: '深入 B1～B8 餘燼深淵，裝備神兵戰勝商人與典獄長，斬殺餘燼龍王！',
-      defaultScript: DEFAULT_DND_MODULE_JSON,
-    },
-    aiCapabilities: ['stage-gen', 'dialog', 'tactical-advisor'],
-    factory: (ctx) => new EmberkeepDndGame(ctx.dndModuleJson),
-    resolveControlProfile: (snap) => {
-      const mode = snap?.rpgHud?.mode;
-      if (mode === 'combat' || mode === 'dialog') {
-        return {
-          a: '確認',
-          b: '確定',
-          x: 'AI託管',
-          y: '喝藥水',
-          l: '上選項',
-          r: '下選項',
-          rightStick: '滾動',
-          legend: '方向/L/R 選指令 · A/B 確認 · Y 喝藥水 · X 開關 AI 託管',
-        };
-      }
-      return {
-        a: '執行',
-        b: '換指令',
-        x: 'AI託管',
-        y: '喝藥水',
-        l: '上指令',
-        r: '下指令',
-        rightStick: '選指令',
-        legend: '方向移動 · A 執行指令 · B/L/R 切動作 · Y 喝藥水 · X 開關 AI 託管',
-      };
-    },
-  },
-  {
-    meta: {
-      id: 'astral-chronicles',
-      code: 'PA-05',
-      title: '星穹餘燼編年史',
-      subtitle: '五章節運鏡 × 動作 RPG 大作',
-      genre: '動作冒險 RPG',
-      accentHex: '#ffd447',
-      badgeText: '5 大章節 × 鏡頭運鏡 × 全 UI 選單',
-      controlsHint: '方向移動・A 斬擊互動・B 閃避・Y 遺物技・X 暫停選單・L 地圖・R 藥水',
-      goalHint: '橫跨五大星穹領域，升級鍛造神兵、解鎖星界封印與大地圖，討伐星穹蝕龍皇！',
+      id: 'atelier-brawler',
+      code: 'PA-08',
+      title: '工房武鬥會',
+      subtitle: '60Hz 幀資料 × 判定盒 × 連段取消',
+      genre: '2D 格鬥',
+      accentHex: '#ff9642',
+      badgeText: '前搖/判定/後搖 × Hitbox 檢視 × 取消連段',
+      controlsHint: '← → 移動/後拉防禦・↓ 蹲下・B 跳躍・A 輕・Y 重・X 昇龍必殺・R 超必殺・L 判定盒開關',
+      goalHint: '善用輕→重→必殺→超必殺取消連段與高低段防禦，可按 L 即時開啟紅/綠/藍判定盒！',
       defaultScript: SANDBOX_DEFAULT_SCRIPT,
     },
-    aiCapabilities: ['dialog', 'tactical-advisor'],
-    factory: () => new AstralChroniclesGame(),
-    resolveControlProfile: (snap) => {
-      const uiMode = snap?.chronicleHud?.uiMode;
-      if (uiMode === 'PAUSED') {
-        return {
-          a: '裝備/買',
-          b: '返回',
-          x: '繼續',
-          y: '喝藥水',
-          l: '上分頁',
-          r: '下分頁',
-          rightStick: '選單',
-          legend: 'L/R 切換 4 大分頁 · ↑↓ 選裝備 · A 鍛造/換裝 · B/X 返回冒險',
-        };
-      }
-      if (uiMode === 'WORLD_MAP' || uiMode === 'TITLE_MENU' || uiMode === 'CUTSCENE') {
-        return {
-          a: '確認',
-          b: '返回',
-          x: '切換頁',
-          y: '大地圖',
-          l: '上章',
-          r: '下章',
-          rightStick: '選擇',
-          legend: '方向/L/R 選擇 · A 確認/對話 · B 返回標題 · Y 大地圖',
-        };
-      }
-      return {
-        a: '斬/互動',
-        b: '閃避',
-        x: '選單',
-        y: '遺物技',
-        l: '大地圖',
-        r: '喝藥水',
-        rightStick: '環顧',
-        legend: 'L 大地圖 · X 暫停選單 · Y 遺物奧義 · R 喝藥水 · B 閃避 · A 斬擊 · 右搖桿環顧',
-      };
-    },
-  },
-  {
-    meta: {
-      id: 'celestial-parkour',
-      code: 'PA-06',
-      title: '緋空殘響：飛鉤跑酷',
-      subtitle: '360° 飛鉤擺盪 × 極限跑酷',
-      genre: '極限飛鉤跑酷',
-      accentHex: '#ff5d8f',
-      badgeText: '5 大試煉 × 雙模飛鉤 × 波動衝刺',
-      controlsHint: '方向移動／滑鼠右搖桿360°瞄準・左鍵/Y 擺盪・右鍵/R 牽引・B 跳躍/甩射・A 八向衝刺・L 重試',
-      goalHint: '駕馭 360° 雙模式飛鉤、波動衝刺與蹬牆連跳，穿越亂流風暴與雙骨 IK 巨爪追擊突破 5 大試煉！',
-      defaultScript: SANDBOX_DEFAULT_SCRIPT,
-      preserveActionHold: true,
-    },
-    cartridgeJson: celestialParkourJson as unknown as CartridgeJsonV1,
-    factory: () => new CelestialParkourGame(),
+    cartridgeJson: atelierBrawlerJson as unknown as CartridgeJsonV1,
+    factory: () => new DataCartridgeRuntime(atelierBrawlerJson),
     resolveControlProfile: () => ({
-      a: '8向衝刺',
-      b: '跳躍/甩',
-      x: '遠眺',
-      y: '擺盪/左鍵',
-      l: '重試',
-      r: '牽引/右鍵',
-      rightStick: '滑鼠/360°瞄',
-      legend: 'L 重試 · X 遠眺 · Y/左鍵 飛鉤擺盪 · R/右鍵 飛鉤牽引 · B 跳躍/甩射 · A 8向衝刺 · 滑鼠/右搖桿360°瞄準',
+      a: '輕攻/空',
+      b: '跳躍',
+      x: '必殺技',
+      y: '重攻/下',
+      l: '判定盒',
+      r: '超必殺',
+      rightStick: '移動',
+      legend: '←→ 移動/拉後防禦 · ↓ 蹲 · B 跳 · A 輕 · Y 重 · X 必殺 · R 超必殺 · L 切換判定盒',
     }),
   },
 ];
 
-let builtinsRegistered = false;
+let coreRegistered = false;
+let legacyPackLoaded = false;
+let legacyPackPromise: Promise<number> | null = null;
 
 /**
- * Registers all 6 first-party cartridges and the Emberkeep procedural campaign generator
- * into src/core/ registries, preserving strict one-way game -> core dependency inversion.
+ * Registers only the lean data-driven & ECS V2 core cartridges synchronously at boot
+ * (zero static dependency on the ~10k-line legacy hand-written cartridge pack).
  */
-export function registerBuiltinCartridges(): void {
-  if (builtinsRegistered) return;
-  builtinsRegistered = true;
-
-  for (const plugin of BUILTIN_PLUGINS) {
+export function registerCoreCartridges(): void {
+  if (coreRegistered) return;
+  coreRegistered = true;
+  for (const plugin of CORE_DATA_PLUGINS) {
     registerCartridgePlugin(plugin);
   }
-
-  registerDndCampaignGenerator((seed) => {
-    const mod = generateEmberkeepCampaign(seed);
-    const valid = verifyModuleSolvability(mod);
-    return {
-      payload: JSON.stringify(mod, null, 2),
-      summary: `8 層地下城生成器（可解性驗證：${valid ? '通過' : '待定'}）`,
-    };
-  });
 }
+
+export function isLegacyCartridgePackLoaded(): boolean {
+  return legacyPackLoaded;
+}
+
+/**
+ * Dynamically code-splits and mounts the 5 legacy hand-written cartridges (PA-03, PA-04, PA-05, PA-06, PA-09)
+ * strictly on demand when requested in the Arcade Showcase Shell or verification suite.
+ */
+export async function loadLegacyCartridgePack(): Promise<number> {
+  if (legacyPackLoaded) return 5;
+  if (!legacyPackPromise) {
+    legacyPackPromise = import('./LegacyCartridgePack.ts')
+      .then((mod) => {
+        const list = mod.registerLegacyCartridgePack();
+        legacyPackLoaded = true;
+        return list.length;
+      })
+      .catch((err) => {
+        legacyPackPromise = null;
+        throw err;
+      });
+  }
+  return legacyPackPromise;
+}
+
+/**
+ * Registers both core and legacy cartridges (async, used by full simulation verification suites).
+ */
+export async function registerAllBuiltinCartridges(): Promise<void> {
+  registerCoreCartridges();
+  await loadLegacyCartridgePack();
+}
+
+export const registerBuiltinCartridges = registerCoreCartridges;

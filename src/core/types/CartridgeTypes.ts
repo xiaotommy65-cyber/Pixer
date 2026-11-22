@@ -8,7 +8,15 @@ export type BuiltinCartridgeId =
   | 'sandbox-toybox'
   | 'emberkeep-dnd'
   | 'astral-chronicles'
-  | 'celestial-parkour';
+  | 'celestial-parkour'
+  | 'astral-deck'
+  | 'atelier-brawler'
+  | 'labyrinth-dualview'
+  | 'skyward-forge'
+  | 'rhythm-bastion'
+  | 'astral-rift'
+  | 'pulse-resonance'
+  | 'obsidian-citadel';
 
 export type CartridgeId = BuiltinCartridgeId | (string & {});
 
@@ -29,6 +37,8 @@ export interface CartridgeMeta {
   defaultScript: string;
   /** When true, holding touch Action (A) stays continuous instead of rapid-pulsing under touch autofire. */
   preserveActionHold?: boolean;
+  /** Marks a heavy legacy hand-written cartridge isolated into the lazy-loaded Classic Arcade Pack. */
+  isLegacyPack?: boolean;
 }
 
 export interface CartridgeInstance {
@@ -41,6 +51,7 @@ export interface CartridgeInstance {
   serializeSave?(): unknown;
   hydrateSave?(raw: unknown): boolean;
   retryStage?(): void;
+  dispose?(): void;
 }
 
 export interface DebuggableCartridge extends CartridgeInstance {

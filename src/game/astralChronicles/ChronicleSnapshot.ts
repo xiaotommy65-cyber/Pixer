@@ -208,88 +208,231 @@ export function buildHudSnapshot(s: ChronicleState): ChronicleHudSnapshot {
   };
 }
 
+interface ChronicleSnapshotBank {
+  entities: EntityDesc[];
+  entityPool: EntityDesc[];
+  lights: LightDesc[];
+  lightPool: LightDesc[];
+  debugRects: DebugRectDesc[];
+  debugPool: DebugRectDesc[];
+  bgClouds: RenderSceneSnapshot['bgClouds'];
+  hd2dDepth: NonNullable<RenderSceneSnapshot['hd2dDepth']>;
+  stage: NonNullable<RenderSceneSnapshot['stage']>;
+  snapshot: RenderSceneSnapshot;
+}
+
+const CHRONICLE_BANKS = new WeakMap<ChronicleState, ChronicleSnapshotBank>();
+
+function getChronicleBank(s: ChronicleState): ChronicleSnapshotBank {
+  let bank = CHRONICLE_BANKS.get(s);
+  if (bank) return bank;
+  const entities: EntityDesc[] = [];
+  const lights: LightDesc[] = [];
+  const debugRects: DebugRectDesc[] = [];
+  const bgClouds: RenderSceneSnapshot['bgClouds'] = [];
+  const hd2dDepth: NonNullable<RenderSceneSnapshot['hd2dDepth']> = {
+    enabled: true,
+    sortByDepthY: true,
+    perspectiveSkew: 0.055,
+    horizonHazeColor: '#1a1230',
+    horizonHazeAlpha: 0.16,
+    tiltShiftAlpha: 0.14,
+  };
+  const stage: NonNullable<RenderSceneSnapshot['stage']> = { index: 1, total: CHAPTER_SPECS.length, name: '' };
+  bank = {
+    entities,
+    entityPool: [],
+    lights,
+    lightPool: [],
+    debugRects,
+    debugPool: [],
+    bgClouds,
+    hd2dDepth,
+    stage,
+    snapshot: {
+      cartridgeId: 'astral-chronicles',
+      skyTop: '#1a1230',
+      skyBottom: '#2b1e48',
+      cozyFilter: true,
+      glowIntensity: 1,
+      timeSec: 0,
+      elapsedSec: 0,
+      status: 'playing',
+      score: 0,
+      comboCount: 0,
+      starsCollected: 0,
+      starsTotal: TOTAL_CHESTS,
+      hasKey: false,
+      hearts: 5,
+      maxHearts: 5,
+      bossHp: 0,
+      bossMaxHp: 0,
+      cameraX: 0,
+      cameraY: 0,
+      cameraZoom: 1,
+      cameraLetterbox: 0,
+      ambientDarkness: 0,
+      ambientColor: '#120e24',
+      screenFlashAlpha: 0,
+      screenFlashColor: '#fffaf0',
+      hd2dDepth,
+      bgStars: s.bgStars,
+      bgClouds,
+      tiles: [],
+      entities,
+      particles: s.juice.particles,
+      lights,
+      debugRects: undefined,
+      statusBanner: '',
+      stage,
+      bgmTheme: 'meadow',
+      chronicleHud: undefined,
+    },
+  };
+  CHRONICLE_BANKS.set(s, bank);
+  return bank;
+}
+
+function acquireChrEntity(pool: EntityDesc[], idx: number): EntityDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { id: '', sprite: 'hero_a', x: 0, y: 0, w: 16, h: 16 };
+    pool[idx] = slot;
+  }
+  slot.tint = undefined;
+  slot.flipX = false;
+  slot.rot = 0;
+  slot.alpha = 1;
+  slot.flash = 0;
+  slot.scaleX = 1;
+  slot.scaleY = 1;
+  slot.additive = false;
+  slot.emissive = 0;
+  slot.elevationZ = 0;
+  slot.castShadow = false;
+  slot.shadowRadius = undefined;
+  return slot;
+}
+
+function acquireChrLight(pool: LightDesc[], idx: number): LightDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { x: 0, y: 0, radius: 32, color: '#ffd447', intensity: 0.4 };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireChrDebug(pool: DebugRectDesc[], idx: number): DebugRectDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { x: 0, y: 0, w: 16, h: 16, color: '#56d39c' };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
 export function buildChronicleSceneSnapshot(
   s: ChronicleState,
   params: RuntimeParams,
   status: 'playing' | 'won' | 'lost',
 ): RenderSceneSnapshot {
+  const bank = getChronicleBank(s);
   const ch = CHAPTER_SPECS[s.chapterIdx];
   const t = s.juice.visualTime;
   const glow = params.glowIntensity;
   const camFields = s.camera.toSnapshotFields(s.juice.shakeX, s.juice.shakeY);
   const tiles = getStaticChapterTiles(s.chapterIdx, s.gateOpen);
 
-  const entities: EntityDesc[] = [];
-  const lights: LightDesc[] = [];
+  const entities = bank.entities;
+  const lights = bank.lights;
+  let entityCount = 0;
+  let lightCount = 0;
 
-  for (const l of ch.lights) {
-    if (glow > 0.05) {
-      lights.push({ x: l.x, y: l.y, radius: l.radius, color: l.color, intensity: l.intensity * glow });
+  if (glow > 0.05) {
+    for (let i = 0; i < ch.lights.length; i++) {
+      const l = ch.lights[i];
+      const ld = acquireChrLight(bank.lightPool, lightCount);
+      ld.x = l.x;
+      ld.y = l.y;
+      ld.radius = l.radius;
+      ld.color = l.color;
+      ld.intensity = l.intensity * glow;
+      lights[lightCount++] = ld;
     }
   }
 
-  for (const sw of ch.switches) {
+  for (let i = 0; i < ch.switches.length; i++) {
+    const sw = ch.switches[i];
     const on = s.activatedSwitches.has(sw.id);
-    entities.push({
-      id: sw.id,
-      sprite: on ? 'switch_on' : 'switch_off',
-      x: sw.x,
-      y: sw.y,
-      w: 16,
-      h: 16,
-      tint: on ? '#56d39c' : '#ffd447',
-      castShadow: false,
-      sortY: sw.y + 4,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = sw.id;
+    ed.sprite = on ? 'switch_on' : 'switch_off';
+    ed.x = sw.x;
+    ed.y = sw.y;
+    ed.w = 16;
+    ed.h = 16;
+    ed.tint = on ? '#56d39c' : '#ffd447';
+    ed.sortY = sw.y + 4;
+    entities[entityCount++] = ed;
   }
 
-  for (const chest of ch.chests) {
+  for (let i = 0; i < ch.chests.length; i++) {
+    const chest = ch.chests[i];
     const opened = s.openedChestIds.has(chest.id);
-    entities.push({
-      id: chest.id,
-      sprite: opened ? 'chest_open' : 'chest_closed',
-      x: chest.x,
-      y: chest.y,
-      w: 16,
-      h: 16,
-      castShadow: true,
-      shadowRadius: 7,
-      sortY: chest.y + 15,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = chest.id;
+    ed.sprite = opened ? 'chest_open' : 'chest_closed';
+    ed.x = chest.x;
+    ed.y = chest.y;
+    ed.w = 16;
+    ed.h = 16;
+    ed.castShadow = true;
+    ed.shadowRadius = 7;
+    ed.sortY = chest.y + 15;
+    entities[entityCount++] = ed;
     if (!opened && glow > 0.05) {
-      lights.push({ x: chest.x + 8, y: chest.y + 8, radius: 22, color: '#ffd447', intensity: 0.4 * glow });
+      const ld = acquireChrLight(bank.lightPool, lightCount);
+      ld.x = chest.x + 8;
+      ld.y = chest.y + 8;
+      ld.radius = 22;
+      ld.color = '#ffd447';
+      ld.intensity = 0.4 * glow;
+      lights[lightCount++] = ld;
     }
   }
 
-  for (const npc of ch.npcs) {
+  for (let i = 0; i < ch.npcs.length; i++) {
+    const npc = ch.npcs[i];
     const elev =
       npc.kind === 'shrine'
         ? 4.2 + Math.sin(t * 2.8 + npc.x) * 1.8
         : 1.0 + Math.max(0, Math.sin(t * 2.8 + npc.x) * 1.1);
-    entities.push({
-      id: npc.id,
-      sprite: npc.sprite,
-      x: npc.x,
-      y: npc.y,
-      w: 16,
-      h: 16,
-      elevationZ: elev,
-      castShadow: true,
-      shadowRadius: 7.2,
-      sortY: npc.y + 16,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = npc.id;
+    ed.sprite = npc.sprite;
+    ed.x = npc.x;
+    ed.y = npc.y;
+    ed.w = 16;
+    ed.h = 16;
+    ed.elevationZ = elev;
+    ed.castShadow = true;
+    ed.shadowRadius = 7.2;
+    ed.sortY = npc.y + 16;
+    entities[entityCount++] = ed;
     if (glow > 0.05) {
-      lights.push({
-        x: npc.x + 8,
-        y: npc.y + 8,
-        radius: 34,
-        color: npc.kind === 'shrine' ? '#5ec2f7' : '#ffd447',
-        intensity: 0.42 * glow,
-      });
+      const ld = acquireChrLight(bank.lightPool, lightCount);
+      ld.x = npc.x + 8;
+      ld.y = npc.y + 8;
+      ld.radius = 34;
+      ld.color = npc.kind === 'shrine' ? '#5ec2f7' : '#ffd447';
+      ld.intensity = 0.42 * glow;
+      lights[lightCount++] = ld;
     }
   }
 
-  for (const e of s.enemies) {
+  for (let i = 0; i < s.enemies.length; i++) {
+    const e = s.enemies[i];
     const sp: SpriteId =
       e.kind === 'slime'
         ? Math.floor(t * 5) % 2 === 0
@@ -308,20 +451,20 @@ export function buildChronicleSceneSnapshot(
     const elev = isHovering
       ? 4.6 + Math.sin(t * 4.2 + e.x) * 1.6
       : Math.abs(Math.sin(t * 5 + e.x * 0.2)) * 1.4;
-    entities.push({
-      id: e.id,
-      sprite: sp,
-      x: e.x,
-      y: e.y,
-      w: 16,
-      h: 16,
-      flipX: e.facingX < 0,
-      flash: Math.min(1, e.flash * 4),
-      elevationZ: elev,
-      castShadow: true,
-      shadowRadius: isHovering ? 6.8 : 6.4,
-      sortY: e.y + 16,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = e.id;
+    ed.sprite = sp;
+    ed.x = e.x;
+    ed.y = e.y;
+    ed.w = 16;
+    ed.h = 16;
+    ed.flipX = e.facingX < 0;
+    ed.flash = Math.min(1, e.flash * 4);
+    ed.elevationZ = elev;
+    ed.castShadow = true;
+    ed.shadowRadius = isHovering ? 6.8 : 6.4;
+    ed.sortY = e.y + 16;
+    entities[entityCount++] = ed;
   }
 
   if (s.boss) {
@@ -331,28 +474,28 @@ export function buildChronicleSceneSnapshot(
       b.sprite === 'boss_ufo' || b.sprite === 'dragon' || b.sprite === 'frost_mage'
         ? 5.2 + Math.sin(t * 3.0) * 2.0
         : 1.5 + Math.abs(Math.sin(t * 3.6)) * 2.4;
-    entities.push({
-      id: 'chapter-boss',
-      sprite: b.sprite,
-      x: b.x,
-      y: b.y,
-      w: bw,
-      h: 22,
-      tint: b.phase === 2 ? '#ff708d' : b.tint,
-      flash: Math.min(1, b.flash * 5),
-      elevationZ: bossHover,
-      castShadow: true,
-      shadowRadius: bw * 0.44,
-      sortY: b.y + 22,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = 'chapter-boss';
+    ed.sprite = b.sprite;
+    ed.x = b.x;
+    ed.y = b.y;
+    ed.w = bw;
+    ed.h = 22;
+    ed.tint = b.phase === 2 ? '#ff708d' : b.tint;
+    ed.flash = Math.min(1, b.flash * 5);
+    ed.elevationZ = bossHover;
+    ed.castShadow = true;
+    ed.shadowRadius = bw * 0.44;
+    ed.sortY = b.y + 22;
+    entities[entityCount++] = ed;
     if (glow > 0.05) {
-      lights.push({
-        x: b.x + bw * 0.5,
-        y: b.y + 11,
-        radius: b.phase === 2 ? 64 : 46,
-        color: b.phase === 2 ? '#ff708d' : ch.accentHex,
-        intensity: 0.65 * glow,
-      });
+      const ld = acquireChrLight(bank.lightPool, lightCount);
+      ld.x = b.x + bw * 0.5;
+      ld.y = b.y + 11;
+      ld.radius = b.phase === 2 ? 64 : 46;
+      ld.color = b.phase === 2 ? '#ff708d' : ch.accentHex;
+      ld.intensity = 0.65 * glow;
+      lights[lightCount++] = ld;
     }
   }
 
@@ -360,126 +503,146 @@ export function buildChronicleSceneSnapshot(
   const blink = s.invulnTimer > 0 && Math.floor(s.invulnTimer * 18) % 2 === 1;
   const heroElev = s.dashTimer > 0 ? 4.8 : moving ? Math.abs(Math.sin(t * 14)) * 1.8 : 0.4;
   if (!blink || s.heroFlash > 0) {
-    entities.push({
-      id: 'hero',
-      sprite: moving && Math.floor(t * 10) % 2 === 1 ? 'hero_b' : 'hero_a',
-      x: s.hx,
-      y: s.hy,
-      w: 16,
-      h: 16,
-      flipX: s.facingX < 0,
-      scaleX: s.squash.scaleX,
-      scaleY: s.squash.scaleY,
-      flash: Math.min(1, s.heroFlash * 3),
-      alpha: s.dashTimer > 0 ? 0.72 : 1,
-      elevationZ: heroElev,
-      castShadow: true,
-      shadowRadius: 6.5,
-      sortY: s.hy + 16,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = 'hero';
+    ed.sprite = moving && Math.floor(t * 10) % 2 === 1 ? 'hero_b' : 'hero_a';
+    ed.x = s.hx;
+    ed.y = s.hy;
+    ed.w = 16;
+    ed.h = 16;
+    ed.flipX = s.facingX < 0;
+    ed.scaleX = s.squash.scaleX;
+    ed.scaleY = s.squash.scaleY;
+    ed.flash = Math.min(1, s.heroFlash * 3);
+    ed.alpha = s.dashTimer > 0 ? 0.72 : 1;
+    ed.elevationZ = heroElev;
+    ed.castShadow = true;
+    ed.shadowRadius = 6.5;
+    ed.sortY = s.hy + 16;
+    entities[entityCount++] = ed;
   }
   if (glow > 0.05) {
     const heroLightAlpha = ch.ambientDarkness > 0.25 ? 0.36 : 0.16;
-    lights.push({ x: s.hx + 8, y: s.hy + 8, radius: 44, color: '#fff3cc', intensity: heroLightAlpha * glow });
+    const ld = acquireChrLight(bank.lightPool, lightCount);
+    ld.x = s.hx + 8;
+    ld.y = s.hy + 8;
+    ld.radius = 44;
+    ld.color = '#fff3cc';
+    ld.intensity = heroLightAlpha * glow;
+    lights[lightCount++] = ld;
   }
 
   for (let i = 0; i < s.slashes.length; i++) {
     const sv = s.slashes[i];
     const alpha = Math.max(0, 1 - sv.life / sv.maxLife);
-    entities.push({
-      id: `slash-${i}`,
-      sprite: 'sword_slash',
-      x: sv.x - sv.size * 0.5,
-      y: sv.y - sv.size * 0.5,
-      w: sv.size,
-      h: sv.size,
-      rot: sv.angle + Math.PI * 0.25,
-      tint: sv.color,
-      alpha,
-      additive: true,
-      elevationZ: 4,
-      castShadow: false,
-      sortY: sv.y + 18,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = 'slash';
+    ed.sprite = 'sword_slash';
+    ed.x = sv.x - sv.size * 0.5;
+    ed.y = sv.y - sv.size * 0.5;
+    ed.w = sv.size;
+    ed.h = sv.size;
+    ed.rot = sv.angle + Math.PI * 0.25;
+    ed.tint = sv.color;
+    ed.alpha = alpha;
+    ed.additive = true;
+    ed.elevationZ = 4;
+    ed.sortY = sv.y + 18;
+    entities[entityCount++] = ed;
   }
 
   for (let i = 0; i < s.projectiles.length; i++) {
     const p = s.projectiles[i];
-    entities.push({
-      id: `proj-${i}`,
-      sprite: p.sprite,
-      x: p.x - p.size * 0.5,
-      y: p.y - p.size * 0.5,
-      w: p.size,
-      h: p.size,
-      tint: p.color,
-      additive: true,
-      emissive: 0.9,
-      elevationZ: 6,
-      castShadow: true,
-      shadowRadius: 2.8,
-      sortY: p.y + 16,
-    });
+    const ed = acquireChrEntity(bank.entityPool, entityCount);
+    ed.id = 'proj';
+    ed.sprite = p.sprite;
+    ed.x = p.x - p.size * 0.5;
+    ed.y = p.y - p.size * 0.5;
+    ed.w = p.size;
+    ed.h = p.size;
+    ed.tint = p.color;
+    ed.additive = true;
+    ed.emissive = 0.9;
+    ed.elevationZ = 6;
+    ed.castShadow = true;
+    ed.shadowRadius = 2.8;
+    ed.sortY = p.y + 16;
+    entities[entityCount++] = ed;
   }
+
+  entities.length = entityCount;
+  lights.length = lightCount;
 
   let debugRects: DebugRectDesc[] | undefined;
   if (s.debugHitboxes) {
-    debugRects = [{ x: s.hx, y: s.hy, w: 14, h: 14, color: '#56d39c' }];
-    for (const e of s.enemies) debugRects.push({ x: e.x, y: e.y, w: 16, h: 16, color: '#ff708d' });
-    if (s.boss) debugRects.push({ x: s.boss.x, y: s.boss.y, w: 28, h: 20, color: '#ffd447' });
+    let dbgCount = 0;
+    const hr = acquireChrDebug(bank.debugPool, dbgCount);
+    hr.x = s.hx;
+    hr.y = s.hy;
+    hr.w = 14;
+    hr.h = 14;
+    hr.color = '#56d39c';
+    bank.debugRects[dbgCount++] = hr;
+    for (let i = 0; i < s.enemies.length; i++) {
+      const e = s.enemies[i];
+      const er = acquireChrDebug(bank.debugPool, dbgCount);
+      er.x = e.x;
+      er.y = e.y;
+      er.w = 16;
+      er.h = 16;
+      er.color = '#ff708d';
+      bank.debugRects[dbgCount++] = er;
+    }
+    if (s.boss) {
+      const br = acquireChrDebug(bank.debugPool, dbgCount);
+      br.x = s.boss.x;
+      br.y = s.boss.y;
+      br.w = 28;
+      br.h = 20;
+      br.color = '#ffd447';
+      bank.debugRects[dbgCount++] = br;
+    }
+    bank.debugRects.length = dbgCount;
+    debugRects = bank.debugRects;
   }
 
-  return {
-    cartridgeId: 'astral-chronicles',
-    skyTop: ch.skyTop,
-    skyBottom: ch.skyBottom,
-    cozyFilter: params.cozyFilter > 0.5,
-    glowIntensity: params.glowIntensity,
-    timeSec: t,
-    elapsedSec: s.elapsedSec,
-    status,
-    score: s.score,
-    comboCount: s.juice.comboCount,
-    starsCollected: s.openedChestIds.size,
-    starsTotal: CHAPTER_SPECS.reduce((acc, c) => acc + c.chests.length, 0),
-    hasKey: s.gateOpen,
-    hearts: Math.max(0, Math.ceil((s.heroHp / s.heroMaxHp) * 5)),
-    maxHearts: 5,
-    bossHp: s.boss?.hp ?? 0,
-    bossMaxHp: s.boss?.maxHp ?? 0,
-    cameraX: camFields.cameraX,
-    cameraY: camFields.cameraY,
-    cameraZoom: camFields.cameraZoom,
-    cameraLetterbox: camFields.cameraLetterbox,
-    ambientDarkness: ch.ambientDarkness,
-    ambientColor: ch.ambientColor,
-    screenFlashAlpha: s.juice.flashAlpha,
-    screenFlashColor: s.juice.flashColor,
-    hd2dDepth: {
-      enabled: true,
-      sortByDepthY: true,
-      perspectiveSkew: 0.055,
-      horizonHazeColor: ch.skyTop,
-      horizonHazeAlpha: 0.16,
-      tiltShiftAlpha: 0.14,
-    },
-    bgStars: s.bgStars,
-    bgClouds: [],
-    tiles,
-    entities,
-    particles: s.juice.particles,
-    lights,
-    debugRects,
-    statusBanner:
-      s.noticeTimer > 0
-        ? s.noticeText
-        : `${ch.title} · Lv.${s.heroLevel} · ${getGearById(s.equippedWeaponId).name} · 金幣 ${s.heroGold}G`,
-    stage: {
-      index: s.chapterIdx + 1,
-      total: CHAPTER_SPECS.length,
-      name: ch.title,
-    },
-    bgmTheme: s.boss ? 'boss' : ch.bgmTheme,
-    chronicleHud: buildHudSnapshot(s),
-  };
+  const snap = bank.snapshot;
+  snap.skyTop = ch.skyTop;
+  snap.skyBottom = ch.skyBottom;
+  snap.cozyFilter = params.cozyFilter > 0.5;
+  snap.glowIntensity = params.glowIntensity;
+  snap.timeSec = t;
+  snap.elapsedSec = s.elapsedSec;
+  snap.status = status;
+  snap.score = s.score;
+  snap.comboCount = s.juice.comboCount;
+  snap.starsCollected = s.openedChestIds.size;
+  snap.starsTotal = TOTAL_CHESTS;
+  snap.hasKey = s.gateOpen;
+  snap.hearts = Math.max(0, Math.ceil((s.heroHp / s.heroMaxHp) * 5));
+  snap.bossHp = s.boss?.hp ?? 0;
+  snap.bossMaxHp = s.boss?.maxHp ?? 0;
+  snap.cameraX = camFields.cameraX;
+  snap.cameraY = camFields.cameraY;
+  snap.cameraZoom = camFields.cameraZoom;
+  snap.cameraLetterbox = camFields.cameraLetterbox;
+  snap.ambientDarkness = ch.ambientDarkness;
+  snap.ambientColor = ch.ambientColor;
+  snap.screenFlashAlpha = s.juice.flashAlpha;
+  snap.screenFlashColor = s.juice.flashColor;
+  bank.hd2dDepth.horizonHazeColor = ch.skyTop;
+  snap.bgStars = s.bgStars;
+  snap.tiles = tiles;
+  snap.particles = s.juice.particles;
+  snap.debugRects = debugRects;
+  snap.statusBanner =
+    s.noticeTimer > 0
+      ? s.noticeText
+      : `${ch.title} · Lv.${s.heroLevel} · ${getGearById(s.equippedWeaponId).name} · 金幣 ${s.heroGold}G`;
+  bank.stage.index = s.chapterIdx + 1;
+  bank.stage.total = CHAPTER_SPECS.length;
+  bank.stage.name = ch.title;
+  snap.bgmTheme = s.boss ? 'boss' : ch.bgmTheme;
+  snap.chronicleHud = buildHudSnapshot(s);
+  return snap;
 }

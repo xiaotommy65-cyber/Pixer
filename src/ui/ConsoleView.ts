@@ -640,7 +640,7 @@ export class ConsoleView {
   }
 
   public destroy(): void {
-    this.hud.resetOverlays();
+    this.hud.destroy();
     this.trackResizeObserver?.disconnect();
     for (const off of this.busUnsubs) off();
     this.busUnsubs.length = 0;
@@ -713,9 +713,14 @@ export class ConsoleView {
   }
 
   public refreshCardArt(): void {
+    this.router.refreshCards();
     this.router.refreshCardArt();
     this.deskWorld.rebuildTray();
     this.diorama.rebuildVisitors();
+  }
+
+  public wakeFromStandby(): void {
+    this.router.wakeFromStandby();
   }
 
   public insertCartridge(id: CartridgeId, instant = false, skipSplash = false): void {

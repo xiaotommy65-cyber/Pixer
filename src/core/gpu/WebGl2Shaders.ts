@@ -85,7 +85,8 @@ layout(location = 0) in vec4 aRectPosSize;
 layout(location = 1) in vec4 aUvBounds;
 layout(location = 2) in vec4 aTint;
 layout(location = 3) in vec4 aExtra;
-layout(location = 4) in vec4 aDeform; // x: pivotX, y: pivotY, z: skewX, w: paletteRow
+layout(location = 4) in vec4 aDeform;   // x: pivotX, y: pivotY, z: skewX, w: paletteRow
+layout(location = 5) in vec4 aMaterial; // x: atlasPage, y: roughness, z: metallic, w: emissive
 
 uniform vec2 uViewSize;
 
@@ -98,6 +99,8 @@ out float vParam;
 out vec4 vUvBounds;
 out float vPaletteRow;
 out vec2 vScreenPos;
+out vec4 vMaterial;
+out vec2 vQuadCenter;
 
 void main() {
   vec2 uvUnit[6] = vec2[6](
@@ -129,11 +132,14 @@ void main() {
   vUvBounds = aUvBounds;
   vPaletteRow = aDeform.w;
   vScreenPos = world;
+  vMaterial = aMaterial;
+  vQuadCenter = aRectPosSize.xy;
 }`;
 
 export const SPRITE_FS = `#version 300 es
 precision highp float;
 precision highp int;
+precision highp sampler2DArray;
 in vec2 vTexUv;
 in vec2 vLocalUv;
 in vec4 vTint;
@@ -143,14 +149,19 @@ in float vParam;
 in vec4 vUvBounds;
 in float vPaletteRow;
 in vec2 vScreenPos;
+in vec4 vMaterial;
+in vec2 vQuadCenter;
 
-uniform sampler2D uAtlas;
-uniform sampler2D uIndexAtlas;
+uniform sampler2DArray uAtlas;
+uniform sampler2DArray uIndexAtlas;
 uniform sampler2D uPaletteLut;
+uniform sampler2D uOcclusionTex;
 uniform float uPaletteRows;
 uniform int uLightCount;
 uniform vec4 uLightPosRad[24];
 uniform vec4 uLightColInt[24];
+uniform vec4 uOccParams; // x: originScreenX, y: originScreenY, z: tileSizePx, w: occSoftness
+uniform vec4 uOccDims;   // x: cols, y: rows, z: occStrength, w: 0
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragEmissive;
@@ -163,6 +174,63 @@ float hash21(vec2 p) {
   h = (h ^ (h >> 13u)) * 3266489917u;
   h = h ^ (h >> 16u);
   return float(h & 0x00ffffffu) * (1.0 / 16777216.0);
+}
+
+float sampleOccCell(vec2 cell) {
+  if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= uOccDims.x || cell.y >= uOccDims.y) {
+    return 0.0;
+  }
+  vec2 uv = (cell + vec2(0.5)) / 64.0;
+  return textureLod(uOcclusionTex, uv, 0.0).r;
+}
+
+float sampleShadowOcclusion(vec2 fragPos, vec2 lightPos) {
+  float strength = uOccDims.z;
+  float tilePx = uOccParams.z;
+  if (strength <= 0.01 || tilePx <= 1.0) return 1.0;
+  vec2 origin = uOccParams.xy;
+  vec2 fragCell = (fragPos - origin) / tilePx;
+  vec2 lightCell = (lightPos - origin) / tilePx;
+  vec2 delta = lightCell - fragCell;
+  if (length(delta) < 0.25) return 1.0;
+  vec2 fragTile = floor(fragCell);
+  vec2 lightTile = floor(lightCell);
+  float hits = 0.0;
+  for (int s = 1; s <= 14; s++) {
+    float t = float(s) / 15.0;
+    vec2 pTile = floor(fragCell + delta * t);
+    bool isSelf = abs(pTile.x - fragTile.x) < 0.5 && abs(pTile.y - fragTile.y) < 0.5;
+    bool isLightCell = abs(pTile.x - lightTile.x) < 0.5 && abs(pTile.y - lightTile.y) < 0.5;
+    if (!isSelf && !isLightCell) {
+      if (sampleOccCell(pTile) > 0.5) {
+        hits += 1.0;
+      }
+    }
+  }
+  float softSteps = max(0.35, uOccParams.w * 2.4);
+  float shadowAmt = clamp(hits / softSteps, 0.0, 1.0) * strength;
+  return 1.0 - shadowAmt;
+}
+
+float sampleWallBaseAo(vec2 fragPos) {
+  float strength = uOccDims.z;
+  float tilePx = uOccParams.z;
+  if (strength <= 0.01 || tilePx <= 1.0) return 1.0;
+  vec2 cellPos = (fragPos - uOccParams.xy) / tilePx;
+  vec2 tile = floor(cellPos);
+  if (sampleOccCell(tile) > 0.5) return 1.0;
+  vec2 frac = fract(cellPos);
+  float ao = 1.0;
+  if (sampleOccCell(tile + vec2(0.0, -1.0)) > 0.5) {
+    ao *= mix(0.68, 1.0, smoothstep(0.0, 0.44, frac.y));
+  }
+  if (sampleOccCell(tile + vec2(-1.0, 0.0)) > 0.5) {
+    ao *= mix(0.84, 1.0, smoothstep(0.0, 0.22, frac.x));
+  }
+  if (sampleOccCell(tile + vec2(1.0, 0.0)) > 0.5) {
+    ao *= mix(0.84, 1.0, smoothstep(0.0, 0.22, 1.0 - frac.x));
+  }
+  return mix(1.0, ao, clamp(strength, 0.0, 1.0));
 }
 
 void main() {
@@ -249,6 +317,24 @@ void main() {
 
     vec3 baseCol = vTint.rgb * (1.0 + cellTint + grain) * mortarMask * ndl * aoBottom;
     baseCol += vec3(topRim + runeAccent * 0.6, topRim + runeAccent * 0.45, topRim * 1.1 + runeAccent);
+    int wCnt = min(24, max(0, uLightCount));
+    vec3 wallLit = vec3(0.0);
+    for (int wli = 0; wli < 24; wli++) {
+      if (wli >= wCnt) break;
+      vec4 lp = uLightPosRad[wli];
+      vec4 lc = uLightColInt[wli];
+      vec3 toL = vec3(lp.xy - vScreenPos, 24.0);
+      float dist = length(toL.xy);
+      if (dist < lp.z) {
+        float vis = sampleShadowOcclusion(vScreenPos, lp.xy);
+        if (vis > 0.01) {
+          float att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w));
+          float diff = max(0.15, dot(n, normalize(toL)));
+          wallLit += lc.rgb * (lc.a * att * diff * vis * 0.85);
+        }
+      }
+    }
+    baseCol *= (1.0 + wallLit);
     float sideSoft = smoothstep(0.0, 0.04, vLocalUv.x) * smoothstep(1.0, 0.96, vLocalUv.x);
     float finalAlpha = vTint.a * mix(0.75, 1.0, sideSoft);
     fragColor = vec4(clamp(baseCol, vec3(0.0), vec3(1.0)), finalAlpha);
@@ -310,15 +396,17 @@ void main() {
     }
     float f = clamp(1.0 - d, 0.0, 1.0);
     float power = vParam > 0.1 ? vParam : 2.0;
-    float glow = f > 0.001 ? pow(f, power) : 0.0;
+    float occVis = sampleShadowOcclusion(vScreenPos, vQuadCenter);
+    float glow = (f > 0.001 ? pow(f, power) : 0.0) * occVis;
     float a = vTint.a * glow;
     fragColor = vec4(vTint.rgb, a);
     fragEmissive = vec4(vTint.rgb * 0.68, a);
     return;
   }
 
-  // Mode 0: Crisp Palette-Indexed LUT sprite OR 32-bit RGBA passthrough (idx == 255)
-  float idxVal = floor(texture(uIndexAtlas, vTexUv).r * 255.0 + 0.5);
+  // Mode 0: Multi-Page Texture2DArray Sprite + Per-Instance PBR-Lite Material Shading
+  float atlasLayer = max(0.0, floor(vMaterial.x + 0.5));
+  float idxVal = floor(texture(uIndexAtlas, vec3(vTexUv, atlasLayer)).r * 255.0 + 0.5);
   if (idxVal < 0.5) discard;
 
   vec3 texRgb = vec3(1.0);
@@ -333,29 +421,39 @@ void main() {
     texRgb = lutSample.rgb;
     lutEmissive = lutSample.a;
   } else {
-    vec4 sampled = texture(uAtlas, vTexUv);
+    vec4 sampled = texture(uAtlas, vec3(vTexUv, atlasLayer));
     if (sampled.a < 0.05) discard;
     texRgb = sampled.rgb;
     texAlpha = sampled.a;
   }
 
+  float rough = clamp(vMaterial.y, 0.05, 1.0);
+  float metal = clamp(vMaterial.z, 0.0, 1.0);
+  float matEmissive = clamp(vMaterial.w, 0.0, 2.0);
+  float specExp = mix(56.0, 6.0, rough);
+  float specScale = mix(1.0, 0.22, rough) * (0.26 + 0.74 * metal + (idxVal > 250.0 ? 0.14 : 0.0));
+  vec3 f0 = mix(vec3(0.95), texRgb * 1.15, metal);
+  float diffConserv = mix(1.0, 0.58, metal);
+
   float reliefShade = 1.0;
-  vec3 lit = vec3(0.0);
+  vec3 keySpecRgb = vec3(0.0);
+  vec3 litDiff = vec3(0.0);
+  vec3 litSpec = vec3(0.0);
 
   if (vPaletteRow > -1.5) {
-    vec2 texel = 1.0 / vec2(textureSize(uIndexAtlas, 0));
+    vec2 texel = 1.0 / vec2(textureSize(uIndexAtlas, 0).xy);
     vec2 uvMin = min(vUvBounds.xy, vUvBounds.zw) + texel * 0.5;
     vec2 uvMax = max(vUvBounds.xy, vUvBounds.zw) - texel * 0.5;
     vec2 safeMin = min(uvMin, uvMax);
     vec2 safeMax = max(uvMin, uvMax);
     float flipSign = vUvBounds.x > vUvBounds.z ? -1.0 : 1.0;
     vec3 lumaW = vec3(0.299, 0.587, 0.114);
-    vec4 sC = textureLod(uAtlas, clamp(vTexUv, safeMin, safeMax), 0.0);
-    vec4 sL = textureLod(uAtlas, clamp(vTexUv - vec2(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
-    vec4 sR = textureLod(uAtlas, clamp(vTexUv + vec2(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
-    vec4 sU = textureLod(uAtlas, clamp(vTexUv - vec2(0.0, texel.y), safeMin, safeMax), 0.0);
-    vec4 sD = textureLod(uAtlas, clamp(vTexUv + vec2(0.0, texel.y), safeMin, safeMax), 0.0);
-    vec4 sBR = textureLod(uAtlas, clamp(vTexUv + vec2(texel.x * flipSign, texel.y), safeMin, safeMax), 0.0);
+    vec4 sC = textureLod(uAtlas, vec3(clamp(vTexUv, safeMin, safeMax), atlasLayer), 0.0);
+    vec4 sL = textureLod(uAtlas, vec3(clamp(vTexUv - vec2(texel.x * flipSign, 0.0), safeMin, safeMax), atlasLayer), 0.0);
+    vec4 sR = textureLod(uAtlas, vec3(clamp(vTexUv + vec2(texel.x * flipSign, 0.0), safeMin, safeMax), atlasLayer), 0.0);
+    vec4 sU = textureLod(uAtlas, vec3(clamp(vTexUv - vec2(0.0, texel.y), safeMin, safeMax), atlasLayer), 0.0);
+    vec4 sD = textureLod(uAtlas, vec3(clamp(vTexUv + vec2(0.0, texel.y), safeMin, safeMax), atlasLayer), 0.0);
+    vec4 sBR = textureLod(uAtlas, vec3(clamp(vTexUv + vec2(texel.x * flipSign, texel.y), safeMin, safeMax), atlasLayer), 0.0);
 
     float hC = sC.a * (0.65 + 0.35 * dot(sC.rgb, lumaW));
     float hL = sL.a * (0.65 + 0.35 * dot(sL.rgb, lumaW));
@@ -366,37 +464,381 @@ void main() {
 
     float gx = hR - hL;
     float gy = hD - hU;
-    vec3 sobelN = normalize(vec3(-gx * 1.4, -gy * 1.4, 1.0));
-    vec3 sobelLight = normalize(vec3(-0.55, -0.75, 0.4));
+    vec3 sobelN = normalize(vec3(-gx * 1.45, -gy * 1.45, 1.0));
+    vec3 sobelLight = normalize(vec3(-0.55, -0.75, 0.42));
+    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    vec3 halfKey = normalize(sobelLight + viewDir);
+    float keySpecAmt = pow(max(0.0, dot(sobelN, halfKey)), specExp) * specScale * 0.42;
     float ndl = dot(sobelN, sobelLight) - sobelLight.z;
-    float rimBoost = (hC - hBR) > 0.45 ? 0.08 : 0.0;
-    reliefShade = clamp(1.0 + ndl * 0.24, 0.90, 1.14) + rimBoost;
+    float rimBoost = (hC - hBR) > 0.45 ? (0.07 + 0.14 * metal) : 0.0;
+    reliefShade = clamp(1.0 + ndl * 0.28, 0.84, 1.18) * diffConserv + rimBoost;
+    keySpecRgb = f0 * keySpecAmt;
 
     int cnt = min(24, max(0, uLightCount));
     for (int li = 0; li < 24; li++) {
       if (li >= cnt) break;
       vec4 lp = uLightPosRad[li];
       vec4 lc = uLightColInt[li];
-      vec3 toL = vec3(lp.xy - vScreenPos, 18.0);
+      vec3 toL = vec3(lp.xy - vScreenPos, 22.0);
       float dist = length(toL.xy);
       if (dist < lp.z) {
-        float falloff = max(0.2, lp.w);
-        float att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), falloff);
-        vec3 lDir = normalize(toL);
-        float diff = max(0.0, dot(sobelN, lDir));
-        lit += lc.rgb * (lc.a * att * (0.35 + 0.95 * diff));
+        float vis = sampleShadowOcclusion(vScreenPos, lp.xy);
+        if (vis > 0.01) {
+          float falloff = max(0.2, lp.w);
+          float att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), falloff) * vis;
+          vec3 lDir = normalize(toL);
+          float diff = max(0.0, dot(sobelN, lDir));
+          vec3 hVec = normalize(lDir + viewDir);
+          float spec = pow(max(0.0, dot(sobelN, hVec)), specExp) * specScale * 0.92;
+          litDiff += lc.rgb * (lc.a * att * (0.34 + 0.90 * diff) * diffConserv);
+          litSpec += lc.rgb * f0 * (lc.a * att * spec);
+        }
+      }
+    }
+    reliefShade *= sampleWallBaseAo(vScreenPos);
+  }
+
+  float flashAmt = clamp(vFlash, 0.0, 1.0);
+  vec3 baseRgb = clamp(texRgb * vTint.rgb * reliefShade + keySpecRgb, vec3(0.0), vec3(1.15));
+  if (vPaletteRow > -1.5) {
+    baseRgb = clamp(baseRgb * (1.0 + litDiff) + litSpec, vec3(0.0), vec3(1.45));
+  }
+  vec3 finalRgb = mix(baseRgb, vec3(1.0), flashAmt);
+  float finalAlpha = texAlpha * vTint.a;
+  float emissiveAmt = max(lutEmissive, max(clamp(vParam, 0.0, 2.0), matEmissive)) + flashAmt * 0.5;
+  vec3 hdrExcess = max(finalRgb - vec3(1.0), vec3(0.0));
+
+  fragColor = vec4(clamp(finalRgb, vec3(0.0), vec3(1.0)), finalAlpha);
+  fragEmissive = vec4(finalRgb * emissiveAmt + hdrExcess, finalAlpha);
+}`;
+
+export const QUAD3D_VS = `#version 300 es
+layout(location = 0) in vec4 aOriginPage;   // originX, originY, originZ, atlasPage
+layout(location = 1) in vec4 aUAxisRough;   // uAxisX, uAxisY, uAxisZ, roughness
+layout(location = 2) in vec4 aVAxisMetal;   // vAxisX, vAxisY, vAxisZ, metallic
+layout(location = 3) in vec4 aUvBounds;     // u0, v0, u1, v1
+layout(location = 4) in vec4 aTint;         // r, g, b, a
+layout(location = 5) in vec4 aNormEmissive; // normalX, normalY, normalZ, emissive
+layout(location = 6) in vec4 aStyle;        // mode, flash, shadeMult, paletteRow
+
+uniform mat4 uViewProj;
+uniform vec2 uViewSize;
+
+out vec2 vTexUv;
+out vec2 vLocalUv;
+out vec4 vTint;
+out vec3 vWorldPos;
+out vec3 vNormal;
+out vec4 vMaterial;
+out vec4 vStyle;
+out vec4 vUvBounds;
+out vec2 vQuadCenterXy;
+
+void main() {
+  vec2 uvUnit[6] = vec2[6](
+    vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0),
+    vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0)
+  );
+  vec2 u01 = uvUnit[gl_VertexID];
+  vec3 worldPos = aOriginPage.xyz + aUAxisRough.xyz * u01.x + aVAxisMetal.xyz * u01.y;
+  vec4 clip = uViewProj * vec4(worldPos, 1.0);
+  vec2 viewSize = max(vec2(1.0), uViewSize);
+  vec2 osScale = viewSize / (viewSize + vec2(${OVERSCAN_PAD}.0 * 2.0));
+  clip.x *= osScale.x;
+  clip.y *= osScale.y;
+
+  vec3 centerPos = aOriginPage.xyz + (aUAxisRough.xyz + aVAxisMetal.xyz) * 0.5;
+  gl_Position = clip;
+  vTexUv = mix(aUvBounds.xy, aUvBounds.zw, u01);
+  vLocalUv = u01;
+  vTint = aTint;
+  vWorldPos = worldPos;
+  vNormal = aNormEmissive.xyz;
+  vMaterial = vec4(aOriginPage.w, aUAxisRough.w, aVAxisMetal.w, aNormEmissive.w);
+  vStyle = aStyle;
+  vUvBounds = aUvBounds;
+  vQuadCenterXy = centerPos.xy;
+}`;
+
+export const QUAD3D_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2DArray;
+
+in vec2 vTexUv;
+in vec2 vLocalUv;
+in vec4 vTint;
+in vec3 vWorldPos;
+in vec3 vNormal;
+in vec4 vMaterial;
+in vec4 vStyle;
+in vec4 vUvBounds;
+in vec2 vQuadCenterXy;
+
+uniform sampler2DArray uAtlas;
+uniform sampler2DArray uIndexAtlas;
+uniform sampler2D uPaletteLut;
+uniform sampler2D uOcclusionTex;
+uniform float uPaletteRows;
+uniform int uLightCount;
+uniform vec4 uLightPosRad[24];
+uniform vec4 uLightColInt[24];
+uniform vec4 uOccWorld; // x: originWorldX, y: originWorldY, z: tileSizeWorld, w: occSoftness
+uniform vec4 uOccDims;  // x: cols, y: rows, z: occStrength, w: opaquePass (1=cutout, 0=blend)
+
+layout(location = 0) out vec4 fragColor;
+layout(location = 1) out vec4 fragEmissive;
+
+float hash21(vec2 p) {
+  ivec2 ip = ivec2(floor(p * 8.0 + 0.5));
+  uint h = uint(ip.x) * 374761393u + uint(ip.y) * 668265263u + 1442695041u;
+  h = (h ^ (h >> 15u)) * 2246822519u;
+  h = (h ^ (h >> 13u)) * 3266489917u;
+  h = h ^ (h >> 16u);
+  return float(h & 0x00ffffffu) * (1.0 / 16777216.0);
+}
+
+float sampleOccCell(vec2 cell) {
+  if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= uOccDims.x || cell.y >= uOccDims.y) {
+    return 0.0;
+  }
+  vec2 uv = (cell + vec2(0.5)) / 64.0;
+  return textureLod(uOcclusionTex, uv, 0.0).r;
+}
+
+float sampleShadowOcclusion3D(vec2 fragWorldXy, vec2 lightWorldXy) {
+  float strength = uOccDims.z;
+  float tileSize = uOccWorld.z;
+  if (strength <= 0.01 || tileSize <= 1.0) return 1.0;
+  vec2 origin = uOccWorld.xy;
+  vec2 fragCell = (fragWorldXy - origin) / tileSize;
+  vec2 lightCell = (lightWorldXy - origin) / tileSize;
+  vec2 delta = lightCell - fragCell;
+  if (length(delta) < 0.25) return 1.0;
+  vec2 fragTile = floor(fragCell);
+  vec2 lightTile = floor(lightCell);
+  float hits = 0.0;
+  for (int s = 1; s <= 14; s++) {
+    float t = float(s) / 15.0;
+    vec2 pTile = floor(fragCell + delta * t);
+    bool isSelf = abs(pTile.x - fragTile.x) < 0.5 && abs(pTile.y - fragTile.y) < 0.5;
+    bool isLightCell = abs(pTile.x - lightTile.x) < 0.5 && abs(pTile.y - lightTile.y) < 0.5;
+    if (!isSelf && !isLightCell) {
+      if (sampleOccCell(pTile) > 0.5) {
+        hits += 1.0;
+      }
+    }
+  }
+  float softSteps = max(0.35, uOccWorld.w * 2.4);
+  float shadowAmt = clamp(hits / softSteps, 0.0, 1.0) * strength;
+  return 1.0 - shadowAmt;
+}
+
+float sampleWallBaseAo3D(vec2 fragWorldXy) {
+  float strength = uOccDims.z;
+  float tileSize = uOccWorld.z;
+  if (strength <= 0.01 || tileSize <= 1.0) return 1.0;
+  vec2 cellPos = (fragWorldXy - uOccWorld.xy) / tileSize;
+  vec2 tile = floor(cellPos);
+  if (sampleOccCell(tile) > 0.5) return 1.0;
+  vec2 frac = fract(cellPos);
+  float ao = 1.0;
+  if (sampleOccCell(tile + vec2(0.0, -1.0)) > 0.5) {
+    ao *= mix(0.62, 1.0, smoothstep(0.0, 0.48, frac.y));
+  }
+  if (sampleOccCell(tile + vec2(0.0, 1.0)) > 0.5) {
+    ao *= mix(0.80, 1.0, smoothstep(0.0, 0.24, 1.0 - frac.y));
+  }
+  if (sampleOccCell(tile + vec2(-1.0, 0.0)) > 0.5) {
+    ao *= mix(0.76, 1.0, smoothstep(0.0, 0.28, frac.x));
+  }
+  if (sampleOccCell(tile + vec2(1.0, 0.0)) > 0.5) {
+    ao *= mix(0.76, 1.0, smoothstep(0.0, 0.28, 1.0 - frac.x));
+  }
+  return mix(1.0, ao, clamp(strength, 0.0, 1.0));
+}
+
+void main() {
+  float mode = vStyle.x;
+  float flashAmt = clamp(vStyle.y, 0.0, 1.0);
+  float shadeMult = vStyle.z;
+  float paletteRow = vStyle.w;
+  bool opaquePass = uOccDims.w > 0.5;
+
+  // Mode 3: Grounded analytical SDF elliptical soft contact shadow on floor
+  if (mode > 2.5 && mode < 3.5) {
+    vec2 p = vLocalUv * 2.0 - vec2(1.0);
+    float d2 = dot(p, p);
+    if (d2 >= 1.0) discard;
+    float d = sqrt(d2);
+    float soft = clamp(shadeMult > 0.05 ? shadeMult : 0.62, 0.15, 0.98);
+    float outer = smoothstep(1.0, 1.0 - soft, d);
+    float umbra = smoothstep(0.68, 0.0, d) * 0.36;
+    float shadowAlpha = vTint.a * clamp(outer * 0.78 + umbra, 0.0, 1.0);
+    if (opaquePass && shadowAlpha < 0.5) discard;
+    fragColor = vec4(vTint.rgb, shadowAlpha);
+    fragEmissive = vec4(0.0, 0.0, 0.0, shadowAlpha);
+    return;
+  }
+
+  // Mode 1: Radial GPU light orb in 3D space
+  if (mode > 0.5 && mode < 1.5) {
+    vec2 p = vLocalUv * 2.0 - vec2(1.0);
+    float d2 = dot(p, p);
+    if (d2 >= 1.0) discard;
+    float d = sqrt(d2);
+    float f = clamp(1.0 - d, 0.0, 1.0);
+    float power = shadeMult > 0.1 ? shadeMult : 2.0;
+    float occVis = sampleShadowOcclusion3D(vWorldPos.xy, vQuadCenterXy);
+    float glow = (f > 0.001 ? pow(f, power) : 0.0) * occVis;
+    float a = vTint.a * glow;
+    if (opaquePass && a < 0.5) discard;
+    fragColor = vec4(vTint.rgb, a);
+    fragEmissive = vec4(vTint.rgb * 0.72, a);
+    return;
+  }
+
+  // Mode 2: Solid 3D quad / particle / oblique shadow / accent slab
+  if (mode > 1.5 && mode < 2.5) {
+    vec3 col = mix(vTint.rgb * max(0.05, shadeMult), vec3(1.0), flashAmt);
+    float a = vTint.a;
+    if (opaquePass && a < 0.5) discard;
+    float em = max(vMaterial.w, flashAmt * 0.5);
+    fragColor = vec4(clamp(col, vec3(0.0), vec3(1.0)), a);
+    fragEmissive = vec4(col * em, a);
+    return;
+  }
+
+  vec3 n3d = normalize(vNormal);
+  bool isVertical = abs(n3d.z) < 0.5;
+  vec2 shadowSamplePos = vWorldPos.xy + (isVertical ? n3d.xy * 2.5 : vec2(0.0));
+
+  // Mode 4: Procedural normal-lit beveled masonry 3D vertical wall face
+  if (mode > 3.5) {
+    float tx = max(0.5, vUvBounds.x);
+    float ty = max(0.25, vUvBounds.y);
+    float seed = vUvBounds.z;
+    vec2 coord = vec2(vLocalUv.x * tx, vLocalUv.y * ty);
+    float row = floor(coord.y * 2.0);
+    float stagger = fract(row * 0.5) * 0.5;
+    vec2 brickUv = vec2(fract(coord.x * 1.45 + stagger), fract(coord.y * 2.0));
+    vec2 brickId = vec2(floor(coord.x * 1.45 + stagger), row);
+    float cellTint = (hash21(brickId + seed) - 0.5) * 0.14;
+    float edgeDist = min(min(brickUv.x, 1.0 - brickUv.x), min(brickUv.y, 1.0 - brickUv.y));
+    float mortarMask = mix(0.56, 1.0, smoothstep(0.02, 0.13, edgeDist));
+    float aoBottom = mix(1.04, 0.62, smoothstep(0.26, 1.0, vLocalUv.y));
+    float topRim = smoothstep(0.12, 0.0, vLocalUv.y) * 0.22;
+    float grain = (hash21(floor(coord * 8.0) + seed) - 0.5) * 0.06;
+
+    vec3 sunDir = normalize(vec3(-0.38, 0.48, 0.79));
+    float hemi = mix(0.70, 1.12, dot(n3d, sunDir) * 0.5 + 0.5);
+    vec3 baseCol = vTint.rgb * max(0.2, shadeMult) * hemi * (1.0 + cellTint + grain) * mortarMask * aoBottom + vec3(topRim);
+
+    int wCnt = min(24, max(0, uLightCount));
+    vec3 litDiff = vec3(0.0);
+    for (int li = 0; li < 24; li++) {
+      if (li >= wCnt) break;
+      vec4 lp = uLightPosRad[li];
+      vec4 lc = uLightColInt[li];
+      vec3 toL = vec3(lp.xy - vWorldPos.xy, 24.0 - vWorldPos.z);
+      float dist = length(toL.xy);
+      if (dist < lp.z) {
+        float vis = sampleShadowOcclusion3D(shadowSamplePos, lp.xy);
+        if (vis > 0.01) {
+          float att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w)) * vis;
+          float diff = max(0.12, dot(n3d, normalize(toL)));
+          litDiff += lc.rgb * (lc.a * att * diff * 0.92);
+        }
+      }
+    }
+    baseCol = clamp(baseCol * (1.0 + litDiff), vec3(0.0), vec3(1.2));
+    float a = vTint.a;
+    if (opaquePass && a < 0.5) discard;
+    fragColor = vec4(clamp(baseCol, vec3(0.0), vec3(1.0)), a);
+    fragEmissive = vec4(max(baseCol - vec3(1.0), vec3(0.0)), a);
+    return;
+  }
+
+  // Mode 0: Crisp Nearest-Neighbor Multi-Page Atlas Pixel Quad (Floor / Wall Face / Billboard)
+  float atlasLayer = max(0.0, floor(vMaterial.x + 0.5));
+  float idxVal = floor(texture(uIndexAtlas, vec3(vTexUv, atlasLayer)).r * 255.0 + 0.5);
+  if (idxVal < 0.5) discard;
+
+  vec3 texRgb = vec3(1.0);
+  float texAlpha = 1.0;
+  float lutEmissive = 0.0;
+  if (idxVal <= 15.5 && paletteRow >= -0.5) {
+    float rows = max(1.0, uPaletteRows);
+    float rowIdx = clamp(floor(paletteRow + 0.5), 0.0, rows - 1.0);
+    vec2 lutUv = vec2((idxVal + 0.5) / 16.0, (rowIdx + 0.5) / rows);
+    vec4 lutSample = texture(uPaletteLut, lutUv);
+    texRgb = lutSample.rgb;
+    lutEmissive = lutSample.a;
+  } else {
+    vec4 sampled = texture(uAtlas, vec3(vTexUv, atlasLayer));
+    if (sampled.a < 0.05) discard;
+    texRgb = sampled.rgb;
+    texAlpha = sampled.a;
+  }
+
+  float finalAlpha = texAlpha * vTint.a;
+  if (opaquePass && finalAlpha < 0.5) discard;
+
+  float rough = clamp(vMaterial.y, 0.05, 1.0);
+  float metal = clamp(vMaterial.z, 0.0, 1.0);
+  float matEmissive = clamp(vMaterial.w, 0.0, 2.0);
+  float specExp = mix(48.0, 6.0, rough);
+  float specScale = mix(0.85, 0.18, rough) * (0.24 + 0.76 * metal);
+  vec3 f0 = mix(vec3(0.95), texRgb * 1.15, metal);
+  float diffConserv = mix(1.0, 0.62, metal);
+
+  vec3 sunDir = normalize(vec3(-0.38, 0.48, 0.79));
+  vec3 viewDir = normalize(vec3(0.0, 0.65, 0.76));
+  float hemi = mix(0.74, 1.12, dot(n3d, sunDir) * 0.5 + 0.5);
+
+  float reliefShade = max(0.15, shadeMult) * hemi * diffConserv;
+  vec3 topRimAdd = vec3(0.0);
+  if (isVertical && paletteRow > -1.5) {
+    float baseCrease = mix(1.0, 0.70, smoothstep(0.70, 1.0, vLocalUv.y));
+    reliefShade *= baseCrease;
+    topRimAdd = vec3(smoothstep(0.09, 0.0, vLocalUv.y) * 0.11);
+  }
+  if (n3d.z > 0.7 && vWorldPos.z < 2.0 && paletteRow > -1.5) {
+    reliefShade *= sampleWallBaseAo3D(vWorldPos.xy);
+  }
+
+  vec3 litDiff = vec3(0.0);
+  vec3 litSpec = vec3(0.0);
+  if (paletteRow > -1.5) {
+    int cnt = min(24, max(0, uLightCount));
+    for (int li = 0; li < 24; li++) {
+      if (li >= cnt) break;
+      vec4 lp = uLightPosRad[li];
+      vec4 lc = uLightColInt[li];
+      vec3 toL = vec3(lp.xy - vWorldPos.xy, 24.0 - vWorldPos.z);
+      float dist = length(toL.xy);
+      if (dist < lp.z) {
+        float vis = sampleShadowOcclusion3D(shadowSamplePos, lp.xy);
+        if (vis > 0.01) {
+          float att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w)) * vis;
+          vec3 lDir = normalize(toL);
+          float ndl = max(0.0, dot(n3d, lDir));
+          float wrapDiff = isVertical ? (0.42 + 0.72 * ndl) : (0.32 + 0.85 * ndl);
+          vec3 hVec = normalize(lDir + viewDir);
+          float spec = pow(max(0.0, dot(n3d, hVec)), specExp) * specScale * 0.78;
+          litDiff += lc.rgb * (lc.a * att * wrapDiff * diffConserv);
+          litSpec += lc.rgb * f0 * (lc.a * att * spec);
+        }
       }
     }
   }
 
-  float flashAmt = clamp(vFlash, 0.0, 1.0);
-  vec3 baseRgb = clamp(texRgb * vTint.rgb * reliefShade, vec3(0.0), vec3(1.0));
-  if (vPaletteRow > -1.5) {
-    baseRgb = clamp(baseRgb * (1.0 + lit), vec3(0.0), vec3(1.35));
+  vec3 baseRgb = clamp(texRgb * vTint.rgb * reliefShade + topRimAdd, vec3(0.0), vec3(1.2));
+  if (paletteRow > -1.5) {
+    baseRgb = clamp(baseRgb * (1.0 + litDiff) + litSpec, vec3(0.0), vec3(1.48));
   }
   vec3 finalRgb = mix(baseRgb, vec3(1.0), flashAmt);
-  float finalAlpha = texAlpha * vTint.a;
-  float emissiveAmt = max(lutEmissive, clamp(vParam, 0.0, 1.5)) + flashAmt * 0.5;
+  float emissiveAmt = max(lutEmissive, matEmissive) + flashAmt * 0.5;
   vec3 hdrExcess = max(finalRgb - vec3(1.0), vec3(0.0));
 
   fragColor = vec4(clamp(finalRgb, vec3(0.0), vec3(1.0)), finalAlpha);
@@ -490,6 +932,7 @@ uniform vec2 uViewSize;
 uniform float uWaterLevel;
 uniform vec3 uWaterTint;
 uniform float uTimeSec;
+uniform vec2 uTiltShift; // x: blurIntensity 0..1, y: focusY 0.1..0.9
 out vec4 fragColor;
 ${GLSL_COLOR_TRANSFER}
 ${GLSL_BAYER4X4}
@@ -523,6 +966,22 @@ void main() {
     sampleUv = clamp(vec2(rx, ry), minUv, maxUv);
   }
   vec3 sceneCol = texture(uSceneTex, sampleUv).rgb;
+  float tiltBlur = clamp(uTiltShift.x, 0.0, 1.0);
+  if (tiltBlur > 0.01 && !inWater) {
+    float focusY = clamp(uTiltShift.y, 0.1, 0.9);
+    float dofBand = smoothstep(0.20, 0.49, abs(screenY - focusY));
+    if (dofBand > 0.005) {
+      vec2 minUv = vec2(${OVERSCAN_PAD}.0) / osSize;
+      vec2 maxUv = (vec2(${OVERSCAN_PAD}.0) + viewSize) / osSize;
+      vec2 rad = (vec2(0.9, 1.15) + vec2(2.1, 2.5) * dofBand * tiltBlur) / osSize;
+      vec3 b0 = texture(uSceneTex, clamp(sampleUv + vec2(-rad.x, -rad.y), minUv, maxUv)).rgb;
+      vec3 b1 = texture(uSceneTex, clamp(sampleUv + vec2(rad.x, -rad.y), minUv, maxUv)).rgb;
+      vec3 b2 = texture(uSceneTex, clamp(sampleUv + vec2(-rad.x, rad.y), minUv, maxUv)).rgb;
+      vec3 b3 = texture(uSceneTex, clamp(sampleUv + vec2(rad.x, rad.y), minUv, maxUv)).rgb;
+      vec3 bokeh = sceneCol * 0.2 + (b0 + b1 + b2 + b3) * 0.2;
+      sceneCol = mix(sceneCol, bokeh, dofBand * tiltBlur * 0.85);
+    }
+  }
   vec3 col = sceneCol;
 
   if (uGlowIntensity > 0.01) {

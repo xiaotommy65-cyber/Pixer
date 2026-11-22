@@ -183,18 +183,149 @@ export function getObservation(state: DndWorldState): AgentObservation {
   };
 }
 
+interface DndSnapshotBank {
+  tiles: TileDesc[];
+  tilePool: TileDesc[];
+  entities: EntityDesc[];
+  entityPool: EntityDesc[];
+  lights: LightDesc[];
+  lightPool: LightDesc[];
+  debugRects: DebugRectDesc[];
+  debugPool: DebugRectDesc[];
+  bgStars: RenderSceneSnapshot['bgStars'];
+  bgClouds: RenderSceneSnapshot['bgClouds'];
+  hd2dDepth: NonNullable<RenderSceneSnapshot['hd2dDepth']>;
+  stage: NonNullable<RenderSceneSnapshot['stage']>;
+  snapshot: RenderSceneSnapshot;
+}
+
+const DND_BANKS = new WeakMap<DndWorldState, DndSnapshotBank>();
+
+function getDndBank(state: DndWorldState): DndSnapshotBank {
+  let bank = DND_BANKS.get(state);
+  if (bank) return bank;
+  const tiles: TileDesc[] = [];
+  const entities: EntityDesc[] = [];
+  const lights: LightDesc[] = [];
+  const debugRects: DebugRectDesc[] = [];
+  const bgStars: RenderSceneSnapshot['bgStars'] = [];
+  const bgClouds: RenderSceneSnapshot['bgClouds'] = [];
+  const hd2dDepth: NonNullable<RenderSceneSnapshot['hd2dDepth']> = {
+    enabled: true,
+    sortByDepthY: true,
+    perspectiveSkew: 0.045,
+    horizonHazeColor: '#0d0918',
+    horizonHazeAlpha: 0.1,
+    tiltShiftAlpha: 0.14,
+  };
+  const stage: NonNullable<RenderSceneSnapshot['stage']> = { index: 1, total: 1, name: '' };
+  bank = {
+    tiles,
+    tilePool: [],
+    entities,
+    entityPool: [],
+    lights,
+    lightPool: [],
+    debugRects,
+    debugPool: [],
+    bgStars,
+    bgClouds,
+    hd2dDepth,
+    stage,
+    snapshot: {
+      cartridgeId: 'emberkeep-dnd',
+      skyTop: '#161129',
+      skyBottom: '#261d42',
+      cozyFilter: true,
+      glowIntensity: 1,
+      timeSec: 0,
+      elapsedSec: 0,
+      status: 'playing',
+      score: 0,
+      starsCollected: 0,
+      starsTotal: 1,
+      hasKey: false,
+      hearts: 3,
+      maxHearts: 3,
+      bossHp: 0,
+      bossMaxHp: 0,
+      cameraX: 0,
+      cameraY: 0,
+      cameraZoom: 1.15,
+      ambientDarkness: 0.45,
+      ambientColor: '#0e0a1c',
+      screenFlashAlpha: 0,
+      screenFlashColor: '#fffaf0',
+      hd2dDepth,
+      bgStars,
+      bgClouds,
+      tiles,
+      entities,
+      particles: state.juice.particles,
+      lights,
+      debugRects: undefined,
+      statusBanner: '',
+      stage,
+      bgmTheme: 'dungeon',
+      rpgHud: undefined,
+    },
+  };
+  DND_BANKS.set(state, bank);
+  return bank;
+}
+
+function acquireDndTile(pool: TileDesc[], idx: number): TileDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { sprite: 'dungeon_floor', x: 0, y: 0, w: TILE_PX, h: TILE_PX };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireDndEntity(pool: EntityDesc[], idx: number): EntityDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { id: '', sprite: 'hero_a', x: 0, y: 0, w: 16, h: 16 };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireDndLight(pool: LightDesc[], idx: number): LightDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { x: 0, y: 0, radius: 32, color: '#ffd447', intensity: 0.35 };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
+function acquireDndDebug(pool: DebugRectDesc[], idx: number): DebugRectDesc {
+  let slot = pool[idx];
+  if (!slot) {
+    slot = { x: 0, y: 0, w: TILE_PX, h: TILE_PX, color: '#56d39c' };
+    pool[idx] = slot;
+  }
+  return slot;
+}
+
 export function buildSceneSnapshot(
   state: DndWorldState,
   cameraX: number,
   cameraY: number,
   params: RuntimeParams,
 ): RenderSceneSnapshot {
+  const bank = getDndBank(state);
   const f = getActiveFloor(state);
   const t = state.juice.visualTime;
   const glow = params.glowIntensity;
-  const tiles: TileDesc[] = [];
-  const entities: EntityDesc[] = [];
-  const lights: LightDesc[] = [];
+  const tiles = bank.tiles;
+  const entities = bank.entities;
+  const lights = bank.lights;
+  let tileCount = 0;
+  let entityCount = 0;
+  let lightCount = 0;
 
   for (let y = 0; y < f.height; y++) {
     for (let x = 0; x < f.width; x++) {
@@ -213,25 +344,48 @@ export function buildSceneSnapshot(
       else if (kind === 'stairs_down') sprite = 'stairs_down';
       else if (kind === 'trap') sprite = 'trap';
       else if (kind === 'torch' || kind === 'campfire') {
-        tiles.push({ sprite: 'dungeon_floor', x: px, y: py, w: TILE_PX, h: TILE_PX, tint: floorTint });
-        entities.push({
-          id: `${kind}-${x}-${y}`,
-          sprite: kind === 'campfire' ? 'campfire' : 'torch',
-          x: px,
-          y: py,
-          w: 16,
-          h: 16,
-          tint: dimTint,
-        });
+        const td = acquireDndTile(bank.tilePool, tileCount);
+        td.sprite = 'dungeon_floor';
+        td.x = px;
+        td.y = py;
+        td.w = TILE_PX;
+        td.h = TILE_PX;
+        td.tint = floorTint;
+        td.elevationZ = 0;
+        td.extrudeH = 0;
+        td.wallColor = undefined;
+        td.wallMaterial = undefined;
+        td.castShadow = false;
+        td.sortY = undefined;
+        tiles[tileCount++] = td;
+
+        const ed = acquireDndEntity(bank.entityPool, entityCount);
+        ed.id = kind;
+        ed.sprite = kind === 'campfire' ? 'campfire' : 'torch';
+        ed.x = px;
+        ed.y = py;
+        ed.w = 16;
+        ed.h = 16;
+        ed.tint = dimTint;
+        ed.scaleX = 1;
+        ed.scaleY = 1;
+        ed.flash = 0;
+        ed.flipX = false;
+        ed.elevationZ = 0;
+        ed.castShadow = false;
+        ed.shadowRadius = undefined;
+        ed.sortY = py + 16;
+        entities[entityCount++] = ed;
+
         if (isVis && glow > 0.05) {
-          lights.push({
-            x: px + 8,
-            y: py + 8,
-            radius: (kind === 'campfire' ? 58 : 44) * (1 + Math.sin(t * 10 + x) * 0.08),
-            color: kind === 'campfire' ? '#ff9642' : '#ffb85c',
-            intensity: (kind === 'campfire' ? 0.48 : 0.36) * glow,
-            falloffPower: 1.85,
-          });
+          const ld = acquireDndLight(bank.lightPool, lightCount);
+          ld.x = px + 8;
+          ld.y = py + 8;
+          ld.radius = (kind === 'campfire' ? 58 : 44) * (1 + Math.sin(t * 10 + x) * 0.08);
+          ld.color = kind === 'campfire' ? '#ff9642' : '#ffb85c';
+          ld.intensity = (kind === 'campfire' ? 0.48 : 0.36) * glow;
+          ld.falloffPower = 1.85;
+          lights[lightCount++] = ld;
         }
         continue;
       }
@@ -253,140 +407,149 @@ export function buildSceneSnapshot(
               ? floorTint
               : dimTint;
 
-      tiles.push({
-        sprite,
-        x: px,
-        y: py,
-        w: TILE_PX,
-        h: TILE_PX,
-        tint: tileTint,
-        elevationZ: isWallBlock ? 6 : 0,
-        extrudeH: isWallBlock && !southIsWall ? 6 : 0,
-        wallColor: kind === 'locked_door' ? '#705824' : isVis ? '#2d3759' : '#1e243b',
-        wallMaterial: kind === 'locked_door' ? 'astral' : 'stone',
-        castShadow: isWallBlock && !southIsWall,
-        sortY: py + TILE_PX,
-      });
+      const td = acquireDndTile(bank.tilePool, tileCount);
+      td.sprite = sprite;
+      td.x = px;
+      td.y = py;
+      td.w = TILE_PX;
+      td.h = TILE_PX;
+      td.tint = tileTint;
+      td.elevationZ = isWallBlock ? 6 : 0;
+      td.extrudeH = isWallBlock && !southIsWall ? 6 : 0;
+      td.wallColor = kind === 'locked_door' ? '#705824' : isVis ? '#2d3759' : '#1e243b';
+      td.wallMaterial = kind === 'locked_door' ? 'astral' : 'stone';
+      td.castShadow = isWallBlock && !southIsWall;
+      td.sortY = py + TILE_PX;
+      tiles[tileCount++] = td;
     }
   }
 
-  for (const e of f.entities) {
+  for (let i = 0; i < f.entities.length; i++) {
+    const e = f.entities[i];
     if (!e.alive) continue;
     if (!f.visible.has(e.y * f.width + e.x)) continue;
-    entities.push({
-      id: e.id,
-      sprite: e.sprite,
-      x: e.x * TILE_PX,
-      y: e.y * TILE_PX,
-      w: 16,
-      h: 16,
-      tint: e.tint,
-      scaleX: e.squash.scaleX,
-      scaleY: e.squash.scaleY,
-      flash: Math.min(1, e.flash * 2.5),
-      elevationZ: e.isBoss ? 2.5 + Math.sin(t * 2.8) * 1.2 : 0.5,
-      castShadow: true,
-      shadowRadius: e.isBoss ? 7.4 : 6.2,
-      sortY: e.y * TILE_PX + 16,
-    });
+    const ed = acquireDndEntity(bank.entityPool, entityCount);
+    ed.id = e.id;
+    ed.sprite = e.sprite;
+    ed.x = e.x * TILE_PX;
+    ed.y = e.y * TILE_PX;
+    ed.w = 16;
+    ed.h = 16;
+    ed.tint = e.tint;
+    ed.scaleX = e.squash.scaleX;
+    ed.scaleY = e.squash.scaleY;
+    ed.flash = Math.min(1, e.flash * 2.5);
+    ed.flipX = false;
+    ed.elevationZ = e.isBoss ? 2.5 + Math.sin(t * 2.8) * 1.2 : 0.5;
+    ed.castShadow = true;
+    ed.shadowRadius = e.isBoss ? 7.4 : 6.2;
+    ed.sortY = e.y * TILE_PX + 16;
+    entities[entityCount++] = ed;
+
     if ((e.isBoss || e.isMiniBoss) && glow > 0.05) {
-      lights.push({ x: e.x * TILE_PX + 8, y: e.y * TILE_PX + 8, radius: 48, color: '#ff708d', intensity: 0.65 * glow });
+      const ld = acquireDndLight(bank.lightPool, lightCount);
+      ld.x = e.x * TILE_PX + 8;
+      ld.y = e.y * TILE_PX + 8;
+      ld.radius = 48;
+      ld.color = '#ff708d';
+      ld.intensity = 0.65 * glow;
+      ld.falloffPower = 2.0;
+      lights[lightCount++] = ld;
     }
   }
 
-  entities.push({
-    id: 'hero',
-    sprite: Math.floor(state.turnCount) % 2 === 1 ? 'hero_b' : 'hero_a',
-    x: state.hero.visualX,
-    y: state.hero.visualY,
-    w: 16,
-    h: 16,
-    scaleX: state.hero.squash.scaleX,
-    scaleY: state.hero.squash.scaleY,
-    flash: Math.min(1, state.hero.flash * 2.5),
-    flipX: state.hero.facingLeft,
-    elevationZ: 0.6,
-    castShadow: true,
-    shadowRadius: 6.4,
-    sortY: state.hero.visualY + 16,
-  });
+  const heroEd = acquireDndEntity(bank.entityPool, entityCount);
+  heroEd.id = 'hero';
+  heroEd.sprite = Math.floor(state.turnCount) % 2 === 1 ? 'hero_b' : 'hero_a';
+  heroEd.x = state.hero.visualX;
+  heroEd.y = state.hero.visualY;
+  heroEd.w = 16;
+  heroEd.h = 16;
+  heroEd.tint = undefined;
+  heroEd.scaleX = state.hero.squash.scaleX;
+  heroEd.scaleY = state.hero.squash.scaleY;
+  heroEd.flash = Math.min(1, state.hero.flash * 2.5);
+  heroEd.flipX = state.hero.facingLeft;
+  heroEd.elevationZ = 0.6;
+  heroEd.castShadow = true;
+  heroEd.shadowRadius = 6.4;
+  heroEd.sortY = state.hero.visualY + 16;
+  entities[entityCount++] = heroEd;
+
   if (glow > 0.05) {
-    lights.push({
-      x: state.hero.visualX + 8,
-      y: state.hero.visualY + 8,
-      radius: 48 + (state.blackboard.sage_blessing ? 16 : 0) + (state.hero.relic?.visionBonus ?? 0) * 10,
-      color: '#ffe4a1',
-      intensity: 0.36 * glow,
-      falloffPower: 1.8,
-    });
+    const ld = acquireDndLight(bank.lightPool, lightCount);
+    ld.x = state.hero.visualX + 8;
+    ld.y = state.hero.visualY + 8;
+    ld.radius = 48 + (state.blackboard.sage_blessing ? 16 : 0) + (state.hero.relic?.visionBonus ?? 0) * 10;
+    ld.color = '#ffe4a1';
+    ld.intensity = 0.36 * glow;
+    ld.falloffPower = 1.8;
+    lights[lightCount++] = ld;
   }
+
+  tiles.length = tileCount;
+  entities.length = entityCount;
+  lights.length = lightCount;
 
   let debugRects: DebugRectDesc[] | undefined;
   if (state.debugHitboxes) {
-    debugRects = [];
+    let dbgCount = 0;
     for (const k of f.visible) {
       const vx = k % f.width;
       const vy = Math.floor(k / f.width);
-      debugRects.push({ x: vx * TILE_PX, y: vy * TILE_PX, w: TILE_PX, h: TILE_PX, color: '#56d39c' });
+      const dr = acquireDndDebug(bank.debugPool, dbgCount);
+      dr.x = vx * TILE_PX;
+      dr.y = vy * TILE_PX;
+      dr.w = TILE_PX;
+      dr.h = TILE_PX;
+      dr.color = '#56d39c';
+      bank.debugRects[dbgCount++] = dr;
     }
+    bank.debugRects.length = dbgCount;
+    debugRects = bank.debugRects;
   }
 
   const hud = buildHudSnapshot(state);
-  const inBossFight =
-    state.phase.kind === 'combat' &&
-    Boolean(
-      f.entities.find((e) => state.phase.kind === 'combat' && e.id === state.phase.entityId && (e.isBoss || e.isMiniBoss)),
-    );
+  let inBossFight = false;
+  if (state.phase.kind === 'combat') {
+    const combatId = state.phase.entityId;
+    for (let i = 0; i < f.entities.length; i++) {
+      const e = f.entities[i];
+      if (e.id === combatId && (e.isBoss || e.isMiniBoss)) {
+        inBossFight = true;
+        break;
+      }
+    }
+  }
 
   const status: 'playing' | 'won' | 'lost' =
     state.phase.kind === 'won' ? 'won' : state.phase.kind === 'lost' ? 'lost' : 'playing';
 
-  return {
-    cartridgeId: 'emberkeep-dnd',
-    skyTop: '#161129',
-    skyBottom: '#261d42',
-    cozyFilter: params.cozyFilter > 0.5,
-    glowIntensity: params.glowIntensity,
-    timeSec: t,
-    elapsedSec: t,
-    status,
-    score: state.score,
-    starsCollected: state.chestsCollected,
-    starsTotal: Math.max(1, state.totalChests),
-    hasKey: state.hero.keys > 0,
-    hearts: Math.max(0, Math.ceil((state.hero.hp / state.hero.maxHp) * 3)),
-    maxHearts: 3,
-    bossHp: hud.combat?.enemyHp ?? 0,
-    bossMaxHp: hud.combat?.enemyMaxHp ?? 0,
-    cameraX: cameraX + state.juice.shakeX,
-    cameraY: cameraY + state.juice.shakeY,
-    cameraZoom: 1.15,
-    ambientDarkness: Math.min(0.48, state.moduleDef.ambientDarkness ?? 0.45),
-    ambientColor: '#0e0a1c',
-    screenFlashAlpha: state.juice.flashAlpha,
-    screenFlashColor: state.juice.flashColor,
-    hd2dDepth: {
-      enabled: true,
-      sortByDepthY: true,
-      perspectiveSkew: 0.045,
-      horizonHazeColor: '#0d0918',
-      horizonHazeAlpha: 0.1,
-      tiltShiftAlpha: 0.14,
-    },
-    bgStars: [],
-    bgClouds: [],
-    tiles,
-    entities,
-    particles: state.juice.particles,
-    lights,
-    debugRects,
-    statusBanner: state.combatLog[0] ?? '方向鍵探索迷宮・A 執行選單・可開啟 AI 代理自動探索',
-    stage: {
-      index: state.floorIdx + 1,
-      total: state.floors.length,
-      name: f.def.name,
-    },
-    bgmTheme: inBossFight || state.floorIdx === state.floors.length - 1 ? 'boss' : 'dungeon',
-    rpgHud: hud,
-  };
+  const snap = bank.snapshot;
+  snap.cozyFilter = params.cozyFilter > 0.5;
+  snap.glowIntensity = params.glowIntensity;
+  snap.timeSec = t;
+  snap.elapsedSec = t;
+  snap.status = status;
+  snap.score = state.score;
+  snap.starsCollected = state.chestsCollected;
+  snap.starsTotal = Math.max(1, state.totalChests);
+  snap.hasKey = state.hero.keys > 0;
+  snap.hearts = Math.max(0, Math.ceil((state.hero.hp / state.hero.maxHp) * 3));
+  snap.bossHp = hud.combat?.enemyHp ?? 0;
+  snap.bossMaxHp = hud.combat?.enemyMaxHp ?? 0;
+  snap.cameraX = cameraX + state.juice.shakeX;
+  snap.cameraY = cameraY + state.juice.shakeY;
+  snap.ambientDarkness = Math.min(0.48, state.moduleDef.ambientDarkness ?? 0.45);
+  snap.screenFlashAlpha = state.juice.flashAlpha;
+  snap.screenFlashColor = state.juice.flashColor;
+  snap.particles = state.juice.particles;
+  snap.debugRects = debugRects;
+  snap.statusBanner = state.combatLog[0] ?? '方向鍵探索迷宮・A 執行選單・可開啟 AI 代理自動探索';
+  bank.stage.index = state.floorIdx + 1;
+  bank.stage.total = state.floors.length;
+  bank.stage.name = f.def.name;
+  snap.bgmTheme = inBossFight || state.floorIdx === state.floors.length - 1 ? 'boss' : 'dungeon';
+  snap.rpgHud = hud;
+  return snap;
 }

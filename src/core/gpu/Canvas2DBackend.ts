@@ -4,35 +4,58 @@ import {
   GAME_H,
   GAME_W,
   MAX_INSTANCES_PER_PASS,
+  type AtlasPageData,
   type IGpuBackend,
   type SkyGradient,
 } from './GpuTypes.ts';
 
+const RGB_CSS_CACHE = new Map<number, string>();
+const MAX_RGB_CACHE = 2048;
+
 function rgbCss(r: number, g: number, b: number, a = 1): string {
-  const ri = Math.max(0, Math.min(255, Math.round(r * 255)));
-  const gi = Math.max(0, Math.min(255, Math.round(g * 255)));
-  const bi = Math.max(0, Math.min(255, Math.round(b * 255)));
-  return a >= 0.999 ? `rgb(${ri},${gi},${bi})` : `rgba(${ri},${gi},${bi},${a.toFixed(3)})`;
+  const ri = Math.max(0, Math.min(255, (r * 255 + 0.5) | 0));
+  const gi = Math.max(0, Math.min(255, (g * 255 + 0.5) | 0));
+  const bi = Math.max(0, Math.min(255, (b * 255 + 0.5) | 0));
+  const ai = Math.max(0, Math.min(255, (a * 255 + 0.5) | 0));
+  // Quantize to 5 bits per channel + 5 bits alpha for high hit-rate zero-churn cache
+  const key = ((ri >> 3) << 15) | ((gi >> 3) << 10) | ((bi >> 3) << 5) | (ai >> 3);
+  const cached = RGB_CSS_CACHE.get(key);
+  if (cached !== undefined) return cached;
+  if (RGB_CSS_CACHE.size >= MAX_RGB_CACHE) {
+    RGB_CSS_CACHE.clear();
+  }
+  const str = ai >= 254 ? `rgb(${ri},${gi},${bi})` : `rgba(${ri},${gi},${bi},${(ai / 255).toFixed(2)})`;
+  RGB_CSS_CACHE.set(key, str);
+  return str;
 }
 
 /**
  * Software 2D Canvas fallback backend implementing IGpuBackend.
- * Ensures 100% visual output even when WebGPU and WebGL2 contexts fail, get blocked, or are lost.
+ * Supports indexed Palette LUT row recoloring, cached RGB CSS strings, dynamic scratch sizing,
+ * and planar water overlay so Canvas 2D degrades cleanly alongside WebGPU/WebGL2.
  */
 export class Canvas2DBackend implements IGpuBackend {
   public readonly kind = 'canvas2d' as const;
 
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly doc: Document;
   private readonly atlasCanvas: HTMLCanvasElement;
   private readonly atlasCtx: CanvasRenderingContext2D;
   private readonly scratchCanvas: HTMLCanvasElement;
   private readonly scratchCtx: CanvasRenderingContext2D;
+  private readonly paletteRowCanvases = new Map<number, HTMLCanvasElement>();
+  private readonly extraPageCanvases: HTMLCanvasElement[] = [];
   private atlasWidth = 1024;
   private atlasHeight = 1024;
   private atlasImageData: ImageData | null = null;
+  private cachedBasePixels: Uint8Array | null = null;
+  private cachedIndexPixels: Uint8Array | null = null;
+  private cachedPaletteLut: Uint8Array | null = null;
+  private cachedPaletteRows = 1;
 
   private constructor(
     ctx: CanvasRenderingContext2D,
+    doc: Document,
     atlasCanvas: HTMLCanvasElement,
     atlasCtx: CanvasRenderingContext2D,
     scratchCanvas: HTMLCanvasElement,
@@ -42,6 +65,7 @@ export class Canvas2DBackend implements IGpuBackend {
     initialPixels: Uint8Array,
   ) {
     this.ctx = ctx;
+    this.doc = doc;
     this.atlasCanvas = atlasCanvas;
     this.atlasCtx = atlasCtx;
     this.scratchCanvas = scratchCanvas;
@@ -74,6 +98,7 @@ export class Canvas2DBackend implements IGpuBackend {
 
       return new Canvas2DBackend(
         ctx,
+        doc,
         atlasCanvas,
         atlasCtx,
         scratchCanvas,
@@ -92,9 +117,10 @@ export class Canvas2DBackend implements IGpuBackend {
     width: number,
     height: number,
     pixels: Uint8Array,
-    _indexPixels?: Uint8Array,
-    _paletteLut?: Uint8Array,
-    _paletteRows?: number,
+    indexPixels?: Uint8Array,
+    paletteLut?: Uint8Array,
+    paletteRows?: number,
+    extraPages?: readonly AtlasPageData[],
   ): void {
     this.atlasWidth = width;
     this.atlasHeight = height;
@@ -108,6 +134,94 @@ export class Canvas2DBackend implements IGpuBackend {
     }
     this.atlasImageData.data.set(pixels);
     this.atlasCtx.putImageData(this.atlasImageData, 0, 0);
+
+    const extraCount = extraPages?.length ?? 0;
+    while (this.extraPageCanvases.length > extraCount) {
+      const removed = this.extraPageCanvases.pop();
+      if (removed) removed.width = 0;
+    }
+    if (extraPages) {
+      for (let i = 0; i < extraCount; i++) {
+        let pageCanvas = this.extraPageCanvases[i];
+        if (!pageCanvas) {
+          pageCanvas = this.doc.createElement('canvas');
+          this.extraPageCanvases[i] = pageCanvas;
+        }
+        if (pageCanvas.width !== width || pageCanvas.height !== height) {
+          pageCanvas.width = width;
+          pageCanvas.height = height;
+        }
+        const pctx = pageCanvas.getContext('2d');
+        if (pctx) {
+          const pImg = pctx.createImageData(width, height);
+          pImg.data.set(extraPages[i].pixels);
+          pctx.putImageData(pImg, 0, 0);
+        }
+      }
+    }
+
+    this.cachedBasePixels = pixels;
+    this.cachedIndexPixels = indexPixels ?? null;
+    this.cachedPaletteLut = paletteLut ?? null;
+    this.cachedPaletteRows = Math.max(1, paletteRows ?? 1);
+    for (const c of this.paletteRowCanvases.values()) {
+      c.width = 0;
+    }
+    this.paletteRowCanvases.clear();
+  }
+
+  private getAtlasForPaletteRow(paletteRow: number): HTMLCanvasElement {
+    const row = Math.round(paletteRow);
+    if (
+      row <= 0 ||
+      row >= this.cachedPaletteRows ||
+      !this.cachedIndexPixels ||
+      !this.cachedPaletteLut ||
+      !this.cachedBasePixels
+    ) {
+      return this.atlasCanvas;
+    }
+    const existing = this.paletteRowCanvases.get(row);
+    if (existing) return existing;
+
+    const c = this.doc.createElement('canvas');
+    c.width = this.atlasWidth;
+    c.height = this.atlasHeight;
+    const cctx = c.getContext('2d');
+    if (!cctx) return this.atlasCanvas;
+
+    const img = cctx.createImageData(this.atlasWidth, this.atlasHeight);
+    const out = img.data;
+    const base = this.cachedBasePixels;
+    const idxPx = this.cachedIndexPixels;
+    const lut = this.cachedPaletteLut;
+    const lutRowBase = row * 16 * 4;
+    const total = this.atlasWidth * this.atlasHeight;
+
+    for (let i = 0; i < total; i++) {
+      const idx = idxPx[i];
+      const o = i * 4;
+      if (idx === 0) {
+        out[o] = 0;
+        out[o + 1] = 0;
+        out[o + 2] = 0;
+        out[o + 3] = 0;
+      } else if (idx < 16) {
+        const lo = lutRowBase + idx * 4;
+        out[o] = lut[lo];
+        out[o + 1] = lut[lo + 1];
+        out[o + 2] = lut[lo + 2];
+        out[o + 3] = lut[lo + 3];
+      } else {
+        out[o] = base[o];
+        out[o + 1] = base[o + 1];
+        out[o + 2] = base[o + 2];
+        out[o + 3] = base[o + 3];
+      }
+    }
+    cctx.putImageData(img, 0, 0);
+    this.paletteRowCanvases.set(row, c);
+    return c;
   }
 
   public resize(_pixelWidth: number, _pixelHeight: number): void {
@@ -215,6 +329,8 @@ export class Canvas2DBackend implements IGpuBackend {
       const pivotX = items[b + 16];
       const pivotY = items[b + 17];
       const skewX = items[b + 18];
+      const paletteRow = items[b + 19];
+      const atlasPage = items[b + 20];
 
       if (a <= 0.005 || w <= 0 || h <= 0) continue;
 
@@ -239,7 +355,7 @@ export class Canvas2DBackend implements IGpuBackend {
       } else if (mode > 0.5) {
         this.drawLightOrGlint(ctx, w, h, r, g, bl, param >= 9.5);
       } else {
-        this.drawAtlasSprite(ctx, w, h, u0, v0, u1, v1, r, g, bl, flash);
+        this.drawAtlasSprite(ctx, w, h, u0, v0, u1, v1, r, g, bl, flash, paletteRow, atlasPage);
       }
 
       ctx.restore();
@@ -341,6 +457,8 @@ export class Canvas2DBackend implements IGpuBackend {
     g: number,
     bl: number,
     flash: number,
+    paletteRow: number,
+    atlasPage = 0,
   ): void {
     const flipX = u0 > u1;
     const minU = Math.min(u0, u1);
@@ -349,19 +467,30 @@ export class Canvas2DBackend implements IGpuBackend {
     const sy = Math.max(0, Math.floor(v0 * this.atlasHeight));
     const sw = Math.max(1, Math.round((maxU - minU) * this.atlasWidth));
     const sh = Math.max(1, Math.round((v1 - v0) * this.atlasHeight));
+    const pageIdx = Math.round(atlasPage);
+    const srcAtlas =
+      pageIdx > 0 && pageIdx - 1 < this.extraPageCanvases.length
+        ? this.extraPageCanvases[pageIdx - 1]
+        : paletteRow >= 0
+          ? this.getAtlasForPaletteRow(paletteRow)
+          : this.atlasCanvas;
 
     if (flipX) ctx.scale(-1, 1);
 
     const needsTint = r < 0.98 || g < 0.98 || bl < 0.98 || flash > 0.05;
-    if (needsTint && sw <= 128 && sh <= 128) {
+    if (needsTint && sw <= 512 && sh <= 256) {
+      if (this.scratchCanvas.width < sw || this.scratchCanvas.height < sh) {
+        this.scratchCanvas.width = Math.max(this.scratchCanvas.width, sw);
+        this.scratchCanvas.height = Math.max(this.scratchCanvas.height, sh);
+      }
       const sctx = this.scratchCtx;
       sctx.clearRect(0, 0, sw, sh);
       sctx.globalCompositeOperation = 'source-over';
       sctx.imageSmoothingEnabled = false;
-      sctx.drawImage(this.atlasCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+      sctx.drawImage(srcAtlas, sx, sy, sw, sh, 0, 0, sw, sh);
       sctx.globalCompositeOperation = 'source-atop';
       if (flash > 0.05) {
-        sctx.fillStyle = `rgba(255,255,255,${Math.min(1, flash).toFixed(2)})`;
+        sctx.fillStyle = rgbCss(1, 1, 1, Math.min(1, flash));
       } else {
         sctx.fillStyle = rgbCss(r, g, bl, 0.55);
       }
@@ -369,12 +498,20 @@ export class Canvas2DBackend implements IGpuBackend {
       sctx.globalCompositeOperation = 'source-over';
       ctx.drawImage(this.scratchCanvas, 0, 0, sw, sh, -w * 0.5, -h * 0.5, w, h);
     } else {
-      ctx.drawImage(this.atlasCanvas, sx, sy, sw, sh, -w * 0.5, -h * 0.5, w, h);
+      ctx.drawImage(srcAtlas, sx, sy, sw, sh, -w * 0.5, -h * 0.5, w, h);
     }
   }
 
   public dispose(): void {
     this.atlasCanvas.width = 0;
     this.scratchCanvas.width = 0;
+    for (const c of this.extraPageCanvases) {
+      c.width = 0;
+    }
+    this.extraPageCanvases.length = 0;
+    for (const c of this.paletteRowCanvases.values()) {
+      c.width = 0;
+    }
+    this.paletteRowCanvases.clear();
   }
 }

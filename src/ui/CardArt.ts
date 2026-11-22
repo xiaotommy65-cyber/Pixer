@@ -83,6 +83,76 @@ const ART: Record<string, ArtSpec> = {
       { id: 'parkour_hero_dash', x: 8, y: 20, scale: 1.65 },
     ],
   },
+  'astral-deck': {
+    top: '#191134',
+    bottom: '#a78bfa',
+    ground: 'stone',
+    sprites: [
+      { id: 'astral_core', x: 34, y: 4, scale: 1.1 },
+      { id: 'relic_flame', x: 10, y: 8, scale: 0.95 },
+      { id: 'shield_icon', x: 58, y: 8, scale: 0.95 },
+      { id: 'dragon', x: 50, y: 18, scale: 1.45, flip: true },
+      { id: 'hero_a', x: 8, y: 20, scale: 1.6 },
+    ],
+  },
+  'atelier-brawler': {
+    top: '#251436',
+    bottom: '#ff9642',
+    ground: 'stone',
+    sprites: [
+      { id: 'sparkle', x: 35, y: 12, scale: 1.1 },
+      { id: 'sword_slash', x: 28, y: 16, scale: 1.25 },
+      { id: 'slime_knight', x: 52, y: 20, scale: 1.65, flip: true },
+      { id: 'parkour_hero_dash', x: 8, y: 20, scale: 1.65 },
+    ],
+  },
+  'labyrinth-dualview': {
+    top: '#0e0b22',
+    bottom: '#38bdf8',
+    ground: 'dungeon_floor',
+    sprites: [
+      { id: 'torch', x: 8, y: 8, scale: 1.0 },
+      { id: 'torch', x: 60, y: 8, scale: 1.0 },
+      { id: 'astral_core', x: 34, y: 6, scale: 1.1 },
+      { id: 'ember_warden', x: 46, y: 18, scale: 1.45, flip: true },
+      { id: 'sword_icon', x: 18, y: 22, scale: 1.4 },
+    ],
+  },
+  'skyward-forge': {
+    top: '#24143b',
+    bottom: '#ff9f43',
+    ground: 'stone',
+    sprites: [
+      { id: 'grapple_ring', x: 34, y: 4, scale: 1.0 },
+      { id: 'crystal_reset', x: 56, y: 10, scale: 1.0 },
+      { id: 'torch', x: 64, y: 24, scale: 1.0 },
+      { id: 'zip_block', x: 42, y: 26, scale: 1.1 },
+      { id: 'parkour_hero_dash', x: 8, y: 18, scale: 1.7 },
+    ],
+  },
+  'rhythm-bastion': {
+    top: '#0b1120',
+    bottom: '#1e293b',
+    ground: 'stone',
+    sprites: [
+      { id: 'crystal_reset', x: 12, y: 16, scale: 1.2 },
+      { id: 'grapple_ring', x: 34, y: 14, scale: 1.2 },
+      { id: 'torch', x: 58, y: 12, scale: 1.3 },
+      { id: 'star_a', x: 24, y: 32, scale: 1.0 },
+      { id: 'slime_a', x: 46, y: 28, scale: 1.1 },
+    ],
+  },
+  'astral-rift': {
+    top: '#0b1026',
+    bottom: '#38bdf8',
+    ground: 'stone',
+    sprites: [
+      { id: 'grapple_ring', x: 38, y: 6, scale: 1.15 },
+      { id: 'star_a', x: 24, y: 16, scale: 1.0 },
+      { id: 'astral_core', x: 58, y: 14, scale: 1.35 },
+      { id: 'hero_a', x: 10, y: 22, scale: 1.55 },
+    ],
+  },
 };
 
 const W = 80;

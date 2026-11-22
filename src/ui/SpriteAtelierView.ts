@@ -8,6 +8,8 @@ import {
   TILE_PX,
 } from '../assets/TextureAtlas.ts';
 import type { ToySynth } from '../core/audio/ToySynth.ts';
+import type { EcsCustomSpriteDef } from '../core/ecs/EcsProjectSchema.ts';
+import type { EcsMapLayerName } from '../core/ecs/EcsTilemapTypes.ts';
 import type { GpuEngine } from '../core/gpu/GpuEngine.ts';
 import { linearRgbToOklab, srgbToLinear } from '../core/math/ColorMath.ts';
 import type { SaveService } from '../core/runtime/SaveService.ts';
@@ -30,9 +32,43 @@ export function indicesToGrid(buf: Uint8Array, w = TILE_PX, h = TILE_PX): string
   return rows;
 }
 
+export interface PublishMapTileRequest {
+  sprite: EcsCustomSpriteDef;
+  name: string;
+  layer: EcsMapLayerName;
+  solid: boolean;
+  hazard: boolean;
+  extrudeH?: number;
+  renderH?: number;
+  ambientLight?: { radius: number; color: string; intensity: number };
+}
+
+export interface PublishPrefabStampRequest {
+  sprite: EcsCustomSpriteDef;
+  name: string;
+  solid: boolean;
+  ambientLight?: { radius: number; color: string; intensity: number };
+}
+
+export interface PublishActionResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface SpriteAtelierPublishBridge {
+  onPublishMapTile: (req: PublishMapTileRequest) => PublishActionResult;
+  onPublishPrefabStamp: (req: PublishPrefabStampRequest) => PublishActionResult;
+}
+
 type SlotKey = 'hero' | 'custom_enemy' | 'custom_item' | 'custom_tile' | 'studio_claw';
-type GridSize = 16 | 32;
+type GridPresetKey = '16x16' | '32x32' | '48x64';
 type PaintTool = 'pencil' | 'eraser' | 'fill' | 'eyedropper';
+
+const GRID_PRESETS: readonly { key: GridPresetKey; w: number; h: number; label: string }[] = [
+  { key: '16x16', w: 16, h: 16, label: '16×16' },
+  { key: '32x32', w: 32, h: 32, label: '32×32' },
+  { key: '48x64', w: 48, h: 64, label: '48×64' },
+];
 
 interface StampDef {
   id: string;
@@ -137,7 +173,8 @@ const BEVEL_PROMOTE_MAP: Readonly<Record<number, number>> = {
 
 interface SlotState {
   label: string;
-  gridSize: GridSize;
+  gridW: number;
+  gridH: number;
   frameCount: 2 | 3 | 4;
   frames: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
 }
@@ -145,7 +182,8 @@ interface SlotState {
 interface UndoEntry {
   slot: SlotKey;
   frameIdx: number;
-  gridSize: GridSize;
+  gridW: number;
+  gridH: number;
   data: Uint8Array;
 }
 
@@ -155,41 +193,30 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-function resampleBuffer(src: Uint8Array, oldSize: GridSize, newSize: GridSize): Uint8Array {
-  if (oldSize === newSize) return new Uint8Array(src);
-  const dst = new Uint8Array(newSize * newSize);
-  if (newSize > oldSize) {
-    for (let y = 0; y < oldSize; y++) {
-      for (let x = 0; x < oldSize; x++) {
-        const v = src[y * oldSize + x] ?? 0;
-        const dx = x * 2;
-        const dy = y * 2;
-        dst[dy * newSize + dx] = v;
-        dst[dy * newSize + dx + 1] = v;
-        dst[(dy + 1) * newSize + dx] = v;
-        dst[(dy + 1) * newSize + dx + 1] = v;
-      }
-    }
-    return dst;
-  }
-  for (let y = 0; y < newSize; y++) {
-    for (let x = 0; x < newSize; x++) {
-      const sx = x * 2;
-      const sy = y * 2;
-      const a = src[sy * oldSize + sx] ?? 0;
-      const b = src[sy * oldSize + sx + 1] ?? 0;
-      const c = src[(sy + 1) * oldSize + sx] ?? 0;
-      const d = src[(sy + 1) * oldSize + sx + 1] ?? 0;
-      dst[y * newSize + x] = a || b || c || d;
+function resampleBuffer(
+  src: Uint8Array,
+  oldW: number,
+  oldH: number,
+  newW: number,
+  newH: number,
+): Uint8Array {
+  if (oldW === newW && oldH === newH) return new Uint8Array(src);
+  const dst = new Uint8Array(newW * newH);
+  for (let y = 0; y < newH; y++) {
+    const sy = Math.min(oldH - 1, Math.floor((y * oldH) / newH));
+    for (let x = 0; x < newW; x++) {
+      const sx = Math.min(oldW - 1, Math.floor((x * oldW) / newW));
+      dst[y * newW + x] = src[sy * oldW + sx] ?? 0;
     }
   }
   return dst;
 }
 
 /**
- * Pixel Studio 3.0: HTML5 Canvas pixel editor supporting 16x16 / 32x32 grids,
+ * Pixel Studio 3.1: HTML5 Canvas pixel editor supporting 16x16 / 32x32 / 48x64 grids,
  * 2-4 frame animation, onion skin, mirror-X, 20-step undo, auto-outline/bevel,
- * PNG/AI image Oklab quantization import, and live HD-2D Auto-Sobel point-light preview.
+ * PNG/AI image Oklab quantization import, live HD-2D Auto-Sobel point-light preview,
+ * and one-click publishing directly into EcsMapDesigner tiles & prefabs.
  */
 export class SpriteAtelierView {
   public readonly element: HTMLElement;
@@ -198,6 +225,8 @@ export class SpriteAtelierView {
   private synth: ToySynth;
   private save: SaveService;
   private onHeroSaved?: () => void;
+  private publishBridge: SpriteAtelierPublishBridge | null = null;
+  private publishCounter = 1;
 
   private slots: Record<SlotKey, SlotState>;
   private activeSlot: SlotKey = 'hero';
@@ -237,9 +266,15 @@ export class SpriteAtelierView {
   private previewCtx: CanvasRenderingContext2D | null;
   private previewImgData: ImageData | null = null;
   private lightCoordEl: HTMLElement;
+  private publishNameInput: HTMLInputElement;
+  private publishLayerSelect: HTMLSelectElement;
+  private publishSolidCheck: HTMLInputElement;
+  private publishHazardCheck: HTMLInputElement;
+  private publishLightCheck: HTMLInputElement;
+  private publishStatusEl: HTMLElement;
 
-  private readonly texelHeightScratch = new Float32Array(32 * 32);
-  private readonly texelRgbScratch = new Uint8Array(32 * 32 * 4);
+  private readonly texelHeightScratch = new Float32Array(48 * 64);
+  private readonly texelRgbScratch = new Uint8Array(48 * 64 * 4);
   private readonly oklabPaletteScratch = new Float32Array(16 * 3);
   private readonly okTmp = new Float32Array(3);
 
@@ -252,17 +287,25 @@ export class SpriteAtelierView {
   private editEpoch = 0;
   private readonly ac = new AbortController();
 
-  constructor(gpu: GpuEngine, synth: ToySynth, save: SaveService, onHeroSaved?: () => void) {
+  constructor(
+    gpu: GpuEngine,
+    synth: ToySynth,
+    save: SaveService,
+    onHeroSaved?: () => void,
+    publishBridge?: SpriteAtelierPublishBridge,
+  ) {
     this.gpu = gpu;
     this.synth = synth;
     this.save = save;
     this.onHeroSaved = onHeroSaved;
+    this.publishBridge = publishBridge ?? null;
     this.restoreFromStorage();
 
     this.slots = {
       hero: {
         label: '🧑 主角',
-        gridSize: 16,
+        gridW: 16,
+        gridH: 16,
         frameCount: 2,
         frames: [
           this.gpu.atlas.heroPixelsA,
@@ -273,7 +316,8 @@ export class SpriteAtelierView {
       },
       custom_enemy: {
         label: '👾 自訂敵人',
-        gridSize: 16,
+        gridW: 16,
+        gridH: 16,
         frameCount: 2,
         frames: [
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.slime_a ?? DEFAULT_HERO_FRAME_A),
@@ -284,7 +328,8 @@ export class SpriteAtelierView {
       },
       custom_item: {
         label: '⭐ 自訂道具',
-        gridSize: 16,
+        gridW: 16,
+        gridH: 16,
         frameCount: 2,
         frames: [
           parseGridToIndices(BUILTIN_SPRITE_GRIDS.star_a ?? DEFAULT_HERO_FRAME_A),
@@ -295,18 +340,20 @@ export class SpriteAtelierView {
       },
       custom_tile: {
         label: '🧱 自訂磚塊',
-        gridSize: 16,
+        gridW: 32,
+        gridH: 32,
         frameCount: 2,
         frames: [
-          parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
-          parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
-          parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
-          parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A),
+          resampleBuffer(parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A), 16, 16, 32, 32),
+          resampleBuffer(parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A), 16, 16, 32, 32),
+          resampleBuffer(parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A), 16, 16, 32, 32),
+          resampleBuffer(parseGridToIndices(BUILTIN_SPRITE_GRIDS.grass ?? DEFAULT_HERO_FRAME_A), 16, 16, 32, 32),
         ],
       },
       studio_claw: {
         label: '🦾 飛鉤機爪',
-        gridSize: 16,
+        gridW: 16,
+        gridH: 16,
         frameCount: 2,
         frames: [
           parseGridToIndices(PARKOUR_SPRITE_GRIDS.ik_claw),
@@ -322,8 +369,8 @@ export class SpriteAtelierView {
     const head = el('div', 'studio-head');
     head.innerHTML = `
       <div>
-        <h2>🎨 精靈畫室 3.0（16×16 / 32×32 HD-2D 像素工坊）</h2>
-        <p class="studio-sub">支援雙尺寸畫布、PNG/AI 圖片 Oklab 量化匯入、自動描邊立體化與即時法線點光源預覽！</p>
+        <h2>🎨 精靈畫室 3.1（16×16 / 32×32 / 48×64 HD-2D 像素工坊）</h2>
+        <p class="studio-sub">支援多尺寸畫布、PNG 圖片 Oklab 量化匯入、自動描邊立體化、法線打光預覽，並可一鍵發佈為地圖瓦片與物件印章！</p>
       </div>
     `;
 
@@ -351,7 +398,7 @@ export class SpriteAtelierView {
     this.sizeBtn = btn(
       'toy-btn is-mint',
       '📐 16×16',
-      '切換目前槽位解析度：16×16 ⇄ 32×32（自動雙倍像素縮放保留）',
+      '循環切換目前槽位解析度：16×16 → 32×32 → 48×64（自動保留像素縮放）',
       () => this.toggleSlotGridSize(),
       this.ac.signal,
     );
@@ -430,18 +477,21 @@ export class SpriteAtelierView {
     const resolveCellFromClient = (clientX: number, clientY: number): { x: number; y: number } | null => {
       const rect = this.boardCanvas.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) return null;
-      const n = this.slots[this.activeSlot].gridSize;
-      const x = Math.floor(((clientX - rect.left) / rect.width) * n);
-      const y = Math.floor(((clientY - rect.top) / rect.height) * n);
-      if (x < 0 || x >= n || y < 0 || y >= n) return null;
+      const slot = this.slots[this.activeSlot];
+      const { ox, oy, cellPx } = this.getBoardLayout(slot.gridW, slot.gridH);
+      const canvasX = ((clientX - rect.left) / rect.width) * BOARD_CANVAS_PX;
+      const canvasY = ((clientY - rect.top) / rect.height) * BOARD_CANVAS_PX;
+      const x = Math.floor((canvasX - ox) / cellPx);
+      const y = Math.floor((canvasY - oy) / cellPx);
+      if (x < 0 || x >= slot.gridW || y < 0 || y >= slot.gridH) return null;
       return { x, y };
     };
 
     const paintFromEvent = (clientX: number, clientY: number, altKey: boolean, rightBtn: boolean) => {
       const cell = resolveCellFromClient(clientX, clientY);
       if (!cell) return;
-      const n = this.slots[this.activeSlot].gridSize;
-      const key = cell.y * n + cell.x;
+      const slot = this.slots[this.activeSlot];
+      const key = cell.y * slot.gridW + cell.x;
       if (key === lastPaintedKey) return;
       lastPaintedKey = key;
 
@@ -759,7 +809,79 @@ export class SpriteAtelierView {
     addPresetBtn('🍯 蜂蜜小熊', BEAR_PRESET_A, BEAR_PRESET_B);
     addPresetBtn('🧣 緋空跑酷俠', PARKOUR_SPRITE_GRIDS.parkour_hero_idle, PARKOUR_SPRITE_GRIDS.parkour_hero_dash);
 
-    sidebar.append(previewCard, paletteGrid, tools, proRow, stampRow, presetRow);
+    // One-Click Publish to Workstation Map Designer (M1)
+    const publishCard = el('div', 'atelier-publish-card');
+    const pubTitle = el('strong', 'atelier-publish-title', '🚀 一鍵發佈至工作站地圖 (動態 GPU 圖集)');
+
+    const pubForm = el('div', 'atelier-publish-grid');
+    this.publishNameInput = el('input', 'atelier-input');
+    this.publishNameInput.type = 'text';
+    this.publishNameInput.placeholder = '自訂資產名稱（例：翠玉地磚）';
+    this.publishNameInput.value = '自訂像素磚 #1';
+    this.publishNameInput.setAttribute('aria-label', '自訂資產名稱');
+
+    this.publishLayerSelect = el('select', 'atelier-select');
+    this.publishLayerSelect.setAttribute('aria-label', '目標地圖圖層');
+    const layerOpts: [EcsMapLayerName, string][] = [
+      ['ground', '圖層：地板 (ground)'],
+      ['wall', '圖層：立體城牆 (wall · 20px)'],
+      ['decor', '圖層：裝飾 (decor)'],
+    ];
+    for (const [val, text] of layerOpts) {
+      const o = el('option');
+      o.value = val;
+      o.textContent = text;
+      this.publishLayerSelect.appendChild(o);
+    }
+    this.publishLayerSelect.addEventListener(
+      'change',
+      () => {
+        if (this.publishLayerSelect.value === 'wall') {
+          this.publishSolidCheck.checked = true;
+        }
+      },
+      { signal: this.ac.signal },
+    );
+    pubForm.append(this.publishNameInput, this.publishLayerSelect);
+
+    const flagsRow = el('div', 'atelier-publish-flags');
+    const mkFlag = (labelText: string, checked: boolean): HTMLInputElement => {
+      const lbl = el('label', 'atelier-flag-label');
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      lbl.append(cb, document.createTextNode(labelText));
+      flagsRow.appendChild(lbl);
+      return cb;
+    };
+    this.publishSolidCheck = mkFlag('實體碰撞', false);
+    this.publishHazardCheck = mkFlag('傷害陷阱', false);
+    this.publishLightCheck = mkFlag('附帶光源', false);
+
+    const pubBtns = el('div', 'tool-row atelier-publish-actions');
+    const pubTileBtn = btn(
+      'toy-btn is-honey',
+      '🧩 發佈為地圖瓦片',
+      '將目前畫布即時編譯進動態 GPU 圖集並加入地圖瓦片盤',
+      () => this.handlePublishMapTile(),
+      this.ac.signal,
+    );
+    pubTileBtn.setAttribute('data-atelier-publish-tile', 'true');
+
+    const pubPrefabBtn = btn(
+      'toy-btn is-mint',
+      '📌 發佈為物件印章',
+      '將目前畫布即時編譯並註冊為可放置的 ECS Prefab 印章',
+      () => this.handlePublishPrefabStamp(),
+      this.ac.signal,
+    );
+    pubPrefabBtn.setAttribute('data-atelier-publish-prefab', 'true');
+
+    pubBtns.append(pubTileBtn, pubPrefabBtn);
+    this.publishStatusEl = el('div', 'studio-sub atelier-publish-status', '支援 16×16 / 32×32 / 48×64 即時熱編譯，無需重開專案。');
+    publishCard.append(pubTitle, pubForm, flagsRow, pubBtns, this.publishStatusEl);
+
+    sidebar.append(previewCard, paletteGrid, tools, proRow, stampRow, presetRow, publishCard);
     layout.append(boardWrap, sidebar);
     this.element.append(head, layout);
 
@@ -786,7 +908,106 @@ export class SpriteAtelierView {
     return this.editEpoch;
   }
 
-  /** Packages current Sprite Studio slots into CartridgeJsonV1.sprites grids (16x16 or 32x32). */
+  public setPublishBridge(bridge: SpriteAtelierPublishBridge | null): void {
+    this.publishBridge = bridge;
+  }
+
+  /** Switches editor to the custom tile slot at 32x32 (or custom size) for immediate tile authoring. */
+  public prepareForMapTile(width = 32, height = 32, defaultLayer: EcsMapLayerName = 'ground'): void {
+    this.activeSlot = 'custom_tile';
+    this.activeFrameIdx = 0;
+    this.applySlotGridSize('custom_tile', width, height);
+    this.publishLayerSelect.value = defaultLayer;
+    this.publishSolidCheck.checked = defaultLayer === 'wall';
+    this.publishHazardCheck.checked = false;
+    this.publishNameInput.value = `自訂像素磚 #${this.publishCounter}`;
+    this.publishStatusEl.textContent = `已切換至 ${width}×${height} 瓦片槽位，繪製後可一鍵發佈。`;
+    this.syncToolbarState();
+    this.renderBoard();
+  }
+
+  private buildCurrentCustomSpriteDef(prefix: string, displayName: string): EcsCustomSpriteDef {
+    const slot = this.slots[this.activeSlot];
+    const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
+    const id = `${prefix}_${Date.now().toString(36)}_${this.publishCounter++}`;
+    return {
+      id,
+      name: displayName,
+      width: slot.gridW,
+      height: slot.gridH,
+      kind: 'grid',
+      paletteRow: this.selectedThemeIdx,
+      palette: [...theme.colors],
+      pixels: indicesToGrid(this.getCurrentBuffer(), slot.gridW, slot.gridH),
+    };
+  }
+
+  private handlePublishMapTile(): void {
+    if (!this.publishBridge) {
+      this.publishStatusEl.textContent = '工作站發佈通道未連線';
+      return;
+    }
+    const slot = this.slots[this.activeSlot];
+    const layer = (this.publishLayerSelect.value as EcsMapLayerName) || 'ground';
+    const rawName = this.publishNameInput.value.trim() || `自訂瓦片 #${this.publishCounter}`;
+    const sprite = this.buildCurrentCustomSpriteDef('atelier_tile', rawName);
+    const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
+    const lightHex = theme.colors[14] || theme.colors[15] || '#ffd447';
+    const res = this.publishBridge.onPublishMapTile({
+      sprite,
+      name: rawName,
+      layer,
+      solid: this.publishSolidCheck.checked || layer === 'wall',
+      hazard: this.publishHazardCheck.checked,
+      ...(layer === 'wall' ? { extrudeH: 20 } : {}),
+      ...(layer === 'decor' && slot.gridH > 32 ? { renderH: Math.min(64, slot.gridH) } : {}),
+      ...(this.publishLightCheck.checked
+        ? { ambientLight: { radius: 96, color: lightHex, intensity: 0.72 } }
+        : {}),
+    });
+    this.synth.unlock();
+    this.synth.playPreset(res.ok ? 'star' : 'snap');
+    this.publishStatusEl.textContent = res.message;
+    if (res.ok) {
+      this.publishNameInput.value = `自訂像素磚 #${this.publishCounter}`;
+    }
+  }
+
+  private handlePublishPrefabStamp(): void {
+    if (!this.publishBridge) {
+      this.publishStatusEl.textContent = '工作站發佈通道未連線';
+      return;
+    }
+    const rawName = this.publishNameInput.value.trim() || `自訂物件 #${this.publishCounter}`;
+    const sprite = this.buildCurrentCustomSpriteDef('atelier_prop', rawName);
+    const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
+    const lightHex = theme.colors[14] || theme.colors[15] || '#ffd447';
+    const res = this.publishBridge.onPublishPrefabStamp({
+      sprite,
+      name: rawName,
+      solid: this.publishSolidCheck.checked,
+      ...(this.publishLightCheck.checked
+        ? { ambientLight: { radius: 96, color: lightHex, intensity: 0.72 } }
+        : {}),
+    });
+    this.synth.unlock();
+    this.synth.playPreset(res.ok ? 'star' : 'snap');
+    this.publishStatusEl.textContent = res.message;
+    if (res.ok) {
+      this.publishNameInput.value = `自訂物件 #${this.publishCounter}`;
+    }
+  }
+
+  private getBoardLayout(gridW: number, gridH: number): { ox: number; oy: number; cellPx: number; drawW: number; drawH: number } {
+    const cellPx = Math.floor(Math.min(BOARD_CANVAS_PX / gridW, BOARD_CANVAS_PX / gridH));
+    const drawW = cellPx * gridW;
+    const drawH = cellPx * gridH;
+    const ox = Math.floor((BOARD_CANVAS_PX - drawW) * 0.5);
+    const oy = Math.floor((BOARD_CANVAS_PX - drawH) * 0.5);
+    return { ox, oy, cellPx, drawW, drawH };
+  }
+
+  /** Packages current Sprite Studio slots into CartridgeJsonV1.sprites grids (16x16, 32x32, or 48x64). */
   public exportCartridgeSprites(): Record<string, string[]> {
     const out: Record<string, string[]> = {};
     const prefixMap: Record<SlotKey, string> = {
@@ -802,10 +1023,10 @@ export class SpriteAtelierView {
       const count = key === 'custom_tile' ? 1 : slot.frameCount;
       for (let i = 0; i < count; i++) {
         const sid = key === 'custom_tile' ? prefixMap[key] : `${prefixMap[key]}_${suffixes[i]}`;
-        out[sid] = indicesToGrid(slot.frames[i], slot.gridSize, slot.gridSize);
+        out[sid] = indicesToGrid(slot.frames[i], slot.gridW, slot.gridH);
       }
       if (key === 'studio_claw') {
-        out.studio_claw = indicesToGrid(slot.frames[0], slot.gridSize, slot.gridSize);
+        out.studio_claw = indicesToGrid(slot.frames[0], slot.gridW, slot.gridH);
       }
     }
     return out;
@@ -817,39 +1038,43 @@ export class SpriteAtelierView {
 
   private ensureHeroSize16(): void {
     const hero = this.slots.hero;
-    if (hero.gridSize === 16) return;
-    const f0 = resampleBuffer(hero.frames[0], 32, 16);
-    const f1 = resampleBuffer(hero.frames[1], 32, 16);
-    const f2 = resampleBuffer(hero.frames[2], 32, 16);
-    const f3 = resampleBuffer(hero.frames[3], 32, 16);
+    if (hero.gridW === 16 && hero.gridH === 16) return;
+    const f0 = resampleBuffer(hero.frames[0], hero.gridW, hero.gridH, 16, 16);
+    const f1 = resampleBuffer(hero.frames[1], hero.gridW, hero.gridH, 16, 16);
+    const f2 = resampleBuffer(hero.frames[2], hero.gridW, hero.gridH, 16, 16);
+    const f3 = resampleBuffer(hero.frames[3], hero.gridW, hero.gridH, 16, 16);
     this.gpu.atlas.heroPixelsA.set(f0);
     this.gpu.atlas.heroPixelsB.set(f1);
-    hero.gridSize = 16;
+    hero.gridW = 16;
+    hero.gridH = 16;
     hero.frames = [this.gpu.atlas.heroPixelsA, this.gpu.atlas.heroPixelsB, f2, f3];
   }
 
-  private applySlotGridSize(slotKey: SlotKey, targetSize: GridSize): void {
+  private applySlotGridSize(slotKey: SlotKey, targetW: number, targetH: number): void {
     const slot = this.slots[slotKey];
-    if (slot.gridSize === targetSize) return;
-    if (slotKey === 'hero' && targetSize === 16) {
+    if (slot.gridW === targetW && slot.gridH === targetH) return;
+    if (slotKey === 'hero' && targetW === 16 && targetH === 16) {
       this.ensureHeroSize16();
       return;
     }
-    const oldSize = slot.gridSize;
+    const oldW = slot.gridW;
+    const oldH = slot.gridH;
     slot.frames = [
-      resampleBuffer(slot.frames[0], oldSize, targetSize),
-      resampleBuffer(slot.frames[1], oldSize, targetSize),
-      resampleBuffer(slot.frames[2], oldSize, targetSize),
-      resampleBuffer(slot.frames[3], oldSize, targetSize),
+      resampleBuffer(slot.frames[0], oldW, oldH, targetW, targetH),
+      resampleBuffer(slot.frames[1], oldW, oldH, targetW, targetH),
+      resampleBuffer(slot.frames[2], oldW, oldH, targetW, targetH),
+      resampleBuffer(slot.frames[3], oldW, oldH, targetW, targetH),
     ];
-    slot.gridSize = targetSize;
+    slot.gridW = targetW;
+    slot.gridH = targetH;
   }
 
   private toggleSlotGridSize(): void {
     const slot = this.slots[this.activeSlot];
-    const nextSize: GridSize = slot.gridSize === 16 ? 32 : 16;
+    const curIdx = GRID_PRESETS.findIndex((p) => p.w === slot.gridW && p.h === slot.gridH);
+    const next = GRID_PRESETS[(curIdx + 1) % GRID_PRESETS.length];
     this.saveUndoSnapshot();
-    this.applySlotGridSize(this.activeSlot, nextSize);
+    this.applySlotGridSize(this.activeSlot, next.w, next.h);
     this.synth.unlock();
     this.synth.playPreset('bounce');
     this.commitAtlasUpdate(true);
@@ -862,7 +1087,8 @@ export class SpriteAtelierView {
     this.undoStack.push({
       slot: this.activeSlot,
       frameIdx: this.activeFrameIdx,
-      gridSize: slot.gridSize,
+      gridW: slot.gridW,
+      gridH: slot.gridH,
       data: new Uint8Array(this.getCurrentBuffer()),
     });
     if (this.undoStack.length > MAX_UNDO_STEPS) {
@@ -876,7 +1102,7 @@ export class SpriteAtelierView {
     if (!snap) return;
     this.activeSlot = snap.slot;
     this.activeFrameIdx = snap.frameIdx;
-    this.applySlotGridSize(snap.slot, snap.gridSize);
+    this.applySlotGridSize(snap.slot, snap.gridW, snap.gridH);
     this.slots[snap.slot].frames[snap.frameIdx].set(snap.data);
     this.synth.playPreset('snap');
     this.commitAtlasUpdate(true);
@@ -885,8 +1111,8 @@ export class SpriteAtelierView {
   }
 
   private pickColorAt(x: number, y: number): void {
-    const n = this.slots[this.activeSlot].gridSize;
-    const idx = this.getCurrentBuffer()[y * n + x] ?? 0;
+    const slot = this.slots[this.activeSlot];
+    const idx = this.getCurrentBuffer()[y * slot.gridW + x] ?? 0;
     this.selectedColor = idx;
     this.activeStamp = null;
     this.activeTool = idx === 0 ? 'eraser' : 'pencil';
@@ -896,7 +1122,9 @@ export class SpriteAtelierView {
   }
 
   private applyStampAt(buf: Uint8Array, cx: number, cy: number, stamp: StampDef): void {
-    const n = this.slots[this.activeSlot].gridSize;
+    const slot = this.slots[this.activeSlot];
+    const gw = slot.gridW;
+    const gh = slot.gridH;
     const sh = stamp.grid.length;
     const sw = stamp.grid[0]?.length ?? 0;
     const ox = cx - Math.floor(sw / 2);
@@ -908,10 +1136,10 @@ export class SpriteAtelierView {
         if (colorIdx === 0) continue;
         const tx = ox + x;
         const ty = oy + y;
-        if (tx >= 0 && tx < n && ty >= 0 && ty < n) {
-          buf[ty * n + tx] = colorIdx;
+        if (tx >= 0 && tx < gw && ty >= 0 && ty < gh) {
+          buf[ty * gw + tx] = colorIdx;
           if (this.mirrorX) {
-            buf[ty * n + (n - 1 - tx)] = colorIdx;
+            buf[ty * gw + (gw - 1 - tx)] = colorIdx;
           }
         }
       }
@@ -920,18 +1148,20 @@ export class SpriteAtelierView {
 
   private applyPaintAt(x: number, y: number, forceErase = false): void {
     const buf = this.getCurrentBuffer();
-    const n = this.slots[this.activeSlot].gridSize;
+    const slot = this.slots[this.activeSlot];
+    const gw = slot.gridW;
+    const gh = slot.gridH;
     if (this.activeStamp && !forceErase) {
       this.applyStampAt(buf, x, y, this.activeStamp);
       this.synth.playPreset('star');
     } else if (this.activeTool === 'fill' && !forceErase) {
-      this.floodFill(buf, n, x, y, this.selectedColor);
+      this.floodFill(buf, gw, gh, x, y, this.selectedColor);
       this.synth.playPreset('bounce');
     } else {
       const paintIdx = forceErase || this.activeTool === 'eraser' ? 0 : this.selectedColor;
-      buf[y * n + x] = paintIdx;
+      buf[y * gw + x] = paintIdx;
       if (this.mirrorX) {
-        buf[y * n + (n - 1 - x)] = paintIdx;
+        buf[y * gw + (gw - 1 - x)] = paintIdx;
       }
       this.synth.playPreset('snap');
     }
@@ -939,37 +1169,39 @@ export class SpriteAtelierView {
     this.renderBoard();
   }
 
-  private floodFill(buf: Uint8Array, n: number, sx: number, sy: number, targetColor: number): void {
-    const orig = buf[sy * n + sx];
+  private floodFill(buf: Uint8Array, gw: number, gh: number, sx: number, sy: number, targetColor: number): void {
+    const orig = buf[sy * gw + sx];
     if (orig === targetColor) return;
     const queue: [number, number][] = [[sx, sy]];
     while (queue.length > 0) {
       const [cx, cy] = queue.pop()!;
-      const idx = cy * n + cx;
+      const idx = cy * gw + cx;
       if (buf[idx] !== orig) continue;
       buf[idx] = targetColor;
       if (cx > 0) queue.push([cx - 1, cy]);
-      if (cx < n - 1) queue.push([cx + 1, cy]);
+      if (cx < gw - 1) queue.push([cx + 1, cy]);
       if (cy > 0) queue.push([cx, cy - 1]);
-      if (cy < n - 1) queue.push([cx, cy + 1]);
+      if (cy < gh - 1) queue.push([cx, cy + 1]);
     }
   }
 
   private applyAutoOutlineAndBevel(): void {
-    const n = this.slots[this.activeSlot].gridSize;
+    const slot = this.slots[this.activeSlot];
+    const gw = slot.gridW;
+    const gh = slot.gridH;
     const buf = this.getCurrentBuffer();
     this.saveUndoSnapshot();
     const snap = new Uint8Array(buf);
     let changed = false;
 
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        const i = y * n + x;
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const i = y * gw + x;
         if (snap[i] !== 0) continue;
-        const up = y > 0 ? snap[(y - 1) * n + x] : 0;
-        const dn = y < n - 1 ? snap[(y + 1) * n + x] : 0;
-        const lf = x > 0 ? snap[y * n + x - 1] : 0;
-        const rt = x < n - 1 ? snap[y * n + x + 1] : 0;
+        const up = y > 0 ? snap[(y - 1) * gw + x] : 0;
+        const dn = y < gh - 1 ? snap[(y + 1) * gw + x] : 0;
+        const lf = x > 0 ? snap[y * gw + x - 1] : 0;
+        const rt = x < gw - 1 ? snap[y * gw + x + 1] : 0;
         if (up > 1 || dn > 1 || lf > 1 || rt > 1) {
           buf[i] = 1;
           changed = true;
@@ -978,15 +1210,15 @@ export class SpriteAtelierView {
     }
 
     const postOutline = new Uint8Array(buf);
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        const i = y * n + x;
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const i = y * gw + x;
         const cur = postOutline[i];
         if (cur <= 1) continue;
-        const up = y > 0 ? postOutline[(y - 1) * n + x] : 0;
-        const lf = x > 0 ? postOutline[y * n + x - 1] : 0;
-        const dn = y < n - 1 ? postOutline[(y + 1) * n + x] : 0;
-        const rt = x < n - 1 ? postOutline[y * n + x + 1] : 0;
+        const up = y > 0 ? postOutline[(y - 1) * gw + x] : 0;
+        const lf = x > 0 ? postOutline[y * gw + x - 1] : 0;
+        const dn = y < gh - 1 ? postOutline[(y + 1) * gw + x] : 0;
+        const rt = x < gw - 1 ? postOutline[y * gw + x + 1] : 0;
         const exposedTopLeft = up <= 1 || lf <= 1;
         const supportedBotRight = dn > 1 || rt > 1;
         if (exposedTopLeft && supportedBotRight) {
@@ -1094,23 +1326,25 @@ export class SpriteAtelierView {
         return;
       }
 
-      const n = this.slots[this.activeSlot].gridSize;
+      const slot = this.slots[this.activeSlot];
+      const gw = slot.gridW;
+      const gh = slot.gridH;
       const dstCanvas = document.createElement('canvas');
-      dstCanvas.width = n;
-      dstCanvas.height = n;
+      dstCanvas.width = gw;
+      dstCanvas.height = gh;
       const dstCtx = dstCanvas.getContext('2d');
       if (!dstCtx) return;
 
       const cropW = maxX - minX + 1;
       const cropH = maxY - minY + 1;
-      const fitScale = Math.min(n / cropW, n / cropH);
+      const fitScale = Math.min(gw / cropW, gh / cropH);
       const dw = Math.max(1, Math.round(cropW * fitScale));
       const dh = Math.max(1, Math.round(cropH * fitScale));
-      const dx = Math.floor((n - dw) * 0.5);
-      const dy = Math.floor((n - dh) * 0.5);
-      dstCtx.imageSmoothingEnabled = Math.max(cropW, cropH) > n * 2;
+      const dx = Math.floor((gw - dw) * 0.5);
+      const dy = Math.floor((gh - dh) * 0.5);
+      dstCtx.imageSmoothingEnabled = Math.max(cropW, cropH) > Math.max(gw, gh) * 2;
       dstCtx.drawImage(srcCanvas, minX, minY, cropW, cropH, dx, dy, dw, dh);
-      const qData = dstCtx.getImageData(0, 0, n, n).data;
+      const qData = dstCtx.getImageData(0, 0, gw, gh).data;
 
       // Precompute Oklab coordinates for active LUT theme indices 1..15
       const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
@@ -1127,7 +1361,7 @@ export class SpriteAtelierView {
 
       this.saveUndoSnapshot();
       const targetBuf = this.getCurrentBuffer();
-      for (let i = 0; i < n * n; i++) {
+      for (let i = 0; i < gw * gh; i++) {
         const off = i * 4;
         if (qData[off + 3] < 96) {
           targetBuf[i] = 0;
@@ -1161,7 +1395,7 @@ export class SpriteAtelierView {
       this.commitAtlasUpdate();
       this.syncToolbarState();
       this.renderBoard();
-      this.importStatusEl.textContent = `已匯入 ${n}×${n} Oklab 量化`;
+      this.importStatusEl.textContent = `已匯入 ${gw}×${gh} Oklab 量化`;
     } catch {
       this.importStatusEl.textContent = '圖片解析失敗';
     }
@@ -1199,7 +1433,8 @@ export class SpriteAtelierView {
     const hero = this.slots.hero;
     if (
       this.activeSlot === 'hero' &&
-      hero.gridSize === 16 &&
+      hero.gridW === 16 &&
+      hero.gridH === 16 &&
       (forceHeroSync || this.activeFrameIdx === 0 || this.activeFrameIdx === 1)
     ) {
       this.gpu.atlas.syncHeroSlots();
@@ -1244,8 +1479,8 @@ export class SpriteAtelierView {
     for (const [key, b] of this.slotBtns.entries()) {
       b.classList.toggle('is-active', key === this.activeSlot);
     }
-    this.sizeBtn.textContent = `📐 ${slot.gridSize}×${slot.gridSize}`;
-    this.sizeBtn.classList.toggle('is-active', slot.gridSize === 32);
+    this.sizeBtn.textContent = `📐 ${slot.gridW}×${slot.gridH}`;
+    this.sizeBtn.classList.toggle('is-active', slot.gridW !== 16 || slot.gridH !== 16);
     this.frameCountSelect.value = String(slot.frameCount);
     this.frameBtns.forEach((b, i) => {
       b.classList.toggle('panel-hidden', i >= slot.frameCount);
@@ -1277,22 +1512,26 @@ export class SpriteAtelierView {
     if (!ctx) return;
 
     const slot = this.slots[this.activeSlot];
-    const n = slot.gridSize;
-    const cellPx = BOARD_CANVAS_PX / n;
+    const gw = slot.gridW;
+    const gh = slot.gridH;
+    const { ox, oy, cellPx, drawW, drawH } = this.getBoardLayout(gw, gh);
     const buf = this.getCurrentBuffer();
     const prevIdx = (this.activeFrameIdx - 1 + slot.frameCount) % slot.frameCount;
     const prevBuf =
       this.onionSkin && slot.frameCount > 1 && prevIdx !== this.activeFrameIdx ? slot.frames[prevIdx] : null;
     const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
 
-    for (let y = 0; y < n; y++) {
-      for (let x = 0; x < n; x++) {
-        const px = x * cellPx;
-        const py = y * cellPx;
+    ctx.fillStyle = '#18141d';
+    ctx.fillRect(0, 0, BOARD_CANVAS_PX, BOARD_CANVAS_PX);
+
+    for (let y = 0; y < gh; y++) {
+      for (let x = 0; x < gw; x++) {
+        const px = ox + x * cellPx;
+        const py = oy + y * cellPx;
         ctx.fillStyle = (x + y) % 2 === 0 ? '#faf3e5' : '#efe4cf';
         ctx.fillRect(px, py, cellPx, cellPx);
 
-        const i = y * n + x;
+        const i = y * gw + x;
         const idx = buf[i] ?? 0;
         if (idx > 0) {
           ctx.fillStyle = theme.colors[idx] ?? '#ffffff';
@@ -1317,33 +1556,37 @@ export class SpriteAtelierView {
     ctx.strokeStyle = 'rgba(56, 40, 32, 0.1)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let g = 1; g < n; g++) {
-      const pos = g * cellPx + 0.5;
-      ctx.moveTo(pos, 0);
-      ctx.lineTo(pos, BOARD_CANVAS_PX);
-      ctx.moveTo(0, pos);
-      ctx.lineTo(BOARD_CANVAS_PX, pos);
+    for (let gx = 1; gx < gw; gx++) {
+      const pos = ox + gx * cellPx + 0.5;
+      ctx.moveTo(pos, oy);
+      ctx.lineTo(pos, oy + drawH);
+    }
+    for (let gy = 1; gy < gh; gy++) {
+      const pos = oy + gy * cellPx + 0.5;
+      ctx.moveTo(ox, pos);
+      ctx.lineTo(ox + drawW, pos);
     }
     ctx.stroke();
 
-    const mid = BOARD_CANVAS_PX * 0.5 + 0.5;
+    const midX = ox + drawW * 0.5 + 0.5;
+    const midY = oy + drawH * 0.5 + 0.5;
     ctx.strokeStyle = this.mirrorX ? 'rgba(255, 93, 143, 0.55)' : 'rgba(56, 40, 32, 0.2)';
     ctx.beginPath();
-    ctx.moveTo(mid, 0);
-    ctx.lineTo(mid, BOARD_CANVAS_PX);
-    ctx.moveTo(0, mid);
-    ctx.lineTo(BOARD_CANVAS_PX, mid);
+    ctx.moveTo(midX, oy);
+    ctx.lineTo(midX, oy + drawH);
+    ctx.moveTo(ox, midY);
+    ctx.lineTo(ox + drawW, midY);
     ctx.stroke();
 
-    if (this.hoverX >= 0 && this.hoverX < n && this.hoverY >= 0 && this.hoverY < n) {
+    if (this.hoverX >= 0 && this.hoverX < gw && this.hoverY >= 0 && this.hoverY < gh) {
       ctx.strokeStyle = '#ff5d8f';
       ctx.lineWidth = 2;
-      ctx.strokeRect(this.hoverX * cellPx + 1, this.hoverY * cellPx + 1, cellPx - 2, cellPx - 2);
+      ctx.strokeRect(ox + this.hoverX * cellPx + 1, oy + this.hoverY * cellPx + 1, cellPx - 2, cellPx - 2);
       if (this.mirrorX) {
-        const mx = n - 1 - this.hoverX;
+        const mx = gw - 1 - this.hoverX;
         if (mx !== this.hoverX) {
           ctx.strokeStyle = 'rgba(94, 194, 247, 0.85)';
-          ctx.strokeRect(mx * cellPx + 1, this.hoverY * cellPx + 1, cellPx - 2, cellPx - 2);
+          ctx.strokeRect(ox + mx * cellPx + 1, oy + this.hoverY * cellPx + 1, cellPx - 2, cellPx - 2);
         }
       }
     }
@@ -1363,12 +1606,13 @@ export class SpriteAtelierView {
     if (!ctx || !img) return;
 
     const slot = this.slots[this.activeSlot];
-    const n = slot.gridSize;
+    const gw = slot.gridW;
+    const gh = slot.gridH;
     const frameIdx = Math.floor(this.animPhase) % slot.frameCount;
     const buf = slot.frames[frameIdx];
     const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
 
-    for (let i = 0; i < n * n; i++) {
+    for (let i = 0; i < gw * gh; i++) {
       const idx = buf[i] ?? 0;
       const p = i * 4;
       if (idx === 0) {
@@ -1392,9 +1636,14 @@ export class SpriteAtelierView {
     const lightPx = (this.lightNormX * 0.5 + 0.5) * PREVIEW_CANVAS_PX;
     const lightPy = (this.lightNormY * 0.5 + 0.5) * PREVIEW_CANVAS_PX;
     const lightZ = 34;
-    const spriteSize = 64;
-    const margin = (PREVIEW_CANVAS_PX - spriteSize) * 0.5;
-    const texScale = n / spriteSize;
+    const maxBox = 72;
+    const fit = Math.min(maxBox / gw, maxBox / gh);
+    const drawW = Math.max(1, Math.round(gw * fit));
+    const drawH = Math.max(1, Math.round(gh * fit));
+    const marginX = (PREVIEW_CANVAS_PX - drawW) * 0.5;
+    const marginY = (PREVIEW_CANVAS_PX - drawH) * 0.5;
+    const texScaleX = gw / drawW;
+    const texScaleY = gh / drawH;
     const out = img.data;
 
     for (let py = 0; py < PREVIEW_CANVAS_PX; py++) {
@@ -1409,18 +1658,18 @@ export class SpriteAtelierView {
         let bgG = 19 + halo * 28;
         let bgB = 46 + halo * 52;
 
-        const sx = px - margin;
-        const sy = py - margin;
-        if (sx >= 0 && sx < spriteSize && sy >= 0 && sy < spriteSize) {
-          const tx = Math.floor(sx * texScale);
-          const ty = Math.floor(sy * texScale);
-          const tIdx = ty * n + tx;
+        const sx = px - marginX;
+        const sy = py - marginY;
+        if (sx >= 0 && sx < drawW && sy >= 0 && sy < drawH) {
+          const tx = Math.min(gw - 1, Math.floor(sx * texScaleX));
+          const ty = Math.min(gh - 1, Math.floor(sy * texScaleY));
+          const tIdx = ty * gw + tx;
           const tOff = tIdx * 4;
           if (this.texelRgbScratch[tOff + 3] > 0) {
             const hL = tx > 0 ? this.texelHeightScratch[tIdx - 1] : 0;
-            const hR = tx < n - 1 ? this.texelHeightScratch[tIdx + 1] : 0;
-            const hU = ty > 0 ? this.texelHeightScratch[tIdx - n] : 0;
-            const hD = ty < n - 1 ? this.texelHeightScratch[tIdx + n] : 0;
+            const hR = tx < gw - 1 ? this.texelHeightScratch[tIdx + 1] : 0;
+            const hU = ty > 0 ? this.texelHeightScratch[tIdx - gw] : 0;
+            const hD = ty < gh - 1 ? this.texelHeightScratch[tIdx + gw] : 0;
             const gx = hR - hL;
             const gy = hD - hU;
             const nx = -gx * 1.4;
@@ -1445,7 +1694,7 @@ export class SpriteAtelierView {
             const spec = Math.pow(ndh, 12) * 0.35 * atten;
 
             const hC = this.texelHeightScratch[tIdx];
-            const hBR = tx < n - 1 && ty < n - 1 ? this.texelHeightScratch[tIdx + n + 1] : 0;
+            const hBR = tx < gw - 1 && ty < gh - 1 ? this.texelHeightScratch[tIdx + gw + 1] : 0;
             const rim = hC - hBR > 0.45 ? 0.14 * atten : 0;
             const glow = this.texelRgbScratch[tOff + 3] === 255 ? 0.22 : 0;
             const mul = diffuse + glow;

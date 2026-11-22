@@ -41,6 +41,7 @@ export class ToySynth implements SynthVoiceScheduler {
   private chargeOscSub: OscillatorNode | null = null;
   private chargeFilter: BiquadFilterNode | null = null;
   private chargeGain: GainNode | null = null;
+  private chargeRouteNode: AudioNode | null = null;
   private chargeReadyChimed = false;
 
   constructor() {
@@ -333,7 +334,7 @@ export class ToySynth implements SynthVoiceScheduler {
     oscMain.connect(filter);
     oscSub.connect(filter);
     filter.connect(gain);
-    this.bus.routeVoice(gain, 0, 0.18);
+    const routeNode = this.bus.routeVoice(gain, 0, 0.18);
 
     oscMain.start(now);
     oscSub.start(now);
@@ -342,6 +343,7 @@ export class ToySynth implements SynthVoiceScheduler {
     this.chargeOscSub = oscSub;
     this.chargeFilter = filter;
     this.chargeGain = gain;
+    this.chargeRouteNode = routeNode;
     this.chargeReadyChimed = false;
   }
 
@@ -381,10 +383,12 @@ export class ToySynth implements SynthVoiceScheduler {
     const oscSub = this.chargeOscSub;
     const filter = this.chargeFilter;
     const gain = this.chargeGain;
+    const routeNode = this.chargeRouteNode;
     this.chargeOscMain = null;
     this.chargeOscSub = null;
     this.chargeFilter = null;
     this.chargeGain = null;
+    this.chargeRouteNode = null;
     this.chargeReadyChimed = false;
 
     const ctx = this.bus.ctx;
@@ -399,6 +403,9 @@ export class ToySynth implements SynthVoiceScheduler {
             oscSub?.disconnect();
             filter?.disconnect();
             gain.disconnect();
+            if (routeNode && routeNode !== gain) {
+              routeNode.disconnect();
+            }
           } catch {
             // Ignore audio node disconnect errors during teardown
           }
@@ -407,6 +414,12 @@ export class ToySynth implements SynthVoiceScheduler {
         oscSub?.stop(now + 0.06);
       } catch {
         // Ignore already-stopped oscillator errors
+      }
+    } else if (routeNode) {
+      try {
+        routeNode.disconnect();
+      } catch {
+        // Ignore teardown errors
       }
     }
 

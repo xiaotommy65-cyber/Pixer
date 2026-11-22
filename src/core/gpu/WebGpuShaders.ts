@@ -39,17 +39,19 @@ struct SkyUniforms {
 };
 
 struct LightUniforms {
-  info: vec4f, // x: lightCount
+  info: vec4f,      // x: lightCount, y: occCols, z: occRows, w: occStrength
+  occParams: vec4f, // x: originScreenX, y: originScreenY, z: tileSizePx, w: occSoftness
   posRad: array<vec4f, 24>,
   colInt: array<vec4f, 24>,
 };
 
 @group(0) @binding(0) var<uniform> uSky: SkyUniforms;
-@group(0) @binding(1) var uAtlas: texture_2d<f32>;
+@group(0) @binding(1) var uAtlas: texture_2d_array<f32>;
 @group(0) @binding(2) var uSamp: sampler;
-@group(0) @binding(3) var uIndexAtlas: texture_2d<f32>;
+@group(0) @binding(3) var uIndexAtlas: texture_2d_array<f32>;
 @group(0) @binding(4) var uPaletteLut: texture_2d<f32>;
 @group(0) @binding(5) var<uniform> uLights: LightUniforms;
+@group(0) @binding(6) var uOcclusionTex: texture_2d<f32>;
 
 struct SkyOut {
   @builtin(position) pos: vec4f,
@@ -111,6 +113,7 @@ struct InstanceIn {
   @location(2) tint: vec4f,        // r, g, b, a
   @location(3) extra: vec4f,       // x: rot, y: mode (0..5), z: flash, w: param
   @location(4) deform: vec4f,      // x: pivotX, y: pivotY, z: skewX, w: paletteRow
+  @location(5) material: vec4f,    // x: atlasPage, y: roughness, z: metallic, w: emissive
 };
 
 struct SpriteOut {
@@ -124,6 +127,8 @@ struct SpriteOut {
   @location(6) uvBounds: vec4f,
   @location(7) paletteRow: f32,
   @location(8) screenPos: vec2f,
+  @location(9) material: vec4f,
+  @location(10) quadCenter: vec2f,
 };
 
 // Branchless 32-bit unsigned integer xxHash32-style mix (eliminates mobile FP16 sin() banding)
@@ -173,7 +178,77 @@ fn vsSprite(@builtin(vertex_index) vid: u32, inst: InstanceIn) -> SpriteOut {
   out.uvBounds = inst.uvBounds;
   out.paletteRow = inst.deform.w;
   out.screenPos = world;
+  out.material = inst.material;
+  out.quadCenter = inst.rectPosSize.xy;
   return out;
+}
+
+fn sampleOccCell(cell: vec2f) -> f32 {
+  let cols = uLights.info.y;
+  let rows = uLights.info.z;
+  if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= cols || cell.y >= rows) {
+    return 0.0;
+  }
+  let uv = (cell + vec2f(0.5)) / 64.0;
+  return textureSampleLevel(uOcclusionTex, uSamp, uv, 0.0).r;
+}
+
+fn sampleShadowOcclusion(fragPos: vec2f, lightPos: vec2f) -> f32 {
+  let strength = uLights.info.w;
+  let tilePx = uLights.occParams.z;
+  if (strength <= 0.01 || tilePx <= 1.0) {
+    return 1.0;
+  }
+  let origin = uLights.occParams.xy;
+  let fragCell = (fragPos - origin) / tilePx;
+  let lightCell = (lightPos - origin) / tilePx;
+  let delta = lightCell - fragCell;
+  let cellDist = length(delta);
+  if (cellDist < 0.25) {
+    return 1.0;
+  }
+  let fragTile = floor(fragCell);
+  let lightTile = floor(lightCell);
+  var hits = 0.0;
+  for (var s = 1; s <= 14; s += 1) {
+    let t = f32(s) / 15.0;
+    let pTile = floor(fragCell + delta * t);
+    let isSelf = abs(pTile.x - fragTile.x) < 0.5 && abs(pTile.y - fragTile.y) < 0.5;
+    let isLightCell = abs(pTile.x - lightTile.x) < 0.5 && abs(pTile.y - lightTile.y) < 0.5;
+    if (!isSelf && !isLightCell) {
+      if (sampleOccCell(pTile) > 0.5) {
+        hits += 1.0;
+      }
+    }
+  }
+  let softSteps = max(0.35, uLights.occParams.w * 2.4);
+  let shadowAmt = clamp(hits / softSteps, 0.0, 1.0) * strength;
+  return 1.0 - shadowAmt;
+}
+
+fn sampleWallBaseAo(fragPos: vec2f) -> f32 {
+  let strength = uLights.info.w;
+  let tilePx = uLights.occParams.z;
+  if (strength <= 0.01 || tilePx <= 1.0) {
+    return 1.0;
+  }
+  let cellPos = (fragPos - uLights.occParams.xy) / tilePx;
+  let tile = floor(cellPos);
+  if (sampleOccCell(tile) > 0.5) {
+    return 1.0;
+  }
+  let frac = fract(cellPos);
+  var ao = 1.0;
+  if (sampleOccCell(tile + vec2f(0.0, -1.0)) > 0.5) {
+    ao *= mix(0.68, 1.0, smoothstep(0.0, 0.44, frac.y));
+  }
+  if (sampleOccCell(tile + vec2f(-1.0, 0.0)) > 0.5) {
+    ao *= mix(0.84, 1.0, smoothstep(0.0, 0.22, frac.x));
+  }
+  if (sampleOccCell(tile + vec2f(1.0, 0.0)) > 0.5) {
+    ao *= mix(0.84, 1.0, smoothstep(0.0, 0.22, 1.0 - frac.x));
+  }
+  return mix(1.0, ao, clamp(strength, 0.0, 1.0));
 }
 
 @fragment
@@ -263,6 +338,27 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
 
     var baseCol = in.tint.rgb * (1.0 + cellTint + grain) * mortarMask * ndl * aoBottom;
     baseCol += vec3f(topRim + runeAccent * 0.6, topRim + runeAccent * 0.45, topRim * 1.1 + runeAccent);
+    // Apply shadow-occluded dynamic point lights onto extruded beveled walls too
+    let wallLightCnt = min(24u, u32(max(0.0, uLights.info.x + 0.5)));
+    var wallLit = vec3f(0.0);
+    var wli = 0u;
+    loop {
+      if (wli >= wallLightCnt) { break; }
+      let lp = uLights.posRad[wli];
+      let lc = uLights.colInt[wli];
+      let toL = vec3f(lp.xy - in.screenPos, 24.0);
+      let dist = length(toL.xy);
+      if (dist < lp.z) {
+        let vis = sampleShadowOcclusion(in.screenPos, lp.xy);
+        if (vis > 0.01) {
+          let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w));
+          let diff = max(0.15, dot(n, normalize(toL)));
+          wallLit += lc.rgb * (lc.a * att * diff * vis * 0.85);
+        }
+      }
+      wli += 1u;
+    }
+    baseCol *= (1.0 + wallLit);
     let sideSoft = smoothstep(0.0, 0.04, in.localUv.x) * smoothstep(1.0, 0.96, in.localUv.x);
     let finalAlpha = in.tint.a * mix(0.75, 1.0, sideSoft);
     out.color = vec4f(clamp(baseCol, vec3f(0.0), vec3f(1.0)), finalAlpha);
@@ -328,15 +424,17 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     }
     let falloff = clamp(1.0 - d, 0.0, 1.0);
     let power = select(2.0, in.param, in.param > 0.1);
-    let glow = select(0.0, pow(max(falloff, 0.0001), power), falloff > 0.001);
+    let occVis = sampleShadowOcclusion(in.screenPos, in.quadCenter);
+    let glow = select(0.0, pow(max(falloff, 0.0001), power), falloff > 0.001) * occVis;
     let a = in.tint.a * glow;
     out.color = vec4f(in.tint.rgb, a);
     out.emissive = vec4f(in.tint.rgb * 0.68, a);
     return out;
   }
 
-  // Mode 0: Crisp Palette-Indexed LUT sprite OR 32-bit RGBA passthrough (idx == 255)
-  let idxVal = round(textureSampleLevel(uIndexAtlas, uSamp, in.texUv, 0.0).r * 255.0);
+  // Mode 0: Multi-Page Texture2DArray Sprite + Per-Instance PBR-Lite Material Shading
+  let atlasLayer = max(0, i32(floor(in.material.x + 0.5)));
+  let idxVal = round(textureSampleLevel(uIndexAtlas, uSamp, in.texUv, atlasLayer, 0.0).r * 255.0);
   if (idxVal < 0.5) {
     discard;
   }
@@ -353,7 +451,7 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     texRgb = lutSample.rgb;
     lutEmissive = lutSample.a;
   } else {
-    let sampled = textureSampleLevel(uAtlas, uSamp, in.texUv, 0.0);
+    let sampled = textureSampleLevel(uAtlas, uSamp, in.texUv, atlasLayer, 0.0);
     if (sampled.a < 0.05) {
       discard;
     }
@@ -361,8 +459,19 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     texAlpha = sampled.a;
   }
 
+  let rough = clamp(in.material.y, 0.05, 1.0);
+  let metal = clamp(in.material.z, 0.0, 1.0);
+  let matEmissive = clamp(in.material.w, 0.0, 2.0);
+  let specExp = mix(56.0, 6.0, rough);
+  let isHdRgba = idxVal > 250.0;
+  let specScale = mix(1.0, 0.22, rough) * (0.26 + 0.74 * metal + select(0.0, 0.14, isHdRgba));
+  let f0 = mix(vec3f(0.95), texRgb * 1.15, metal);
+  let diffConserv = mix(1.0, 0.58, metal);
+
   var reliefShade = 1.0;
-  var lit = vec3f(0.0);
+  var keySpecRgb = vec3f(0.0);
+  var litDiff = vec3f(0.0);
+  var litSpec = vec3f(0.0);
 
   if (in.paletteRow > -1.5) {
     let texel = vec2f(1.0) / vec2f(textureDimensions(uIndexAtlas));
@@ -372,12 +481,12 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     let safeMax = max(uvMin, uvMax);
     let flipSign = select(1.0, -1.0, in.uvBounds.x > in.uvBounds.z);
     let lumaW = vec3f(0.299, 0.587, 0.114);
-    let sC = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv, safeMin, safeMax), 0.0);
-    let sL = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
-    let sR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), 0.0);
-    let sU = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(0.0, texel.y), safeMin, safeMax), 0.0);
-    let sD = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(0.0, texel.y), safeMin, safeMax), 0.0);
-    let sBR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, texel.y), safeMin, safeMax), 0.0);
+    let sC = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv, safeMin, safeMax), atlasLayer, 0.0);
+    let sL = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), atlasLayer, 0.0);
+    let sR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), atlasLayer, 0.0);
+    let sU = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(0.0, texel.y), safeMin, safeMax), atlasLayer, 0.0);
+    let sD = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(0.0, texel.y), safeMin, safeMax), atlasLayer, 0.0);
+    let sBR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, texel.y), safeMin, safeMax), atlasLayer, 0.0);
 
     let hC = sC.a * (0.65 + 0.35 * dot(sC.rgb, lumaW));
     let hL = sL.a * (0.65 + 0.35 * dot(sL.rgb, lumaW));
@@ -388,11 +497,15 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
 
     let gx = hR - hL;
     let gy = hD - hU;
-    let sobelN = normalize(vec3f(-gx * 1.4, -gy * 1.4, 1.0));
-    let sobelLight = normalize(vec3f(-0.55, -0.75, 0.4));
+    let sobelN = normalize(vec3f(-gx * 1.45, -gy * 1.45, 1.0));
+    let sobelLight = normalize(vec3f(-0.55, -0.75, 0.42));
+    let viewDir = vec3f(0.0, 0.0, 1.0);
+    let halfKey = normalize(sobelLight + viewDir);
+    let keySpecAmt = pow(max(0.0, dot(sobelN, halfKey)), specExp) * specScale * 0.42;
     let ndl = dot(sobelN, sobelLight) - sobelLight.z;
-    let rimBoost = select(0.0, 0.08, (hC - hBR) > 0.45);
-    reliefShade = clamp(1.0 + ndl * 0.24, 0.90, 1.14) + rimBoost;
+    let rimBoost = select(0.0, 0.07 + 0.14 * metal, (hC - hBR) > 0.45);
+    reliefShade = clamp(1.0 + ndl * 0.28, 0.84, 1.18) * diffConserv + rimBoost;
+    keySpecRgb = f0 * keySpecAmt;
 
     let lightCnt = min(24u, u32(max(0.0, uLights.info.x + 0.5)));
     var li = 0u;
@@ -400,27 +513,351 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
       if (li >= lightCnt) { break; }
       let lp = uLights.posRad[li];
       let lc = uLights.colInt[li];
-      let toL = vec3f(lp.xy - in.screenPos, 18.0);
+      let toL = vec3f(lp.xy - in.screenPos, 22.0);
       let dist = length(vec2f(toL.x, toL.y));
       if (dist < lp.z) {
-        let falloff = max(0.2, lp.w);
-        let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), falloff);
-        let lDir = normalize(toL);
-        let diff = max(0.0, dot(sobelN, lDir));
-        lit += lc.rgb * (lc.a * att * (0.35 + 0.95 * diff));
+        let vis = sampleShadowOcclusion(in.screenPos, lp.xy);
+        if (vis > 0.01) {
+          let falloff = max(0.2, lp.w);
+          let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), falloff) * vis;
+          let lDir = normalize(toL);
+          let diff = max(0.0, dot(sobelN, lDir));
+          let hVec = normalize(lDir + viewDir);
+          let spec = pow(max(0.0, dot(sobelN, hVec)), specExp) * specScale * 0.92;
+          litDiff += lc.rgb * (lc.a * att * (0.34 + 0.90 * diff) * diffConserv);
+          litSpec += lc.rgb * f0 * (lc.a * att * spec);
+        }
+      }
+      li += 1u;
+    }
+    reliefShade *= sampleWallBaseAo(in.screenPos);
+  }
+
+  let flashAmt = clamp(in.flash, 0.0, 1.0);
+  var baseRgb = clamp(texRgb * in.tint.rgb * reliefShade + keySpecRgb, vec3f(0.0), vec3f(1.15));
+  if (in.paletteRow > -1.5) {
+    baseRgb = clamp(baseRgb * (1.0 + litDiff) + litSpec, vec3f(0.0), vec3f(1.45));
+  }
+  let finalRgb = mix(baseRgb, vec3f(1.0), flashAmt);
+  let finalAlpha = texAlpha * in.tint.a;
+  let emissiveAmt = max(lutEmissive, max(clamp(in.param, 0.0, 2.0), matEmissive)) + flashAmt * 0.5;
+  let hdrExcess = max(finalRgb - vec3f(1.0), vec3f(0.0));
+
+  out.color = vec4f(clamp(finalRgb, vec3f(0.0), vec3f(1.0)), finalAlpha);
+  out.emissive = vec4f(finalRgb * emissiveAmt + hdrExcess, finalAlpha);
+  return out;
+}
+
+// ============================================================================
+// HD-2D True 3D Perspective Quad Pipeline (Box-Walls + Upright Pixel Billboards)
+// ============================================================================
+struct Quad3DUniforms {
+  viewProj: mat4x4<f32>,
+  occWorld: vec4f,   // x: originWorldX, y: originWorldY, z: tileSizeWorld, w: opaquePass (1=cutout, 0=blend)
+  viewParams: vec4f, // x: viewW, y: viewH, z: camWorldX, w: camWorldY
+};
+
+@group(1) @binding(0) var<uniform> uQuad3D: Quad3DUniforms;
+
+struct Quad3DIn {
+  @location(0) originPage: vec4f,   // originX, originY, originZ, atlasPage
+  @location(1) uAxisRough: vec4f,   // uAxisX, uAxisY, uAxisZ, roughness
+  @location(2) vAxisMetal: vec4f,   // vAxisX, vAxisY, vAxisZ, metallic
+  @location(3) uvBounds: vec4f,     // u0, v0, u1, v1
+  @location(4) tint: vec4f,         // r, g, b, a
+  @location(5) normEmissive: vec4f, // normalX, normalY, normalZ, emissive
+  @location(6) style: vec4f,        // mode, flash, shadeMult, paletteRow
+};
+
+struct Quad3DOut {
+  @builtin(position) pos: vec4f,
+  @location(0) texUv: vec2f,
+  @location(1) localUv: vec2f,
+  @location(2) tint: vec4f,
+  @location(3) worldPos: vec3f,
+  @location(4) normal: vec3f,
+  @location(5) material: vec4f,     // atlasPage, roughness, metallic, emissive
+  @location(6) style: vec4f,        // mode, flash, shadeMult, paletteRow
+  @location(7) uvBounds: vec4f,
+  @location(8) quadCenterXy: vec2f,
+};
+
+@vertex
+fn vsQuad3D(@builtin(vertex_index) vid: u32, inst: Quad3DIn) -> Quad3DOut {
+  var uvUnit = array<vec2f, 6>(
+    vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
+    vec2f(0.0, 1.0), vec2f(1.0, 0.0), vec2f(1.0, 1.0)
+  );
+  let u01 = uvUnit[vid];
+  let worldPos = inst.originPage.xyz + inst.uAxisRough.xyz * u01.x + inst.vAxisMetal.xyz * u01.y;
+  var clip = uQuad3D.viewProj * vec4f(worldPos, 1.0);
+  let viewSize = max(vec2f(1.0), uQuad3D.viewParams.xy);
+  let osScale = viewSize / (viewSize + vec2f(${OVERSCAN_PAD}.0 * 2.0));
+  clip.x *= osScale.x;
+  clip.y *= osScale.y;
+
+  let centerPos = inst.originPage.xyz + (inst.uAxisRough.xyz + inst.vAxisMetal.xyz) * 0.5;
+  var out: Quad3DOut;
+  out.pos = clip;
+  out.texUv = mix(inst.uvBounds.xy, inst.uvBounds.zw, u01);
+  out.localUv = u01;
+  out.tint = inst.tint;
+  out.worldPos = worldPos;
+  out.normal = inst.normEmissive.xyz;
+  out.material = vec4f(inst.originPage.w, inst.uAxisRough.w, inst.vAxisMetal.w, inst.normEmissive.w);
+  out.style = inst.style;
+  out.uvBounds = inst.uvBounds;
+  out.quadCenterXy = centerPos.xy;
+  return out;
+}
+
+fn sampleShadowOcclusion3D(fragWorldXy: vec2f, lightWorldXy: vec2f) -> f32 {
+  let strength = uLights.info.w;
+  let tileSize = uQuad3D.occWorld.z;
+  if (strength <= 0.01 || tileSize <= 1.0) {
+    return 1.0;
+  }
+  let origin = uQuad3D.occWorld.xy;
+  let fragCell = (fragWorldXy - origin) / tileSize;
+  let lightCell = (lightWorldXy - origin) / tileSize;
+  let delta = lightCell - fragCell;
+  if (length(delta) < 0.25) {
+    return 1.0;
+  }
+  let fragTile = floor(fragCell);
+  let lightTile = floor(lightCell);
+  var hits = 0.0;
+  for (var s = 1; s <= 14; s += 1) {
+    let t = f32(s) / 15.0;
+    let pTile = floor(fragCell + delta * t);
+    let isSelf = abs(pTile.x - fragTile.x) < 0.5 && abs(pTile.y - fragTile.y) < 0.5;
+    let isLightCell = abs(pTile.x - lightTile.x) < 0.5 && abs(pTile.y - lightTile.y) < 0.5;
+    if (!isSelf && !isLightCell) {
+      if (sampleOccCell(pTile) > 0.5) {
+        hits += 1.0;
+      }
+    }
+  }
+  let softSteps = max(0.35, uLights.occParams.w * 2.4);
+  let shadowAmt = clamp(hits / softSteps, 0.0, 1.0) * strength;
+  return 1.0 - shadowAmt;
+}
+
+fn sampleWallBaseAo3D(fragWorldXy: vec2f) -> f32 {
+  let strength = uLights.info.w;
+  let tileSize = uQuad3D.occWorld.z;
+  if (strength <= 0.01 || tileSize <= 1.0) {
+    return 1.0;
+  }
+  let cellPos = (fragWorldXy - uQuad3D.occWorld.xy) / tileSize;
+  let tile = floor(cellPos);
+  if (sampleOccCell(tile) > 0.5) {
+    return 1.0;
+  }
+  let frac = fract(cellPos);
+  var ao = 1.0;
+  if (sampleOccCell(tile + vec2f(0.0, -1.0)) > 0.5) {
+    ao *= mix(0.62, 1.0, smoothstep(0.0, 0.48, frac.y));
+  }
+  if (sampleOccCell(tile + vec2f(0.0, 1.0)) > 0.5) {
+    ao *= mix(0.80, 1.0, smoothstep(0.0, 0.24, 1.0 - frac.y));
+  }
+  if (sampleOccCell(tile + vec2f(-1.0, 0.0)) > 0.5) {
+    ao *= mix(0.76, 1.0, smoothstep(0.0, 0.28, frac.x));
+  }
+  if (sampleOccCell(tile + vec2f(1.0, 0.0)) > 0.5) {
+    ao *= mix(0.76, 1.0, smoothstep(0.0, 0.28, 1.0 - frac.x));
+  }
+  return mix(1.0, ao, clamp(strength, 0.0, 1.0));
+}
+
+@fragment
+fn fsQuad3D(in: Quad3DOut) -> SceneOut {
+  var out: SceneOut;
+  let mode = in.style.x;
+  let flashAmt = clamp(in.style.y, 0.0, 1.0);
+  let shadeMult = in.style.z;
+  let paletteRow = in.style.w;
+  let opaquePass = uQuad3D.occWorld.w > 0.5;
+
+  // Mode 3: Grounded analytical SDF elliptical soft contact shadow on floor
+  if (mode > 2.5 && mode < 3.5) {
+    let p = in.localUv * 2.0 - vec2f(1.0);
+    let d2 = dot(p, p);
+    if (d2 >= 1.0) { discard; }
+    let d = sqrt(d2);
+    let soft = clamp(select(0.62, shadeMult, shadeMult > 0.05), 0.15, 0.98);
+    let outer = smoothstep(1.0, 1.0 - soft, d);
+    let umbra = smoothstep(0.68, 0.0, d) * 0.36;
+    let shadowAlpha = in.tint.a * clamp(outer * 0.78 + umbra, 0.0, 1.0);
+    if (opaquePass && shadowAlpha < 0.5) { discard; }
+    out.color = vec4f(in.tint.rgb, shadowAlpha);
+    out.emissive = vec4f(0.0, 0.0, 0.0, shadowAlpha);
+    return out;
+  }
+
+  // Mode 1: Radial GPU light orb in 3D space
+  if (mode > 0.5 && mode < 1.5) {
+    let p = in.localUv * 2.0 - vec2f(1.0);
+    let d2 = dot(p, p);
+    if (d2 >= 1.0) { discard; }
+    let d = sqrt(d2);
+    let falloff = clamp(1.0 - d, 0.0, 1.0);
+    let power = select(2.0, shadeMult, shadeMult > 0.1);
+    let occVis = sampleShadowOcclusion3D(in.worldPos.xy, in.quadCenterXy);
+    let glow = select(0.0, pow(max(falloff, 0.0001), power), falloff > 0.001) * occVis;
+    let a = in.tint.a * glow;
+    if (opaquePass && a < 0.5) { discard; }
+    out.color = vec4f(in.tint.rgb, a);
+    out.emissive = vec4f(in.tint.rgb * 0.72, a);
+    return out;
+  }
+
+  // Mode 2: Solid 3D quad / particle / oblique shadow / accent slab
+  if (mode > 1.5 && mode < 2.5) {
+    let col = mix(in.tint.rgb * max(0.05, shadeMult), vec3f(1.0), flashAmt);
+    let a = in.tint.a;
+    if (opaquePass && a < 0.5) { discard; }
+    let em = max(in.material.w, flashAmt * 0.5);
+    out.color = vec4f(clamp(col, vec3f(0.0), vec3f(1.0)), a);
+    out.emissive = vec4f(col * em, a);
+    return out;
+  }
+
+  let n3d = normalize(in.normal);
+  let isVertical = abs(n3d.z) < 0.5;
+  let shadowSamplePos = in.worldPos.xy + select(vec2f(0.0), n3d.xy * 2.5, isVertical);
+
+  // Mode 4: Procedural normal-lit beveled masonry 3D vertical wall face
+  if (mode > 3.5) {
+    let tx = max(0.5, in.uvBounds.x);
+    let ty = max(0.25, in.uvBounds.y);
+    let seed = in.uvBounds.z;
+    let coord = vec2f(in.localUv.x * tx, in.localUv.y * ty);
+    let row = floor(coord.y * 2.0);
+    let stagger = fract(row * 0.5) * 0.5;
+    let brickUv = vec2f(fract(coord.x * 1.45 + stagger), fract(coord.y * 2.0));
+    let brickId = vec2f(floor(coord.x * 1.45 + stagger), row);
+    let cellTint = (hash21(brickId + seed) - 0.5) * 0.14;
+    let edgeDist = min(min(brickUv.x, 1.0 - brickUv.x), min(brickUv.y, 1.0 - brickUv.y));
+    let mortarMask = mix(0.56, 1.0, smoothstep(0.02, 0.13, edgeDist));
+    let aoBottom = mix(1.04, 0.62, smoothstep(0.26, 1.0, in.localUv.y));
+    let topRim = smoothstep(0.12, 0.0, in.localUv.y) * 0.22;
+    let grain = (hash21(floor(coord * 8.0) + seed) - 0.5) * 0.06;
+
+    let sunDir = normalize(vec3f(-0.38, 0.48, 0.79));
+    let hemi = mix(0.70, 1.12, dot(n3d, sunDir) * 0.5 + 0.5);
+    var baseCol = in.tint.rgb * max(0.2, shadeMult) * hemi * (1.0 + cellTint + grain) * mortarMask * aoBottom + vec3f(topRim);
+
+    let lightCnt = min(24u, u32(max(0.0, uLights.info.x + 0.5)));
+    var litDiff = vec3f(0.0);
+    var li = 0u;
+    loop {
+      if (li >= lightCnt) { break; }
+      let lp = uLights.posRad[li];
+      let lc = uLights.colInt[li];
+      let toL = vec3f(lp.xy - in.worldPos.xy, 24.0 - in.worldPos.z);
+      let dist = length(toL.xy);
+      if (dist < lp.z) {
+        let vis = sampleShadowOcclusion3D(shadowSamplePos, lp.xy);
+        if (vis > 0.01) {
+          let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w)) * vis;
+          let diff = max(0.12, dot(n3d, normalize(toL)));
+          litDiff += lc.rgb * (lc.a * att * diff * 0.92);
+        }
+      }
+      li += 1u;
+    }
+    baseCol = clamp(baseCol * (1.0 + litDiff), vec3f(0.0), vec3f(1.2));
+    let a = in.tint.a;
+    if (opaquePass && a < 0.5) { discard; }
+    out.color = vec4f(clamp(baseCol, vec3f(0.0), vec3f(1.0)), a);
+    out.emissive = vec4f(max(baseCol - vec3f(1.0), vec3f(0.0)), a);
+    return out;
+  }
+
+  // Mode 0: Crisp Nearest-Neighbor Multi-Page Atlas Pixel Quad (Floor / Wall Face / Billboard)
+  let atlasLayer = max(0, i32(floor(in.material.x + 0.5)));
+  let idxVal = round(textureSampleLevel(uIndexAtlas, uSamp, in.texUv, atlasLayer, 0.0).r * 255.0);
+  if (idxVal < 0.5) { discard; }
+
+  var texRgb = vec3f(1.0);
+  var texAlpha = 1.0;
+  var lutEmissive = 0.0;
+  if (idxVal <= 15.5 && paletteRow >= -0.5) {
+    let rows = max(1.0, uSky.extra.x);
+    let rowIdx = clamp(floor(paletteRow + 0.5), 0.0, rows - 1.0);
+    let lutUv = vec2f((idxVal + 0.5) / 16.0, (rowIdx + 0.5) / rows);
+    let lutSample = textureSampleLevel(uPaletteLut, uSamp, lutUv, 0.0);
+    texRgb = lutSample.rgb;
+    lutEmissive = lutSample.a;
+  } else {
+    let sampled = textureSampleLevel(uAtlas, uSamp, in.texUv, atlasLayer, 0.0);
+    if (sampled.a < 0.05) { discard; }
+    texRgb = sampled.rgb;
+    texAlpha = sampled.a;
+  }
+
+  let finalAlpha = texAlpha * in.tint.a;
+  if (opaquePass && finalAlpha < 0.5) { discard; }
+
+  let rough = clamp(in.material.y, 0.05, 1.0);
+  let metal = clamp(in.material.z, 0.0, 1.0);
+  let matEmissive = clamp(in.material.w, 0.0, 2.0);
+  let specExp = mix(48.0, 6.0, rough);
+  let specScale = mix(0.85, 0.18, rough) * (0.24 + 0.76 * metal);
+  let f0 = mix(vec3f(0.95), texRgb * 1.15, metal);
+  let diffConserv = mix(1.0, 0.62, metal);
+
+  let sunDir = normalize(vec3f(-0.38, 0.48, 0.79));
+  let viewDir = normalize(vec3f(0.0, 0.65, 0.76));
+  let hemi = mix(0.74, 1.12, dot(n3d, sunDir) * 0.5 + 0.5);
+
+  var reliefShade = max(0.15, shadeMult) * hemi * diffConserv;
+  var topRimAdd = vec3f(0.0);
+  if (isVertical && paletteRow > -1.5) {
+    let baseCrease = mix(1.0, 0.70, smoothstep(0.70, 1.0, in.localUv.y));
+    reliefShade *= baseCrease;
+    topRimAdd = vec3f(smoothstep(0.09, 0.0, in.localUv.y) * 0.11);
+  }
+  if (n3d.z > 0.7 && in.worldPos.z < 2.0 && paletteRow > -1.5) {
+    reliefShade *= sampleWallBaseAo3D(in.worldPos.xy);
+  }
+
+  var litDiff = vec3f(0.0);
+  var litSpec = vec3f(0.0);
+  if (paletteRow > -1.5) {
+    let lightCnt = min(24u, u32(max(0.0, uLights.info.x + 0.5)));
+    var li = 0u;
+    loop {
+      if (li >= lightCnt) { break; }
+      let lp = uLights.posRad[li];
+      let lc = uLights.colInt[li];
+      let toL = vec3f(lp.xy - in.worldPos.xy, 24.0 - in.worldPos.z);
+      let dist = length(toL.xy);
+      if (dist < lp.z) {
+        let vis = sampleShadowOcclusion3D(shadowSamplePos, lp.xy);
+        if (vis > 0.01) {
+          let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w)) * vis;
+          let lDir = normalize(toL);
+          let ndl = max(0.0, dot(n3d, lDir));
+          let wrapDiff = select(0.32 + 0.85 * ndl, 0.42 + 0.72 * ndl, isVertical);
+          let hVec = normalize(lDir + viewDir);
+          let spec = pow(max(0.0, dot(n3d, hVec)), specExp) * specScale * 0.78;
+          litDiff += lc.rgb * (lc.a * att * wrapDiff * diffConserv);
+          litSpec += lc.rgb * f0 * (lc.a * att * spec);
+        }
       }
       li += 1u;
     }
   }
 
-  let flashAmt = clamp(in.flash, 0.0, 1.0);
-  var baseRgb = clamp(texRgb * in.tint.rgb * reliefShade, vec3f(0.0), vec3f(1.0));
-  if (in.paletteRow > -1.5) {
-    baseRgb = clamp(baseRgb * (1.0 + lit), vec3f(0.0), vec3f(1.35));
+  var baseRgb = clamp(texRgb * in.tint.rgb * reliefShade + topRimAdd, vec3f(0.0), vec3f(1.2));
+  if (paletteRow > -1.5) {
+    baseRgb = clamp(baseRgb * (1.0 + litDiff) + litSpec, vec3f(0.0), vec3f(1.48));
   }
   let finalRgb = mix(baseRgb, vec3f(1.0), flashAmt);
-  let finalAlpha = texAlpha * in.tint.a;
-  let emissiveAmt = max(lutEmissive, clamp(in.param, 0.0, 1.5)) + flashAmt * 0.5;
+  let emissiveAmt = max(lutEmissive, matEmissive) + flashAmt * 0.5;
   let hdrExcess = max(finalRgb - vec3f(1.0), vec3f(0.0));
 
   out.color = vec4f(clamp(finalRgb, vec3f(0.0), vec3f(1.0)), finalAlpha);
@@ -435,6 +872,7 @@ struct PostUniforms {
   params1: vec4f, // x: timeSec, y: cozyFilter, z: camFracX, w: camFracY
   params2: vec4f, // x: viewW, y: viewH, z: osW, w: osH
   params3: vec4f, // x: waterLevelNorm, yzw: waterTint
+  params4: vec4f, // x: tiltShiftBlur, y: tiltShiftFocusY, z: 0, w: 0
 };
 
 @group(0) @binding(0) var<uniform> uPost: PostUniforms;
@@ -546,7 +984,23 @@ fn fsComposite(in: PostOut) -> @location(0) vec4f {
     let maxUv = (vec2f(${OVERSCAN_PAD}.0) + viewSize) / osSize;
     sampleUv = clamp(vec2f(rx, ry), minUv, maxUv);
   }
-  let sceneCol = textureSampleLevel(uTexA, uNearestSamp, sampleUv, 0.0).rgb;
+  var sceneCol = textureSampleLevel(uTexA, uNearestSamp, sampleUv, 0.0).rgb;
+  let tiltBlur = clamp(uPost.params4.x, 0.0, 1.0);
+  if (tiltBlur > 0.01 && !inWater) {
+    let focusY = clamp(uPost.params4.y, 0.1, 0.9);
+    let dofBand = smoothstep(0.20, 0.49, abs(in.uv.y - focusY));
+    if (dofBand > 0.005) {
+      let minUv = vec2f(${OVERSCAN_PAD}.0) / osSize;
+      let maxUv = (vec2f(${OVERSCAN_PAD}.0) + viewSize) / osSize;
+      let rad = (vec2f(0.9, 1.15) + vec2f(2.1, 2.5) * dofBand * tiltBlur) / osSize;
+      let b0 = textureSampleLevel(uTexA, uLinearSamp, clamp(sampleUv + vec2f(-rad.x, -rad.y), minUv, maxUv), 0.0).rgb;
+      let b1 = textureSampleLevel(uTexA, uLinearSamp, clamp(sampleUv + vec2f(rad.x, -rad.y), minUv, maxUv), 0.0).rgb;
+      let b2 = textureSampleLevel(uTexA, uLinearSamp, clamp(sampleUv + vec2f(-rad.x, rad.y), minUv, maxUv), 0.0).rgb;
+      let b3 = textureSampleLevel(uTexA, uLinearSamp, clamp(sampleUv + vec2f(rad.x, rad.y), minUv, maxUv), 0.0).rgb;
+      let bokeh = (sceneCol * 0.2 + (b0 + b1 + b2 + b3) * 0.2);
+      sceneCol = mix(sceneCol, bokeh, dofBand * tiltBlur * 0.85);
+    }
+  }
   let glow = max(0.0, uPost.params0.z);
   var col = sceneCol;
 

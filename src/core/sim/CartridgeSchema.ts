@@ -1,6 +1,11 @@
 import { BUILTIN_SPRITE_GRIDS, type SpriteId } from '../../assets/AtlasSpritesData.ts';
 import type { BgCloudDesc, BgmTheme, SimEvent } from '../types/WorldTypes.ts';
+import type { CardDeckEngineConfig } from './CardDeckEngine.ts';
+import type { CartridgeDualPerspectiveConfig } from './DualPerspectiveRuntime.ts';
 import type { VmAction, VmRule, VmTrigger } from './EventActionVm.ts';
+import type { FighterEngineConfig } from './FighterFrameEngine.ts';
+import type { OrthogonalArtBlueprint } from './OrthogonalArt.ts';
+import type { CartridgeAtmosphereDef, CartridgeVisualRigDef } from './ProceduralVisualRig.ts';
 import { CHUNK_AREA, CHUNK_SIZE, MAX_TILEMAP_COLS, MAX_TILEMAP_ROWS, TILE_SIZE } from './TilemapGrid.ts';
 
 export const CARTRIDGE_SCHEMA_VERSION = 1;
@@ -11,10 +16,12 @@ export const MAX_VM_RULES_TOTAL = 128;
 
 const KNOWN_BUILTIN_SPRITES = new Set<string>([
   ...Object.keys(BUILTIN_SPRITE_GRIDS),
+  'solid',
   'hero_a',
   'hero_b',
   'boss_ufo',
   'slime_king',
+  'parallax_twilight_bg',
 ]);
 
 const VALID_SOUND_PRESETS = new Set<SimEvent>([
@@ -35,7 +42,7 @@ const VALID_BIOMES = new Set<string>(['meadow', 'alpine', 'cavern', 'sky_islands
 const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 const VALID_BUTTONS = new Set<string>(['jump', 'action', 'skillX', 'skillY', 'shoulderL', 'shoulderR']);
 const VALID_COMPARE_OPS = new Set<string>(['==', '!=', '<', '<=', '>', '>=']);
-const VALID_VAR_OPS = new Set<string>(['=', '+=', '-=', 'clamp']);
+const VALID_VAR_OPS = new Set<string>(['=', '+=', '-=', '*=', '/=', 'clamp']);
 const FORBIDDEN_KEYS = new Set<string>(['__proto__', 'constructor', 'prototype']);
 
 export type CartridgeControllerKind = 'platformer' | 'shmup' | 'topdown' | 'fighter' | 'card';
@@ -83,6 +90,13 @@ export interface CartridgeArchetypeBehavior {
   orbitSpeed?: number;
 }
 
+export interface CartridgeParkourMechanicsDef {
+  waveDash?: boolean;
+  wallSlide?: boolean;
+  crumbleRespawnSec?: number;
+  crystalRespawnSec?: number;
+}
+
 export interface CartridgeArchetypeDef {
   sprite: SpriteId;
   spriteB?: SpriteId;
@@ -102,6 +116,7 @@ export interface CartridgeArchetypeDef {
   castShadow?: boolean;
   tint?: string;
   paletteRow?: number;
+  artBlueprintId?: string;
 }
 
 export interface CartridgeLoadoutDef {
@@ -225,6 +240,7 @@ export interface CartridgeStageDef {
   ambientDarkness?: number;
   ambientColor?: string;
   artMood?: CartridgeArtMoodDef;
+  atmosphere?: CartridgeAtmosphereDef;
   procedural?: CartridgeProceduralStageDef;
   springCamera?: CartridgeSpringCameraDef;
   bgmTheme: BgmTheme;
@@ -284,6 +300,8 @@ export interface CartridgeStageDef {
   rules?: readonly VmRule[];
 }
 
+export type CartridgePerspectiveConfig = CartridgeDualPerspectiveConfig;
+
 export interface CartridgeJsonV1 {
   version: 1;
   meta: {
@@ -299,16 +317,23 @@ export interface CartridgeJsonV1 {
   };
   initialVars?: Record<string, number>;
   sprites?: Record<string, readonly string[]>;
+  artBlueprints?: Record<string, OrthogonalArtBlueprint>;
   cardDeck?: readonly CartridgeCardDef[];
+  cardEngine?: CardDeckEngineConfig;
+  fighterEngine?: FighterEngineConfig;
+  perspective?: CartridgePerspectiveConfig;
   player: {
     controller: CartridgeControllerKind;
     sprite: SpriteId;
     spriteB?: SpriteId;
+    artBlueprintId?: string;
     w: number;
     h: number;
     maxHearts: number;
     scoutZoom?: number;
     grappleConfig?: CartridgeGrappleConfig;
+    visualRig?: CartridgeVisualRigDef;
+    parkourMechanics?: CartridgeParkourMechanicsDef;
     bootInHangar?: boolean;
     loadouts?: readonly CartridgeLoadoutDef[];
     weapons?: Record<string, CartridgeWeaponDef>;
@@ -442,7 +467,11 @@ function validateRulesList(
           if (!isFiniteNum(act.vx) || !isFiniteNum(act.vy)) errors.push(`${path}[${i}].do[${j}] Impulse requires finite vx, vy`);
           break;
         case 'SetVar':
-          if (typeof act.name !== 'string' || !VALID_VAR_OPS.has(String(act.op)) || !isFiniteNum(act.value)) {
+          if (
+            typeof act.name !== 'string' ||
+            !VALID_VAR_OPS.has(String(act.op)) ||
+            (!isFiniteNum(act.value) && typeof act.valueVar !== 'string')
+          ) {
             errors.push(`${path}[${i}].do[${j}] SetVar invalid`);
           }
           break;
@@ -607,6 +636,55 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
         }
       }
     }
+    if (raw.player.visualRig !== undefined) {
+      if (!isRecord(raw.player.visualRig)) {
+        errors.push('player.visualRig must be an object');
+      } else {
+        const vr = raw.player.visualRig;
+        if (vr.verletChain !== undefined) {
+          if (!isRecord(vr.verletChain) || typeof vr.verletChain.enabled !== 'boolean') {
+            errors.push('player.visualRig.verletChain requires boolean enabled');
+          } else {
+            if (vr.verletChain.nodes !== undefined && (!isFiniteNum(vr.verletChain.nodes) || vr.verletChain.nodes < 2 || vr.verletChain.nodes > 16)) {
+              errors.push('player.visualRig.verletChain.nodes must be in [2, 16]');
+            }
+            if (vr.verletChain.colorReady !== undefined && (typeof vr.verletChain.colorReady !== 'string' || !HEX_COLOR_RE.test(vr.verletChain.colorReady))) {
+              errors.push('player.visualRig.verletChain.colorReady must be a valid hex color');
+            }
+            if (vr.verletChain.colorSpent !== undefined && (typeof vr.verletChain.colorSpent !== 'string' || !HEX_COLOR_RE.test(vr.verletChain.colorSpent))) {
+              errors.push('player.visualRig.verletChain.colorSpent must be a valid hex color');
+            }
+          }
+        }
+        if (vr.twoBoneIk !== undefined) {
+          if (!isRecord(vr.twoBoneIk) || typeof vr.twoBoneIk.enabled !== 'boolean') {
+            errors.push('player.visualRig.twoBoneIk requires boolean enabled');
+          }
+        }
+        if (vr.afterimage !== undefined) {
+          if (!isRecord(vr.afterimage) || typeof vr.afterimage.enabled !== 'boolean') {
+            errors.push('player.visualRig.afterimage requires boolean enabled');
+          }
+        }
+      }
+    }
+  }
+
+  if (raw.perspective !== undefined) {
+    if (!isRecord(raw.perspective)) {
+      errors.push('perspective must be an object');
+    } else {
+      const p = raw.perspective;
+      if (p.defaultMode !== undefined && p.defaultMode !== 'first_person' && p.defaultMode !== 'third_person') {
+        errors.push("perspective.defaultMode must be 'first_person' | 'third_person'");
+      }
+      if (p.fovDeg !== undefined && (!isFiniteNum(p.fovDeg) || p.fovDeg < 35 || p.fovDeg > 120)) {
+        errors.push('perspective.fovDeg must be in [35, 120]');
+      }
+      if (p.maxDist !== undefined && (!isFiniteNum(p.maxDist) || p.maxDist < 32 || p.maxDist > 640)) {
+        errors.push('perspective.maxDist must be in [32, 640]');
+      }
+    }
   }
 
   const archKeys = new Set<string>();
@@ -687,6 +765,22 @@ export function validateCartridgeJson(raw: unknown): CartridgeValidationResult {
           }
           if (st.artMood.parallaxFog !== undefined && (!isFiniteNum(st.artMood.parallaxFog) || st.artMood.parallaxFog < 0 || st.artMood.parallaxFog > 1)) {
             errors.push(`stages[${i}].artMood.parallaxFog must be in [0, 1]`);
+          }
+        }
+      }
+      if (st.atmosphere !== undefined) {
+        if (!isRecord(st.atmosphere)) {
+          errors.push(`stages[${i}].atmosphere must be an object`);
+        } else {
+          const atm = st.atmosphere;
+          if (atm.waterTint !== undefined && (typeof atm.waterTint !== 'string' || !HEX_COLOR_RE.test(atm.waterTint))) {
+            errors.push(`stages[${i}].atmosphere.waterTint must be a valid hex color`);
+          }
+          if (atm.horizonHazeColor !== undefined && (typeof atm.horizonHazeColor !== 'string' || !HEX_COLOR_RE.test(atm.horizonHazeColor))) {
+            errors.push(`stages[${i}].atmosphere.horizonHazeColor must be a valid hex color`);
+          }
+          if (atm.curlParticles !== undefined && (!isRecord(atm.curlParticles) || typeof atm.curlParticles.enabled !== 'boolean')) {
+            errors.push(`stages[${i}].atmosphere.curlParticles requires boolean enabled`);
           }
         }
       }

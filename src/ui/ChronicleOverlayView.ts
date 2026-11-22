@@ -22,6 +22,8 @@ export class ChronicleOverlayView {
   public readonly element: HTMLElement;
   private readonly atlas: TextureAtlas;
   private readonly onCommand: (commandId: string) => void;
+  private readonly ac = new AbortController();
+  private choicesAc: AbortController | null = null;
   private readonly portraitCache = new Map<SpriteId, string>();
 
   private readonly titleLayer: HTMLElement;
@@ -97,7 +99,7 @@ export class ChronicleOverlayView {
     mapHeadLeft.append(el('strong', 'chr-map-title', '🗺️ 星穹世界大地圖'), el('span', 'chr-map-sub', '選擇已解鎖章節出擊探索'));
     const mapHeadBtns = el('div', 'chr-map-head-btns');
     mapHeadBtns.append(
-      btn('chr-btn is-ghost', '↩ 返回標題', undefined, () => this.onCommand('return_title')),
+      btn('chr-btn is-ghost', '↩ 返回標題', undefined, () => this.onCommand('return_title'), this.ac.signal),
     );
     mapHead.append(mapHeadLeft, mapHeadBtns);
     this.mapGrid = el('div', 'chr-map-grid');
@@ -401,6 +403,9 @@ export class ChronicleOverlayView {
         const cKey = `${cs.selectedChoiceIdx}|${cs.choices.map((c) => `${c.id}:${c.enabled}`).join(',')}`;
         if (cKey !== this.lastChoicesKey) {
           this.lastChoicesKey = cKey;
+          this.choicesAc?.abort();
+          this.choicesAc = new AbortController();
+          const cSig = this.choicesAc.signal;
           this.dialogChoices.textContent = '';
           cs.choices.forEach((choice, idx) => {
             const b = btn(
@@ -408,6 +413,7 @@ export class ChronicleOverlayView {
               choice.label,
               undefined,
               () => this.onCommand(`dialog_choice:${choice.id}`),
+              cSig,
             );
             b.disabled = !choice.enabled;
             this.dialogChoices.appendChild(b);
@@ -421,5 +427,14 @@ export class ChronicleOverlayView {
     } else {
       this.dialogBoxEl.classList.add('panel-hidden');
     }
+  }
+
+  public destroy(): void {
+    this.choicesAc?.abort();
+    this.choicesAc = null;
+    this.ac.abort();
+    this.portraitCache.clear();
+    this.element.classList.add('panel-hidden');
+    this.dialogChoices.textContent = '';
   }
 }

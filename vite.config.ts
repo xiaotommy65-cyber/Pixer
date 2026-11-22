@@ -14,6 +14,10 @@ export default defineConfig(() => {
           codeSplitting: {
             groups: [
               { name: 'vendor-capacitor', test: /node_modules\/@capacitor/ },
+              {
+                name: 'legacy-cartridges',
+                test: /src\/game\/(astralChronicles|celestialParkour|emberkeep|labyrinthDualview|sandbox|LegacyCartridgePack)/,
+              },
               { name: 'cartridges', test: /src\/game\// },
             ],
           },
@@ -108,7 +112,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      host: '::',
+      host: '0.0.0.0',
       port: 3000,
       allowedHosts: true,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
@@ -118,7 +122,7 @@ export default defineConfig(() => {
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
     preview: {
-      host: '::',
+      host: '0.0.0.0',
       port: 3000,
       allowedHosts: true,
     },

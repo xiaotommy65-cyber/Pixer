@@ -15,6 +15,7 @@ import {
   type DebuggableCartridge,
   type DebugRectDesc,
   type EntityDesc,
+  type Hd2dDepthConfig,
   type HudPrimitiveDesc,
   type InputState,
   type LightDesc,
@@ -25,6 +26,7 @@ import {
   type StageProgressInfo,
   type TileDesc,
 } from '../types/WorldTypes.ts';
+import { CardDeckEngine, type CardEngineStepHooks } from './CardDeckEngine.ts';
 import {
   validateCartridgeJson,
   type CartridgeArchetypeDef,
@@ -51,6 +53,7 @@ import {
   type VmCollisionPair,
   type VmHostBridge,
 } from './EventActionVm.ts';
+import { FighterFrameEngine, type FighterStepHooks } from './FighterFrameEngine.ts';
 import {
   acquireHudSlot,
   buildGenreHudPrimitives,
@@ -68,10 +71,15 @@ import {
 import { JuiceSystem, stepSquashSpring } from './JuiceSystem.ts';
 import { TweenSystem } from './TweenSystem.ts';
 import {
+  DualPerspectiveRuntime,
+  type DualPerspectiveStepResult,
+} from './DualPerspectiveRuntime.ts';
+import {
   applyOklabParallaxFog,
   compileProceduralStage,
   resolveStageArtMood,
 } from './ProceduralStageCompiler.ts';
+import { ProceduralVisualRigRuntime } from './ProceduralVisualRig.ts';
 import {
   BM_CHASE,
   BM_MOVING_PLATFORM,
@@ -254,6 +262,8 @@ export const MAX_FLOATING_TEXTS = 24;
 const HERO_HB = { x: 2, y: 2, w: 12, h: 14 };
 const EF_GRAPPLE_TARGET = 1 << 23;
 const EF_CRYSTAL_RESET = 1 << 24;
+const EF_CRUMBLE_TILE = 1 << 25;
+const EF_ZIP_BLOCK = 1 << 26;
 const RT_GRAPPLE_SHOOT_SPEED = 720;
 const RT_AIM_ROT_SPEED = 28;
 const RT_MAGNET_COS = Math.cos((26 * Math.PI) / 180);
@@ -297,9 +307,9 @@ function compileTagsToFlags(tags: readonly CartridgeTag[]): number {
       case 'pickup': f |= EF_PICKUP; break;
       case 'funnel': f |= EF_ALIVE; break;
       case 'grapple_ring': f |= EF_GRAPPLE_TARGET | EF_EMISSIVE; break;
-      case 'zip_block': f |= EF_GRAPPLE_TARGET | EF_SOLID | EF_EMISSIVE; break;
+      case 'zip_block': f |= EF_GRAPPLE_TARGET | EF_SOLID | EF_EMISSIVE | EF_ZIP_BLOCK; break;
       case 'crystal_reset': f |= EF_CRYSTAL_RESET | EF_EMISSIVE; break;
-      case 'crumble_tile': f |= EF_SOLID; break;
+      case 'crumble_tile': f |= EF_SOLID | EF_CRUMBLE_TILE; break;
       case 'updraft': f |= EF_EMISSIVE; break;
       case 'fighter_p2': f |= EF_ENEMY | EF_STOMPABLE | EF_FIGHTER_P2; break;
       case 'card_slot': f |= EF_EMISSIVE; break;
@@ -418,11 +428,19 @@ export class DataCartridgeRuntime
   public readonly aabbBox = { x: 0, y: 0, vx: 0, vy: 0 };
   public readonly aabbRes: TileAabbStepResult = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
 
-  // Shmup state
+  // Shmup, Visual Rig, Dual-Perspective & Orthogonal Genre Engines
   public readonly shmup: RuntimeShmupState;
+  public readonly cardEngine: CardDeckEngine | null = null;
+  public readonly fighterEngine: FighterFrameEngine | null = null;
+  public readonly visualRig = new ProceduralVisualRigRuntime();
+  public readonly dualPerspective = new DualPerspectiveRuntime();
+  private readonly dualPerspectiveStepOut: DualPerspectiveStepResult = { toggled: false, slashed: false, hits: 0 };
+  private readonly hd2dConfig: Hd2dDepthConfig = { enabled: false };
+  private lastHeroSprite: SpriteId = 'hero_a';
 
   // Pre-allocated snapshot, spatial query, floating pixel text & VM buffers (Zero-GC)
   private readonly eventsOut: SimEvent[] = [];
+  private readonly orthogonalStepHooks: CardEngineStepHooks & FighterStepHooks;
   public readonly querySlots = new Int32Array(MAX_ENTITIES);
   private readonly platformerQuerySlots = this.querySlots;
   private readonly entityIdCache: string[] = new Array<string>(MAX_ENTITIES);
@@ -467,13 +485,20 @@ export class DataCartridgeRuntime
       this.spawnArchetype(aid, bx + x, by + y, vx, vy);
     },
     destroy: (target, tag, selfSlot, otherSlot) => {
-      if (target === 'self' && selfSlot >= 0) this.pool.free(selfSlot);
-      else if (target === 'other' && otherSlot >= 0) this.pool.free(otherSlot);
-      else if (target === 'byTag' && tag) {
+      if (target === 'self' && selfSlot >= 0) {
+        this.pool.free(selfSlot);
+        this.vm.clearEntityVars(selfSlot);
+      } else if (target === 'other' && otherSlot >= 0) {
+        this.pool.free(otherSlot);
+        this.vm.clearEntityVars(otherSlot);
+      } else if (target === 'byTag' && tag) {
         for (let i = this.pool.activeCount - 1; i >= 0; i--) {
           const s = this.pool.activeIndices[i];
           const aid = this.pool.archetypeIdx[s] >= 0 ? this.archetypeMetaByIdx[this.pool.archetypeIdx[s]].id : '';
-          if (aid === tag) this.pool.free(s);
+          if (aid === tag) {
+            this.pool.free(s);
+            this.vm.clearEntityVars(s);
+          }
         }
       }
     },
@@ -546,6 +571,18 @@ export class DataCartridgeRuntime
       throw new Error(`Invalid Cartridge JSON: ${validated.errors.join('; ')}`);
     }
     this.def = validated.data;
+    this.orthogonalStepHooks = {
+      vm: this.vm,
+      juice: this.juice,
+      spawnFloatingText: (text, wx, wy, color) => this.spawnFloatingText(text, wx, wy, color),
+      eventsOut: this.eventsOut,
+    };
+    if (this.def.cardEngine) {
+      this.cardEngine = new CardDeckEngine(this.def.cardEngine);
+    }
+    if (this.def.fighterEngine) {
+      this.fighterEngine = new FighterFrameEngine(this.def.fighterEngine);
+    }
     const gc = this.def.player.grappleConfig;
     this.grappleEnabled = this.def.player.controller === 'platformer' && Boolean(gc?.enabled);
     this.grappleMaxRange = clamp(gc?.maxRange ?? 165, 24, 512);
@@ -1017,6 +1054,44 @@ export class DataCartridgeRuntime
     this.vm.loadRules(combinedRules, this.def.initialVars);
     initGenreStageState(this);
 
+    if (this.def.player.parkourMechanics?.waveDash || this.grappleEnabled) {
+      this.relics.airDash = true;
+    }
+
+    // Configure Studio 6.0 procedural visual rig, curl-noise atmosphere & HD-2D depth plane
+    this.lastHeroSprite = this.def.player.sprite;
+    this.visualRig.configure(
+      this.def.player.visualRig,
+      st.atmosphere,
+      st.spawn.x,
+      st.spawn.y,
+      this.stageViewport.width,
+      this.stageViewport.height,
+    );
+    const atm = st.atmosphere;
+    if (
+      atm &&
+      (atm.waterLevelY !== undefined ||
+        atm.horizonHazeAlpha !== undefined ||
+        atm.tiltShiftAlpha !== undefined ||
+        atm.splitToneWarmth !== undefined)
+    ) {
+      this.hd2dConfig.enabled = true;
+      this.hd2dConfig.sortByDepthY = false;
+      this.hd2dConfig.waterLevelY = atm.waterLevelY;
+      this.hd2dConfig.waterTint = atm.waterTint ?? '#2e5d8a';
+      this.hd2dConfig.horizonHazeColor = atm.horizonHazeColor ?? this.stageSkyBottom;
+      this.hd2dConfig.horizonHazeAlpha = atm.horizonHazeAlpha ?? 0.22;
+      this.hd2dConfig.tiltShiftAlpha = atm.tiltShiftAlpha ?? 0.14;
+      this.hd2dConfig.splitToneWarmth = atm.splitToneWarmth;
+    } else {
+      this.hd2dConfig.enabled = false;
+      this.hd2dConfig.waterLevelY = undefined;
+    }
+
+    // Configure pure JSON 1P <-> 3P dual-perspective projector against shared TilemapGrid
+    this.dualPerspective.configure(this.def.perspective, this.tilemap);
+
     if (this.def.player.controller === 'shmup') {
       this.shmup.waveIndex = 0;
       this.shmup.waveTimer = 0;
@@ -1056,6 +1131,15 @@ export class DataCartridgeRuntime
     this.pool.parentSlot[slot] = parentSlot;
     this.pool.paramA[slot] = (arch.behaviorMask & BM_CHASE) !== 0 ? 0 : x * 0.1; // phase seed or minX default
     this.pool.paramB[slot] = (arch.behaviorMask & BM_SIN_FLOAT) !== 0 ? y : 0;
+    if ((arch.flags & EF_ZIP_BLOCK) !== 0) {
+      this.pool.paramA[slot] = x;
+      this.pool.paramB[slot] = x + 64;
+      this.pool.paramC[slot] = y;
+      this.pool.aiState[slot] = 0;
+    } else if ((arch.flags & EF_CRUMBLE_TILE) !== 0) {
+      this.pool.aiState[slot] = 0;
+      this.pool.timerA[slot] = 0;
+    }
     this.pool.pivotX[slot] = 0.5;
     this.pool.pivotY[slot] = arch.def.castShadow ? 1.0 : 0.5;
     if (arch.def.paletteRow !== undefined) this.pool.paletteRow[slot] = arch.def.paletteRow;
@@ -1089,9 +1173,13 @@ export class DataCartridgeRuntime
 
   public setDebugHitboxes(enabled: boolean): void {
     this.debugHitboxes = enabled;
+    if (this.fighterEngine) {
+      this.fighterEngine.debugBoxesVisible = enabled;
+    }
   }
 
   public getComboCount(): number {
+    if (this.fighterEngine) return this.fighterEngine.p1.comboCount;
     return this.juice.comboCount;
   }
 
@@ -1107,6 +1195,20 @@ export class DataCartridgeRuntime
 
   public retryCurrentStage(): void {
     this.hearts = this.maxHearts;
+    if (this.cardEngine) {
+      this.cardEngine.resetRun();
+      this.status = 'playing';
+      this.score = 0;
+      this.statusBanner = this.cardEngine.lastActionBanner;
+      return;
+    }
+    if (this.fighterEngine) {
+      this.fighterEngine.resetRound();
+      this.status = 'playing';
+      this.score = 0;
+      this.statusBanner = this.fighterEngine.lastBanner;
+      return;
+    }
     if (this.def.player.controller === 'shmup') {
       this.shmup.invulnTimer = 1.35;
       this.shmup.chargeSec = 0;
@@ -1318,6 +1420,47 @@ export class DataCartridgeRuntime
     }
 
     const ctrl = this.def.player.controller;
+    if (this.cardEngine) {
+      if (this.status !== 'playing' && this.input.justPressed('shoulderL')) {
+        this.retryCurrentStage();
+        this.eventsOut.push('snap');
+        return this.eventsOut;
+      }
+      if (simDt > 0) {
+        this.elapsedSec += simDt;
+        this.tweens.step(simDt, this.onTweenUpdate);
+      }
+      this.cardEngine.step(this.input, dt, this.stageViewport.width, this.stageViewport.height, this.orthogonalStepHooks);
+      this.score = this.cardEngine.score;
+      this.hearts = Math.max(0, Math.ceil((this.cardEngine.heroHp / Math.max(1, this.cardEngine.heroMaxHp)) * this.maxHearts));
+      this.status = this.cardEngine.phase === 'won' ? 'won' : this.cardEngine.phase === 'lost' ? 'lost' : 'playing';
+      this.statusBanner = this.cardEngine.lastActionBanner;
+      this.vm.stepTick(this.vmHost, this.vmCollisions, 0);
+      return this.eventsOut;
+    }
+
+    if (this.fighterEngine) {
+      if (this.status !== 'playing' && this.input.justPressed('shoulderL')) {
+        this.retryCurrentStage();
+        this.eventsOut.push('snap');
+        return this.eventsOut;
+      }
+      if (simDt > 0) {
+        this.elapsedSec += simDt;
+        this.tweens.step(simDt, this.onTweenUpdate);
+      }
+      this.fighterEngine.step(this.input, dt, this.orthogonalStepHooks);
+      this.score = this.fighterEngine.score;
+      this.hearts = Math.max(0, Math.ceil((this.fighterEngine.p1.hp / Math.max(1, this.fighterEngine.p1.maxHp)) * this.maxHearts));
+      this.status = this.fighterEngine.status;
+      this.cameraX = this.fighterEngine.cameraX;
+      this.cameraY = this.fighterEngine.cameraY;
+      this.cameraZoom = this.fighterEngine.cameraZoom;
+      this.statusBanner = this.fighterEngine.lastBanner;
+      this.vm.stepTick(this.vmHost, this.vmCollisions, 0);
+      return this.eventsOut;
+    }
+
     if (ctrl === 'shmup') {
       if (simDt > 0 && this.shmup.phase === 'sortie') this.elapsedSec += simDt;
       if (simDt > 0) this.tweens.step(simDt, this.onTweenUpdate);
@@ -1350,7 +1493,9 @@ export class DataCartridgeRuntime
       } else if (simDt > 0) {
         this.elapsedSec += simDt;
         this.tweens.step(simDt, this.onTweenUpdate);
-        if (ctrl === 'fighter') {
+        if (this.dualPerspective.isEnabled()) {
+          this.stepDualPerspectiveStage(simDt, params);
+        } else if (ctrl === 'fighter') {
           stepFighterController(this, simDt, params, this.eventsOut);
         } else if (ctrl === 'topdown') {
           stepTopdownController(this, simDt, params, this.eventsOut);
@@ -1548,14 +1693,45 @@ export class DataCartridgeRuntime
       if (!grappleBlockJump && (this.input.justPressed('jump') || this.input.justPressed('up'))) this.input.primeBuffer('jump', 0.13);
       this.coyote = this.aabbRes.onGround ? 0.11 : Math.max(0, this.coyote - dt);
 
+      const parkourCfg = this.def.player.parkourMechanics;
+      const wallSlideEnabled = Boolean(parkourCfg?.wallSlide);
+      const waveDashEnabled = Boolean(parkourCfg?.waveDash);
+      const isWallSliding = wallSlideEnabled && !this.aabbRes.onGround && this.aabbRes.hitWall && pool.vy[p] > 20;
+
       if (!grappleBlockJump && this.input.hasBuffered('jump') && this.coyote > 0) {
         this.input.consumeBuffer('jump');
-        pool.vy[p] = -params.jumpPower;
+        if (waveDashEnabled && this.dashTimer > 0) {
+          // Wave-dash boost: jumping out of a dash on ground preserves hyper-speed & refunds dash
+          const wSign = (pool.flags[p] & EF_FACING_LEFT) !== 0 ? -1 : 1;
+          pool.vx[p] = wSign * Math.max(255, Math.abs(pool.vx[p]) * 1.16);
+          pool.vy[p] = -params.jumpPower * 0.88;
+          this.dashTimer = 0;
+          this.dashCooldown = 0;
+          this.heroSquash.scaleX = 1.32;
+          this.heroSquash.scaleY = 0.74;
+          this.juice.addTrauma(0.14);
+          this.juice.registerCombo();
+          this.eventsOut.push('snap');
+          this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#5ec2f7', '#ffd447', '#fffaf0'], 8, params.sparkleDensity);
+        } else {
+          pool.vy[p] = -params.jumpPower;
+          this.heroSquash.scaleX = 0.78;
+          this.heroSquash.scaleY = 1.24;
+          this.eventsOut.push('jump');
+          this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#fffaf0', '#56d39c'], 4, params.sparkleDensity);
+        }
         this.coyote = 0;
-        this.heroSquash.scaleX = 0.78;
-        this.heroSquash.scaleY = 1.24;
+      } else if (!grappleBlockJump && isWallSliding && this.input.hasBuffered('jump')) {
+        this.input.consumeBuffer('jump');
+        const kickSign = (pool.flags[p] & EF_FACING_LEFT) !== 0 ? 1 : -1;
+        pool.vx[p] = kickSign * Math.max(150, params.moveSpeed * 1.15);
+        pool.vy[p] = -params.jumpPower * 0.96;
+        if (kickSign < 0) pool.flags[p] |= EF_FACING_LEFT;
+        else pool.flags[p] &= ~EF_FACING_LEFT;
+        this.heroSquash.scaleX = 0.76;
+        this.heroSquash.scaleY = 1.26;
         this.eventsOut.push('jump');
-        this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 15, ['#fffaf0', '#56d39c'], 4, params.sparkleDensity);
+        this.juice.spawnBurst(pool.x[p] + 8, pool.y[p] + 10, ['#fffaf0', '#ffd447'], 5, params.sparkleDensity);
       } else if (!grappleBlockJump && this.input.hasBuffered('jump') && this.relics.doubleJump && this.airJumpsLeft > 0 && !this.aabbRes.onGround) {
         this.input.consumeBuffer('jump');
         this.airJumpsLeft--;
@@ -1572,7 +1748,8 @@ export class DataCartridgeRuntime
       }
       if (this.dashTimer <= 0) {
         const apex = !this.aabbRes.onGround && Math.abs(pool.vy[p]) < 38 ? 0.56 : 1.0;
-        pool.vy[p] = Math.min(340, pool.vy[p] + 590 * params.gravityScale * apex * dt);
+        const maxFall = isWallSliding ? 62 : 340;
+        pool.vy[p] = Math.min(maxFall, pool.vy[p] + 590 * params.gravityScale * apex * dt);
       }
     }
 
@@ -1582,13 +1759,16 @@ export class DataCartridgeRuntime
     else pool.flags[p] &= ~EF_FLIP_X;
 
     if (!grappleBlockActions && (this.input.justPressed('action') || (!this.grappleEnabled && this.input.justPressed('shoulderR')))) {
-      if (this.relics.airDash && !this.aabbRes.onGround && this.dashCooldown <= 0) {
+      const waveDashEnabled = Boolean(this.def.player.parkourMechanics?.waveDash);
+      if (this.relics.airDash && (!this.aabbRes.onGround || waveDashEnabled) && this.dashCooldown <= 0) {
+        const aimY = this.input.axisY();
         this.dashTimer = 0.14;
         this.dashCooldown = 0.55;
         pool.vx[p] = sign * 235;
-        pool.vy[p] = 0;
+        pool.vy[p] = aimY < -0.35 ? -135 : aimY > 0.35 && !this.aabbRes.onGround ? 120 : 0;
         this.heroSquash.scaleX = 1.32;
         this.heroSquash.scaleY = 0.72;
+        this.juice.addTrauma(0.1);
         this.eventsOut.push('snap');
       } else if (!this.grappleEnabled) {
         const sp = this.spawnArchetype('spark', pool.x[p] + 8 + sign * 7, pool.y[p] + 7, sign * 155, -22);
@@ -1724,6 +1904,82 @@ export class DataCartridgeRuntime
         if (pool.timerA[s] <= 0) pool.free(s);
       } else if ((pool.flags[s] & EF_CRYSTAL_RESET) !== 0 && pool.timerA[s] > 0) {
         pool.timerA[s] = Math.max(0, pool.timerA[s] - dt);
+      } else if ((pool.flags[s] & EF_CRUMBLE_TILE) !== 0) {
+        const hbR = box.x + HERO_HB.x + HERO_HB.w;
+        const hbL = box.x + HERO_HB.x;
+        const hbBot = box.y + HERO_HB.y + HERO_HB.h;
+        if (pool.aiState[s] === 2) {
+          pool.timerA[s] -= dt;
+          if (pool.timerA[s] <= 0) {
+            pool.aiState[s] = 0;
+            pool.timerA[s] = 0;
+          }
+        } else {
+          if (
+            hbR > pool.x[s] &&
+            hbL < pool.x[s] + pool.w[s] &&
+            box.vy >= 0 &&
+            hbBot >= pool.y[s] - 2 &&
+            hbBot <= pool.y[s] + 8
+          ) {
+            box.y = pool.y[s] - HERO_HB.y - HERO_HB.h;
+            box.vy = 0;
+            this.aabbRes.onGround = true;
+            if (pool.aiState[s] === 0) {
+              pool.aiState[s] = 1;
+              pool.timerA[s] = 0.46;
+              this.eventsOut.push('snap');
+            }
+          }
+          if (pool.aiState[s] === 1) {
+            pool.timerA[s] -= dt;
+            if (pool.timerA[s] <= 0) {
+              pool.aiState[s] = 2;
+              pool.timerA[s] = this.def.player.parkourMechanics?.crumbleRespawnSec ?? 2.4;
+              this.juice.spawnBurst(pool.x[s] + pool.w[s] * 0.5, pool.y[s] + 6, ['#e8c594', '#fffaf0'], 5, params.sparkleDensity);
+            }
+          }
+        }
+      } else if ((pool.flags[s] & EF_ZIP_BLOCK) !== 0) {
+        const prevZx = pool.x[s];
+        const homeX = pool.paramA[s];
+        const endX = pool.paramB[s] > homeX ? pool.paramB[s] : homeX + 64;
+        const hbR = box.x + HERO_HB.x + HERO_HB.w;
+        const hbL = box.x + HERO_HB.x;
+        const hbBot = box.y + HERO_HB.y + HERO_HB.h;
+        const playerStanding =
+          hbR > pool.x[s] &&
+          hbL < pool.x[s] + pool.w[s] &&
+          box.vy >= 0 &&
+          hbBot >= pool.y[s] - 2 &&
+          hbBot <= pool.y[s] + 8;
+        const grappleAttached = this.grappleState !== 'idle' && this.grappleTargetSlot === s;
+        if (pool.aiState[s] === 0 && (playerStanding || grappleAttached)) {
+          pool.aiState[s] = 1;
+          this.eventsOut.push('rail');
+        }
+        if (pool.aiState[s] === 1) {
+          pool.x[s] = Math.min(endX, pool.x[s] + 210 * dt);
+          if (pool.x[s] >= endX - 0.5) {
+            pool.aiState[s] = 2;
+            pool.timerA[s] = 0.45;
+          }
+        } else if (pool.aiState[s] === 2) {
+          pool.timerA[s] -= dt;
+          if (pool.timerA[s] <= 0) pool.aiState[s] = 3;
+        } else if (pool.aiState[s] === 3) {
+          pool.x[s] = Math.max(homeX, pool.x[s] - 72 * dt);
+          if (pool.x[s] <= homeX + 0.5) {
+            pool.x[s] = homeX;
+            pool.aiState[s] = 0;
+          }
+        }
+        if (playerStanding) {
+          box.x += pool.x[s] - prevZx;
+          box.y = pool.y[s] - HERO_HB.y - HERO_HB.h;
+          box.vy = 0;
+          this.aabbRes.onGround = true;
+        }
       }
     }
 
@@ -1866,7 +2122,7 @@ export class DataCartridgeRuntime
           if (this.hearts <= 0) this.status = 'lost';
         }
       } else if ((f & EF_CRYSTAL_RESET) !== 0 && pool.timerA[s] <= 0 && dist < 16) {
-        pool.timerA[s] = 2.2;
+        pool.timerA[s] = this.def.player.parkourMechanics?.crystalRespawnSec ?? 2.2;
         pool.flash[s] = 0.25;
         this.dashCooldown = 0;
         this.airJumpsLeft = 1;
@@ -1895,8 +2151,156 @@ export class DataCartridgeRuntime
       }
     }
 
-    // 5. Camera track
+    // 5. Camera track & Procedural Visual Rig (Verlet scarf, 2-Bone IK, afterimages, Curl-Noise particles)
     this.trackCameraTarget(pool.x[p], pool.y[p], dt);
+    const rigTargetX =
+      this.grappleState !== 'idle'
+        ? (this.grappleState === 'shooting' ? this.grappleTipX : this.grappleAnchorX)
+        : this.grapplePreviewKind !== 'none'
+          ? this.grapplePreviewX
+          : pool.x[p] + pool.w[p] * 0.5 + sign * 24;
+    const rigTargetY =
+      this.grappleState !== 'idle'
+        ? (this.grappleState === 'shooting' ? this.grappleTipY : this.grappleAnchorY)
+        : this.grapplePreviewKind !== 'none'
+          ? this.grapplePreviewY
+          : pool.y[p] + pool.h[p] * 0.42;
+    this.visualRig.step(
+      dt,
+      pool.x[p],
+      pool.y[p],
+      pool.w[p],
+      pool.h[p],
+      pool.vx[p],
+      pool.vy[p],
+      sign,
+      this.lastHeroSprite,
+      this.dashCooldown <= 0,
+      this.dashTimer > 0,
+      this.grappleState !== 'idle',
+      rigTargetX,
+      rigTargetY,
+      this.cameraX,
+      this.cameraY,
+      this.stageViewport.width,
+      this.stageViewport.height,
+    );
+  }
+
+  private stepDualPerspectiveStage(dt: number, params: RuntimeParams): void {
+    const p = this.playerSlot;
+    const pool = this.pool;
+    if (p < 0) return;
+
+    if (this.invulnTimer > 0) this.invulnTimer = Math.max(0, this.invulnTimer - dt);
+    this.dualPerspective.step(
+      dt,
+      this.input,
+      pool,
+      p,
+      this.tilemap,
+      this.stageWorldW,
+      this.stageWorldH,
+      this.dualPerspectiveStepOut,
+    );
+    if (this.dualPerspectiveStepOut.toggled) this.eventsOut.push('snap');
+    if (this.dualPerspectiveStepOut.slashed) this.eventsOut.push('ignite');
+    if (this.dualPerspectiveStepOut.hits > 0) {
+      this.score += this.dualPerspectiveStepOut.hits * 120;
+      this.juice.addTrauma(0.18);
+      this.juice.registerCombo();
+      this.eventsOut.push('stomp');
+    }
+
+    // Step patrol & sine entities in the shared world
+    for (let i = pool.activeCount - 1; i >= 0; i--) {
+      const s = pool.activeIndices[i];
+      if (s === p || (pool.flags[s] & EF_ALIVE) === 0) continue;
+      if ((pool.behaviorMask[s] & BM_PATROL) !== 0) {
+        pool.x[s] += pool.vx[s] * dt;
+        if (pool.x[s] < pool.paramA[s]) { pool.x[s] = pool.paramA[s]; pool.vx[s] = Math.abs(pool.vx[s]); }
+        else if (pool.x[s] > pool.paramB[s]) { pool.x[s] = pool.paramB[s]; pool.vx[s] = -Math.abs(pool.vx[s]); }
+        if (pool.vx[s] < 0) pool.flags[s] |= EF_FLIP_X;
+        else pool.flags[s] &= ~EF_FLIP_X;
+      } else if ((pool.behaviorMask[s] & BM_SIN_FLOAT) !== 0) {
+        pool.timerA[s] += dt * 2.5;
+        pool.y[s] = pool.paramB[s] + Math.sin(pool.timerA[s] + pool.paramA[s]) * 6;
+      }
+    }
+
+    // Collectibles, switches & gate interactions
+    const hcx = pool.x[p] + pool.w[p] * 0.5;
+    const hcy = pool.y[p] + pool.h[p] * 0.5;
+    for (let i = pool.activeCount - 1; i >= 0; i--) {
+      const s = pool.activeIndices[i];
+      if (s === p || (pool.flags[s] & EF_ALIVE) === 0) continue;
+      const archIdx = pool.archetypeIdx[s];
+      const aid = archIdx >= 0 ? (this.archetypeMetaByIdx[archIdx]?.id ?? '') : '';
+      const f = pool.flags[s];
+      const ecx = pool.x[s] + pool.w[s] * 0.5;
+      const ecy = pool.y[s] + pool.h[s] * 0.5;
+      const dist = Math.hypot(hcx - ecx, hcy - ecy);
+      if ((f & EF_COLLECTIBLE) !== 0 && dist < 15) {
+        pool.free(s);
+        this.juice.registerCombo();
+        if (aid === 'star') {
+          this.stageStarsCollected++;
+          if (this.stageStarsCollected > this.bestStarsByStage[this.stageIdx]) {
+            this.bestStarsByStage[this.stageIdx] = this.stageStarsCollected;
+          }
+          this.score += 100;
+          this.eventsOut.push('star');
+        } else if (aid === 'key') {
+          this.hasKey = true;
+          this.gateUnlocked = true;
+          this.score += 150;
+          this.eventsOut.push('key');
+        } else {
+          this.score += 50;
+          this.eventsOut.push('star');
+        }
+        this.juice.spawnBurst(ecx, ecy, ['#ffd447', '#fffaf0'], 6, params.sparkleDensity);
+      } else if (aid === 'gate' && this.gateUnlocked && dist < 16) {
+        if (this.stageIdx + 1 < this.def.stages.length) {
+          this.enterStage(this.stageIdx + 1);
+          this.eventsOut.push('key');
+          return;
+        } else {
+          this.status = 'won';
+          this.eventsOut.push('win');
+        }
+      }
+      if (this.vmCollisionCount < MAX_VM_COLLISION_PAIRS && dist < 16) {
+        const cp = this.vmCollisions[this.vmCollisionCount++];
+        cp.selfSlot = p;
+        cp.otherSlot = s;
+        cp.selfTag = 'player';
+        cp.otherTag = aid;
+      }
+    }
+
+    this.trackCameraTarget(pool.x[p], pool.y[p], dt);
+    const facingSign = (pool.flags[p] & EF_FLIP_X) !== 0 ? -1 : 1;
+    this.visualRig.step(
+      dt,
+      pool.x[p],
+      pool.y[p],
+      pool.w[p],
+      pool.h[p],
+      pool.vx[p],
+      pool.vy[p],
+      facingSign,
+      this.lastHeroSprite,
+      true,
+      false,
+      false,
+      pool.x[p] + pool.w[p] * 0.5 + Math.cos(this.dualPerspective.viewerYawRad) * 20,
+      pool.y[p] + pool.h[p] * 0.5 + Math.sin(this.dualPerspective.viewerYawRad) * 20,
+      this.cameraX,
+      this.cameraY,
+      this.stageViewport.width,
+      this.stageViewport.height,
+    );
   }
 
   public trackCameraTarget(targetX: number, targetY: number, dt: number): void {
@@ -2229,15 +2633,33 @@ export class DataCartridgeRuntime
         const ctrl = this.def.player.controller;
         if (isShmup && loadout) {
           sprite = Math.floor(t * 12) % 2 === 0 ? loadout.spriteA : loadout.spriteB;
-        } else if (!isShmup && this.def.player.spriteB) {
-          const moving =
-            ctrl === 'topdown'
-              ? Math.hypot(this.pool.vx[s], this.pool.vy[s]) > 8
-              : ctrl === 'card'
-                ? false
-                : Math.abs(this.pool.vx[s]) > 8 || !this.aabbRes.onGround;
-          sprite = moving && Math.floor(this.walkAnim) % 2 === 1 ? this.def.player.spriteB : this.def.player.sprite;
+        } else if (!isShmup) {
+          if (this.def.player.visualRig?.stateSprites) {
+            sprite = this.visualRig.resolveStateSprite(
+              this.def.player.sprite,
+              this.def.player.spriteB,
+              this.walkAnim,
+              this.pool.vx[s],
+              this.pool.vy[s],
+              this.aabbRes.onGround,
+              this.aabbRes.hitWall,
+              this.dashTimer > 0,
+              this.grappleState === 'swinging' || this.grappleState === 'pulling',
+            );
+          } else if (this.def.player.spriteB) {
+            const moving =
+              ctrl === 'topdown'
+                ? Math.hypot(this.pool.vx[s], this.pool.vy[s]) > 8
+                : ctrl === 'card'
+                  ? false
+                  : Math.abs(this.pool.vx[s]) > 8 || !this.aabbRes.onGround;
+            sprite = moving && Math.floor(this.walkAnim) % 2 === 1 ? this.def.player.spriteB : this.def.player.sprite;
+          }
         }
+        this.lastHeroSprite = sprite;
+
+        // Emit afterimage trails & Verlet scarf/cape behind hero
+        entSlotCount = this.visualRig.emitPreHeroEntities(outEntities, bank.entitySlots, entSlotCount);
 
         const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
         dst.id = isShmup ? 'ship' : 'hero';
@@ -2263,7 +2685,16 @@ export class DataCartridgeRuntime
         dst.castShadow = !isShmup;
         dst.shadowRadius = 6;
         dst.sortY = undefined;
+        dst.artBlueprintId = this.def.player.artBlueprintId;
+        dst.artFacing = undefined;
+        dst.artPose = undefined;
+        dst.yawRad = undefined;
+        dst.billboardScale = undefined;
+        dst.hideInFirstPerson = this.dualPerspective.isEnabled() ? true : undefined;
         outEntities.push(dst);
+
+        // Emit 2-Bone IK grapple arm/claw in front of hero
+        entSlotCount = this.visualRig.emitPostHeroEntities(outEntities, bank.entitySlots, entSlotCount);
 
         if (glow > 0.05) {
           const isDark = (st.ambientDarkness ?? 0) > 0.16;
@@ -2288,6 +2719,7 @@ export class DataCartridgeRuntime
       if (!inEntFrustum && !inLightFrustum) continue;
 
       if (inEntFrustum) {
+        if ((f & EF_CRUMBLE_TILE) !== 0 && this.pool.aiState[s] === 2) continue;
         let sprite: SpriteId = arch?.def.sprite ?? 'star_a';
         if (arch?.def.spriteB && Math.floor((t * (arch.def.animFps ?? 4) + this.pool.paramA[s]) % 2) === 1) {
           sprite = arch.def.spriteB;
@@ -2312,10 +2744,11 @@ export class DataCartridgeRuntime
           tint = '#5ec2f7';
         }
 
+        const crumbleShakeX = (f & EF_CRUMBLE_TILE) !== 0 && this.pool.aiState[s] === 1 ? Math.sin(t * 58) * 1.4 : 0;
         const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
         dst.id = this.getEntityId(s, archIdx);
         dst.sprite = sprite;
-        dst.x = rx;
+        dst.x = rx + crumbleShakeX;
         dst.y = ry;
         dst.w = ew;
         dst.h = eh;
@@ -2336,6 +2769,12 @@ export class DataCartridgeRuntime
         dst.castShadow = arch?.def.castShadow;
         dst.shadowRadius = ew * 0.36;
         dst.sortY = undefined;
+        dst.artBlueprintId = arch?.def.artBlueprintId;
+        dst.artFacing = undefined;
+        dst.artPose = undefined;
+        dst.yawRad = undefined;
+        dst.billboardScale = undefined;
+        dst.hideInFirstPerson = undefined;
         outEntities.push(dst);
       }
 
@@ -2480,6 +2919,7 @@ export class DataCartridgeRuntime
     bank.particles.length = 0;
     const jp = this.juice.particles;
     for (let i = 0; i < jp.length; i++) bank.particles.push(jp[i]);
+    this.visualRig.emitAmbientParticles(bank.particles);
 
     let totalCollected = 0;
     if (!isShmup) {
@@ -2532,15 +2972,79 @@ export class DataCartridgeRuntime
     snap.particles = bank.particles;
     snap.lights = outLights;
     snap.debugRects = debugRects;
+    snap.hd2dDepth = this.hd2dConfig.enabled ? this.hd2dConfig : undefined;
+    if (this.dualPerspective.isEnabled() && this.playerSlot >= 0) {
+      this.dualPerspective.annotateEntitiesForPerspective(outEntities, this.pool);
+      const vx = this.pool.renderX(this.playerSlot, alpha) + this.pool.w[this.playerSlot] * 0.5;
+      const vy = this.pool.renderY(this.playerSlot, alpha) + this.pool.h[this.playerSlot] * 0.5;
+      snap.perspective = this.dualPerspective.buildProjectionDesc(vx, vy);
+    } else {
+      snap.perspective = undefined;
+    }
+    snap.customArtBlueprints = this.def.artBlueprints;
     const hideCtrl = this.def.player.controller;
     snap.hideClassicHud =
+      Boolean(this.cardEngine || this.fighterEngine) ||
       hideCtrl === 'fighter' ||
       hideCtrl === 'card' ||
       hideCtrl === 'topdown' ||
       gh === 'fighter' ||
       gh === 'card' ||
       gh === 'grid';
-    snap.hudPrimitives = this.buildHudPrimitives(bank, bossHp, bossMaxHp, alpha);
+
+    if (this.cardEngine) {
+      outEntities.length = 0;
+      const hudOut = bank.hudPrimitives;
+      hudOut.length = 0;
+      this.cardEngine.emitSceneAndHud(outEntities, hudOut, bank.viewport.width, bank.viewport.height);
+      let ftIdx = hudOut.length;
+      for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+        const ft = this.floatingTexts[i];
+        if (!ft.active) continue;
+        const tSlot = acquireHudSlot(bank.hudSlots, ftIdx++);
+        tSlot.kind = 'text';
+        tSlot.x = ft.x;
+        tSlot.y = ft.y;
+        tSlot.text = ft.text;
+        tSlot.scale = 1;
+        tSlot.align = 'center';
+        tSlot.color = ft.color;
+        tSlot.shadowColor = '#120d1e';
+        tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
+        tSlot.worldSpace = false;
+        hudOut.push(tSlot);
+      }
+      snap.hudPrimitives = hudOut;
+    } else if (this.fighterEngine) {
+      outEntities.length = 0;
+      const hudOut = bank.hudPrimitives;
+      hudOut.length = 0;
+      const fighterDbg = bank.debugRects;
+      fighterDbg.length = 0;
+      this.fighterEngine.emitSceneAndHud(outEntities, hudOut, fighterDbg, bank.viewport.width);
+      let ftIdx = hudOut.length;
+      for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+        const ft = this.floatingTexts[i];
+        if (!ft.active) continue;
+        const tSlot = acquireHudSlot(bank.hudSlots, ftIdx++);
+        tSlot.kind = 'text';
+        tSlot.x = ft.x;
+        tSlot.y = ft.y;
+        tSlot.text = ft.text;
+        tSlot.scale = 1;
+        tSlot.align = 'center';
+        tSlot.color = ft.color;
+        tSlot.shadowColor = '#120d1e';
+        tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
+        tSlot.worldSpace = true;
+        hudOut.push(tSlot);
+      }
+      snap.debugRects = fighterDbg.length > 0 ? fighterDbg : undefined;
+      snap.hudPrimitives = hudOut;
+    } else {
+      snap.hudPrimitives = this.buildHudPrimitives(bank, bossHp, bossMaxHp, alpha);
+    }
+
     snap.statusBanner = this.statusBanner;
     snap.stage = bank.stageInfo;
     snap.bgmTheme = st.bgmTheme;
@@ -2555,9 +3059,16 @@ export class DataCartridgeRuntime
     alpha: number,
   ): HudPrimitiveDesc[] | undefined {
     const ctrl = this.def.player.controller;
+    const dualOn = this.dualPerspective.isEnabled();
     const genreHud =
       this.def.meta.genreHud ??
-      (ctrl === 'fighter' ? 'fighter' : ctrl === 'card' ? 'card' : ctrl === 'topdown' ? 'grid' : undefined);
+      (ctrl === 'fighter'
+        ? 'fighter'
+        : ctrl === 'card'
+          ? 'card'
+          : ctrl === 'topdown' && !dualOn
+            ? 'grid'
+            : undefined);
     const needsAimLine =
       this.grappleEnabled &&
       this.grappleState === 'idle' &&
@@ -2572,7 +3083,7 @@ export class DataCartridgeRuntime
       }
     }
 
-    if (!needsAimLine && !hasActiveFloatText && (!genreHud || genreHud === 'platformer')) {
+    if (!needsAimLine && !hasActiveFloatText && !dualOn && (!genreHud || genreHud === 'platformer')) {
       return undefined;
     }
 
@@ -2621,6 +3132,11 @@ export class DataCartridgeRuntime
       out.push(bar);
     } else if (genreHud === 'fighter' || genreHud === 'card' || genreHud === 'grid') {
       count = buildGenreHudPrimitives(this, genreHud, out, bank.hudSlots, count, vw, vh, bossHp, bossMaxHp);
+    }
+
+    if (dualOn) {
+      const dualTopY = genreHud === 'grid' ? 28 : genreHud === 'parkour' ? 20 : 8;
+      count = this.dualPerspective.appendHudIndicators(out, bank.hudSlots, count, vw, dualTopY);
     }
 
     // Floating pixel text popups (world-space)

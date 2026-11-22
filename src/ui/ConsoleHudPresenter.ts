@@ -70,6 +70,12 @@ export class ConsoleHudPresenter {
     this.refs.chronicleOverlay.reset();
   }
 
+  public destroy(): void {
+    this.refs.rpgOverlay.destroy();
+    this.refs.shmupOverlay.destroy();
+    this.refs.chronicleOverlay.destroy();
+  }
+
   private setStageDisplay(visible: boolean, text = ''): void {
     if (this.lastStageHidden !== !visible) {
       this.lastStageHidden = !visible;

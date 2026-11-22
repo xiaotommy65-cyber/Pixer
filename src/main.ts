@@ -1,6 +1,8 @@
 import './styles/atelier.css';
 import './styles/switch.css';
 import './styles/lobby.css';
+import './styles/studio7.css';
+import './styles/rhythm.css';
 
 import {
   applyPerformanceProfileAttr,
@@ -8,41 +10,57 @@ import {
   createHandheldOrientationController,
   createOsUtilityBar,
   exportCaptureScreenshot,
-  importCartridgeFileWithPrompt,
   installGlobalErrorHandlers,
   installPolaroidDropHandler,
   recoverFromFrameError,
   renderStartupCrashFallback,
 } from './AppShellHelpers.ts';
 import { TextureAtlas } from './assets/TextureAtlas.ts';
-import { createAgentBridge, type PixelAtelierAgentApi } from './core/ai/AgentBridge.ts';
+import {
+  createAgentBridge,
+  type PixelAtelierAgentApi,
+  type PixerPlatformMode,
+} from './core/ai/AgentBridge.ts';
 import { ToySynth } from './core/audio/ToySynth.ts';
+import { EcsCartridgeRuntime } from './core/ecs/EcsCartridgeRuntime.ts';
+import { syncProjectCustomSpritesToAtlas } from './core/ecs/EcsCustomSpriteCompiler.ts';
+import type { EcsProjectV2 } from './core/ecs/EcsProjectSchema.ts';
+import { EcsStudioSession, type EcsStudioCommand } from './core/ecs/EcsStudioSession.ts';
+import { CASTLE_TILE_REGISTRY, type EcsMapLayerName } from './core/ecs/EcsTilemapTypes.ts';
+import { StudioSession } from './core/editor/StudioSession.ts';
 import { GpuEngine } from './core/gpu/GpuEngine.ts';
 import type { GpuBackendKind, RenderPerformanceProfile } from './core/gpu/GpuTypes.ts';
 import type { ErgonomicGripMode } from './core/hal/SystemHal.ts';
 import type { DpadDeadzoneMode, StickCurveMode } from './core/input/InputPipeline.ts';
 import { appLogger } from './core/runtime/AppLogger.ts';
+import { registerCartridgePlugin } from './core/runtime/CartridgeRegistry.ts';
 import { CartridgeRunner } from './core/runtime/CartridgeRunner.ts';
 import { DisplayThermalGovernor } from './core/runtime/DisplayThermalGovernor.ts';
 import { EngineHost } from './core/runtime/EngineHost.ts';
 import { SaveService } from './core/runtime/SaveService.ts';
 import { SceneGpuBridge } from './core/runtime/SceneGpuBridge.ts';
-import { createEmptyInputState, type CartridgeId } from './core/types/WorldTypes.ts';
-import { registerBuiltinCartridges } from './game/BuiltinCartridges.ts';
+import { createEmptyInputState } from './core/types/WorldTypes.ts';
+import {
+  isLegacyCartridgePackLoaded,
+  loadLegacyCartridgePack,
+  registerBuiltinCartridges,
+} from './game/BuiltinCartridges.ts';
+import { OBSIDIAN_CITADEL_PROJECT } from './game/obsidianCitadel/ObsidianCitadelProject.ts';
 import { initCapacitorNativeBridge } from './ui/CapacitorNativeBridge.ts';
 import { loadEngine4ArtPack } from './ui/BrowserAssetLoader.ts';
 import { ConsoleView } from './ui/ConsoleView.ts';
 import { installGlobalTactileFeedback, registerDomHapticSink } from './ui/dom.ts';
+import { EcsWorkbenchView } from './ui/EcsWorkbenchView.ts';
 import { IrisWipeTransition } from './ui/IrisWipeTransition.ts';
 import { setElementIconLabel } from './ui/PixelIcons.ts';
+import { PixerPlatformShell, type PixerTopNavTab } from './ui/PixerPlatformShell.ts';
+import { RhythmWorkspaceView } from './ui/RhythmWorkspaceView.ts';
 import { SpriteAtelierView } from './ui/SpriteAtelierView.ts';
-import { StudioWorkbenchView } from './ui/StudioWorkbenchView.ts';
 import {
   SHELL_THEMES,
   SystemSettingsDrawerView,
   type ShellTheme,
 } from './ui/SystemSettingsDrawerView.ts';
-import { WorkshopView } from './ui/WorkshopView.ts';
 
 declare global {
   interface Window {
@@ -66,12 +84,12 @@ export function createApp(): AppHandle | null {
   void appLogger.hydrateFromPersistence();
 
   const synth = new ToySynth();
-  const runner = new CartridgeRunner('cloudberry-hop');
+  const runner = new CartridgeRunner('obsidian-citadel');
   const save = new SaveService();
   const bridge = new SceneGpuBridge();
 
   const shell = document.createElement('div');
-  shell.className = 'atelier-shell is-os-locked';
+  shell.className = 'atelier-shell is-os-locked has-p7-topbar';
 
   const ambientGlow = document.createElement('div');
   ambientGlow.className = 'lobby-ambient-glow';
@@ -94,6 +112,11 @@ export function createApp(): AppHandle | null {
   let rafId = 0;
 
   const { utilityBar, viewBtn, timeBtn, landscapeBtn, settingsBtn } = createOsUtilityBar();
+  const legacyPackBtn = document.createElement('button');
+  legacyPackBtn.type = 'button';
+  legacyPackBtn.className = 'p7-legacy-btn';
+  legacyPackBtn.textContent = '載入經典典藏包 (+5 卡匣)';
+  utilityBar.prepend(legacyPackBtn);
 
   const host = new EngineHost(runner, synth, save);
   const disposeHapticSink = registerDomHapticSink((profile, side, skipAcoustic) =>
@@ -103,25 +126,124 @@ export function createApp(): AppHandle | null {
     host.playTactile(profile, phase),
   );
 
-  window.__PIXEL_ATELIER_AGENT__ = createAgentBridge(runner, host.ai, (rawJson, opts) =>
-    host.loadCartridge(rawJson, opts),
-  );
-
+  const studioSession = new StudioSession('parkour_flagship');
+  const ecsSession = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
   const atlas = new TextureAtlas();
   host.bindAtlas(atlas);
   host.hydrateSavedCustomCartridges();
 
+  let platformMode: PixerPlatformMode = 'studio';
+  let activeTopTab: PixerTopNavTab = 'studio';
+  let captureCanvasRef: HTMLCanvasElement | null = null;
+  let ecsWorkbench: EcsWorkbenchView | null = null;
+  let rhythmWorkspace: RhythmWorkspaceView | null = null;
+  let platformShell: PixerPlatformShell | null = null;
+
   const irisWipe = new IrisWipeTransition(host, atlas);
   let drawerView: SystemSettingsDrawerView | null = null;
-  let studioWorkbench: StudioWorkbenchView | null = null;
+  let spriteModalOpen = false;
+  let spriteModalEl: HTMLElement | null = null;
   let consoleView: ConsoleView;
+  let ensureArcadeGpuInit = () => {};
+
+  const closeSpriteModal = () => {
+    if (!spriteModalOpen) return;
+    spriteModalOpen = false;
+    spriteModalEl?.classList.add('panel-hidden');
+    ecsWorkbench?.syncAtlasToPreview();
+  };
+
+  let syncedArcadeSpriteIds = new Set<string>();
+  const syncProjectSpritesToSharedAtlas = (proj: EcsProjectV2) => {
+    syncedArcadeSpriteIds = syncProjectCustomSpritesToAtlas(atlas, proj, syncedArcadeSpriteIds);
+    gpuEngine?.syncAtlasIfDirty();
+    ecsWorkbench?.syncAtlasToPreview();
+  };
+
+  const openSpriteModal = () => {
+    ensureArcadeGpuInit();
+    spriteModalOpen = true;
+    spriteModalEl?.classList.remove('panel-hidden');
+  };
+
+  const handleLoadLegacyPack = async (): Promise<number> => {
+    if (isLegacyCartridgePackLoaded()) return 5;
+    legacyPackBtn.disabled = true;
+    legacyPackBtn.textContent = '載入經典包中...';
+    try {
+      const count = await loadLegacyCartridgePack();
+      legacyPackBtn.textContent = `經典包已載入 (${count} 卡匣)`;
+      legacyPackBtn.classList.add('is-loaded');
+      consoleView.refreshCardArt();
+      return count;
+    } catch {
+      legacyPackBtn.disabled = false;
+      legacyPackBtn.textContent = '載入失敗 · 點擊重試';
+      return 0;
+    }
+  };
+  legacyPackBtn.addEventListener('click', () => void handleLoadLegacyPack(), { signal });
+
+  const setPlatformMode = (nextMode: PixerPlatformMode, tabOverride?: PixerTopNavTab) => {
+    platformMode = nextMode;
+    activeTopTab =
+      tabOverride ?? (nextMode === 'arcade' ? 'arcade' : nextMode === 'rhythm' ? 'rhythm' : 'studio');
+    platformShell?.syncState(platformMode, activeTopTab);
+    shell.classList.toggle('is-standalone-game', nextMode === 'rhythm');
+    closeSpriteModal();
+    if (nextMode === 'studio') {
+      drawerView?.close();
+      rhythmWorkspace?.setVisible(false);
+      consoleView.setInEditor(true);
+      utilityBar.classList.add('panel-hidden');
+      ecsWorkbench?.setVisible(true);
+      if (activeTopTab === 'atlas') ecsWorkbench?.setLeftTab('atlas');
+      else ecsWorkbench?.setLeftTab(ecsSession.getProject().worldMap ? 'map' : 'hierarchy');
+    } else if (nextMode === 'rhythm') {
+      drawerView?.close();
+      ecsWorkbench?.setVisible(false);
+      consoleView.setInEditor(true);
+      utilityBar.classList.add('panel-hidden');
+      rhythmWorkspace?.setVisible(true);
+    } else {
+      ensureArcadeGpuInit();
+      ecsWorkbench?.setVisible(false);
+      rhythmWorkspace?.setVisible(false);
+      consoleView.setInEditor(false);
+      utilityBar.classList.remove('panel-hidden');
+      handleViewportMetrics();
+      consoleView.refreshCardArt();
+      consoleView.wakeFromStandby();
+      consoleView.syncPauseState();
+    }
+  };
+
+  window.__PIXEL_ATELIER_AGENT__ = createAgentBridge(runner, host.ai, {
+    onLoadCartridge: (rawJson, opts) => host.loadCartridge(rawJson, opts),
+    studioSession,
+    ecsSession,
+    onCapturePreviewPng: () => {
+      try {
+        const c = platformMode === 'studio' && ecsWorkbench ? ecsWorkbench.getPreviewCanvas() : captureCanvasRef;
+        return c ? c.toDataURL('image/png') : null;
+      } catch {
+        return null;
+      }
+    },
+    onGetPlatformMode: () => platformMode,
+    onSetPlatformMode: (m) => setPlatformMode(m),
+    onLoadLegacyPack: handleLoadLegacyPack,
+    onIsLegacyPackLoaded: () => isLegacyCartridgePackLoaded(),
+    onGetAtlasStats: () => atlas.getAtlasStats(),
+    onSyncProjectSprites: (proj) => syncProjectSpritesToSharedAtlas(proj),
+  });
 
   const orientationCtrl = createHandheldOrientationController({
     shell,
     landscapeBtn,
     signal,
     isInEditor: () => consoleView.getShellPhase() === 'IN_EDITOR',
-    exitEditorToPlay: () => exitEditorToHandheld(undefined),
+    exitEditorToPlay: () => exitEditorToHandheld(),
     getDrawerView: () => drawerView,
     onNativeLockRequest: (next) => host.hal.requestFullscreenLock(next),
   });
@@ -132,28 +254,22 @@ export function createApp(): AppHandle | null {
   };
 
   const ensureForegroundVisible = () => {
-    if (!studioWorkbench) return;
-    const editorHidden = studioWorkbench.element.classList.contains('panel-hidden');
+    if (platformMode === 'studio' && ecsWorkbench?.isVisible()) return;
+    if (platformMode === 'rhythm' && rhythmWorkspace?.isVisible()) return;
     const consoleHidden = consoleView.element.classList.contains('panel-hidden');
-    if (editorHidden && consoleHidden) {
+    if (consoleHidden) {
       consoleView.setInEditor(false);
       utilityBar.classList.remove('panel-hidden');
     }
   };
 
-  const enterEditorWithIris = (originEl: HTMLElement) => {
-    if (!studioWorkbench) return;
+  const enterWorkstationWithIris = (originEl: HTMLElement) => {
     drawerView?.close();
     irisWipe.run({
       originEl,
       direction: 'in',
       onSwapCovered: () => {
-        consoleView.setInEditor(true);
-        studioWorkbench?.showCovered();
-        utilityBar.classList.add('panel-hidden');
-      },
-      onRevealStart: () => {
-        studioWorkbench?.revealToolbars();
+        setPlatformMode('studio', 'studio');
       },
       onDone: () => {
         ensureForegroundVisible();
@@ -162,29 +278,9 @@ export function createApp(): AppHandle | null {
     });
   };
 
-  const exitEditorToHandheld = (originEl?: HTMLElement, targetCartridgeId?: CartridgeId) => {
-    if (!studioWorkbench || !studioWorkbench.isOpen()) return;
-    const triggerEl = originEl ?? consoleView.getEditorTriggerElement();
-    irisWipe.run({
-      originEl: triggerEl,
-      direction: 'out',
-      onSwapCovered: () => {
-        studioWorkbench?.hide();
-        utilityBar.classList.remove('panel-hidden');
-        consoleView.setInEditor(false);
-        handleViewportMetrics();
-        if (targetCartridgeId) {
-          consoleView.launchCartridge(targetCartridgeId, true);
-        }
-      },
-      onRevealStart: () => {
-        consoleView.refreshCardArt();
-      },
-      onDone: () => {
-        ensureForegroundVisible();
-        consoleView.syncPauseState();
-      },
-    });
+  const exitEditorToHandheld = () => {
+    closeSpriteModal();
+    setPlatformMode('arcade', 'arcade');
   };
 
   let destroyed = false;
@@ -197,7 +293,7 @@ export function createApp(): AppHandle | null {
 
   consoleView = new ConsoleView(host, atlas, () => orientationCtrl.setLandscape(false), {
     onGamepadChange: (connected, label) => syncGamepadHeaderBadge(connected, label),
-    onOpenEditor: (originEl) => enterEditorWithIris(originEl),
+    onOpenEditor: (originEl) => enterWorkstationWithIris(originEl),
     onOpenAdvancedSettings: () => drawerView?.open(),
     onToggleMute: () => {
       host.unlockAudio();
@@ -252,9 +348,15 @@ export function createApp(): AppHandle | null {
   consoleView.setStickDynamicOrigin(stickDynamicOrigin);
 
   const updateGpuBadge = (kind: GpuBackendKind, activeCanvas?: HTMLCanvasElement) => {
-    if (activeCanvas) consoleView.attachCanvas(activeCanvas);
+    if (activeCanvas) {
+      consoleView.attachCanvas(activeCanvas);
+      captureCanvasRef = activeCanvas;
+    } else {
+      captureCanvasRef = consoleView.canvas;
+    }
     drawerView?.updateGpuBadge(kind);
   };
+  captureCanvasRef = consoleView.canvas;
 
   consoleView.onCanvasPointer = (nx, ny, active, primary, secondary) => {
     consoleView.setCanvasPointer(nx, ny, active, primary, secondary);
@@ -274,51 +376,189 @@ export function createApp(): AppHandle | null {
     consoleView.refreshCardArt();
   });
 
-  const spriteAtelierView = new SpriteAtelierView(gpuEngine, synth, save, () => host.reactMomo());
-  let workshopView: WorkshopView;
-  workshopView = new WorkshopView(
-    host,
-    atlas,
-    (targetId: CartridgeId = 'sandbox-toybox') => {
-      exitEditorToHandheld(undefined, targetId);
+  const spriteAtelierView = new SpriteAtelierView(
+    gpuEngine,
+    synth,
+    save,
+    () => {
+      host.reactMomo();
+      ecsWorkbench?.syncAtlasToPreview();
     },
     {
-      getStudioSprites: () => ({
-        sprites: spriteAtelierView.exportCartridgeSprites(),
-        paletteRow: spriteAtelierView.getSelectedPaletteRow(),
-        editEpoch: spriteAtelierView.getEditEpoch(),
-      }),
-      onImportCartridgeFile: (file) =>
-        importCartridgeFileWithPrompt({
-          file,
-          shell,
-          host,
-          consoleView,
-          mountAfterImport: false,
-          onImported: (id, cart) => {
-            workshopView.loadIntoEditor(cart, id);
+      onPublishMapTile: (req) => {
+        const proj = ecsSession.getProject();
+        const usedIds = new Set<number>(CASTLE_TILE_REGISTRY.map((t) => t.id));
+        if (proj.worldMap?.tileDefs) {
+          for (const td of proj.worldMap.tileDefs) usedIds.add(td.id);
+        }
+        let nextTileId = 100;
+        while (usedIds.has(nextTileId)) nextTileId++;
+
+        const cmds: EcsStudioCommand[] = [];
+        if (!proj.worldMap || proj.worldMap.rooms.length === 0) {
+          cmds.push({ type: 'ensure_world_map', cols: 24, rows: 16, roomName: '自訂像素大廳' });
+        }
+        cmds.push(
+          { type: 'upsert_custom_sprite', sprite: req.sprite },
+          {
+            type: 'upsert_tile_def',
+            tileDef: {
+              id: nextTileId,
+              name: req.name,
+              layer: req.layer,
+              sprite: req.sprite.id,
+              solid: req.solid,
+              ...(req.hazard ? { hazard: true } : {}),
+              ...(req.extrudeH ? { extrudeH: req.extrudeH } : {}),
+              ...(req.renderH ? { renderH: req.renderH } : {}),
+              ...(req.ambientLight ? { ambientLight: req.ambientLight } : {}),
+            },
           },
-        }),
+        );
+        const res = ecsSession.dispatchBatch(cmds, `像素畫室發佈瓦片「${req.name}」`);
+        if (!res.ok) {
+          return { ok: false, message: `發佈失敗：${res.errors.join('; ') || res.summary}` };
+        }
+        closeSpriteModal();
+        ecsWorkbench?.focusPublishedTile(req.layer, nextTileId);
+        return { ok: true, message: `已發佈瓦片「${req.name}」(#${nextTileId}) 至地圖盤！` };
+      },
+      onPublishPrefabStamp: (req) => {
+        const proj = ecsSession.getProject();
+        let pid = req.sprite.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+        let seq = 2;
+        while (proj.prefabs[pid]) {
+          pid = `${req.sprite.id}_${seq++}`;
+        }
+        const res = ecsSession.dispatchBatch(
+          [
+            { type: 'upsert_custom_sprite', sprite: req.sprite },
+            {
+              type: 'create_prefab',
+              prefab: {
+                id: pid,
+                name: req.name,
+                category: 'custom',
+                components: {
+                  transform: {
+                    x: 0,
+                    y: 0,
+                    w: Math.max(16, Math.min(64, req.sprite.width)),
+                    h: Math.max(16, Math.min(64, req.sprite.height)),
+                    zOrder: 20,
+                  },
+                  sprite: {
+                    sprite: req.sprite.id,
+                    metallic: 0.3,
+                    roughness: 0.45,
+                    emissive: req.ambientLight ? 0.55 : 0.1,
+                    castShadow: true,
+                  },
+                  ...(req.ambientLight ? { light: req.ambientLight } : {}),
+                  ...(req.solid ? { collider: { radius: Math.round(Math.min(req.sprite.width, req.sprite.height) * 0.42), isSolid: true } } : {}),
+                  tag: 'custom_prop',
+                },
+              },
+            },
+          ],
+          `像素畫室發佈物件印章「${req.name}」`,
+        );
+        if (!res.ok) {
+          return { ok: false, message: `發佈失敗：${res.errors.join('; ') || res.summary}` };
+        }
+        closeSpriteModal();
+        ecsWorkbench?.focusPublishedPrefab(pid);
+        return { ok: true, message: `已發佈物件印章「${req.name}」至地圖印章盤！` };
+      },
     },
   );
-  studioWorkbench = new StudioWorkbenchView(
-    spriteAtelierView,
-    workshopView,
-    (originEl) => exitEditorToHandheld(originEl),
-    (freqHz) => host.playStereoTick(freqHz, 0, 0.2),
-  );
+
+  spriteModalEl = document.createElement('section');
+  spriteModalEl.className = 'p7-sprite-modal panel-hidden';
+  spriteModalEl.setAttribute('aria-label', '像素精靈畫室');
+  const spriteBar = document.createElement('div');
+  spriteBar.className = 'p7-sprite-modal-bar';
+  const spriteTitle = document.createElement('span');
+  spriteTitle.className = 'p7-sprite-modal-title';
+  spriteTitle.textContent = 'Pixer 像素精靈畫室（即時同步至多頁 GPU 圖集）';
+  const spriteCloseBtn = document.createElement('button');
+  spriteCloseBtn.type = 'button';
+  spriteCloseBtn.className = 'p7-primary-cta';
+  spriteCloseBtn.textContent = '完成並返回工作站';
+  spriteCloseBtn.addEventListener('click', () => closeSpriteModal(), { signal });
+  spriteBar.append(spriteTitle, spriteCloseBtn);
+  const spriteBody = document.createElement('div');
+  spriteBody.className = 'p7-sprite-modal-body';
+  spriteBody.appendChild(spriteAtelierView.element);
+  spriteModalEl.append(spriteBar, spriteBody);
+
+  const launchEcsProjectInArcade = (proj: EcsProjectV2) => {
+    syncProjectSpritesToSharedAtlas(proj);
+    registerCartridgePlugin({
+      meta: {
+        id: proj.meta.id,
+        code: proj.meta.code,
+        title: proj.meta.title,
+        subtitle: proj.meta.subtitle,
+        genre: proj.meta.genre,
+        accentHex: proj.meta.accentHex,
+        badgeText: `${proj.viewport.width}×${proj.viewport.height} · 真 ECS 運行時`,
+        controlsHint: proj.meta.controlsHint,
+        goalHint: proj.meta.goalHint,
+        defaultScript: '',
+      },
+      factory: () => new EcsCartridgeRuntime(proj),
+    });
+    setPlatformMode('arcade', 'arcade');
+    consoleView.launchCartridge(proj.meta.id, true);
+  };
+
+  ecsWorkbench = new EcsWorkbenchView(host, atlas, ecsSession, {
+    onLaunchInArcade: (proj) => launchEcsProjectInArcade(proj),
+    onOpenClassicWorkshop: () => openSpriteModal(),
+    onOpenSpriteAtelierForTile: (layer: EcsMapLayerName) => {
+      spriteAtelierView.prepareForMapTile(32, 32, layer);
+      openSpriteModal();
+    },
+    onAtlasMutated: () => {
+      gpuEngine?.syncAtlasIfDirty();
+      consoleView.refreshCardArt();
+    },
+  });
+
+  rhythmWorkspace = new RhythmWorkspaceView({
+    onExitToWorkstation: () => setPlatformMode('studio', 'studio'),
+  });
+
+  platformShell = new PixerPlatformShell({
+    onSelectTab: (tab) => {
+      host.unlockAudio();
+      if (tab === 'arcade') {
+        setPlatformMode('arcade', 'arcade');
+      } else if (tab === 'rhythm') {
+        setPlatformMode('rhythm', 'rhythm');
+      } else {
+        setPlatformMode('studio', tab);
+      }
+    },
+    onPrimaryAction: () => {
+      host.unlockAudio();
+      if (platformMode === 'studio') {
+        launchEcsProjectInArcade(ecsSession.getProject());
+      } else {
+        setPlatformMode('studio', 'studio');
+      }
+    },
+  });
 
   installPolaroidDropHandler({
     shell,
     host,
     consoleView,
     signal,
-    onImported: (id, cart) => {
-      workshopView.loadIntoEditor(cart, id);
-      workshopView.refreshSavedCartridges();
-      if (studioWorkbench?.isOpen()) {
-        exitEditorToHandheld(undefined, id);
-      }
+    onImported: (id) => {
+      setPlatformMode('arcade', 'arcade');
+      consoleView.launchCartridge(id, true);
     },
   });
 
@@ -506,38 +746,61 @@ export function createApp(): AppHandle | null {
   window.addEventListener('resize', handleViewportMetrics, { signal });
   screen.orientation?.addEventListener?.('change', handleViewportMetrics, { signal });
 
+  let arcadeGpuInitialized = false;
+  ensureArcadeGpuInit = () => {
+    if (arcadeGpuInitialized || destroyed || !gpuEngine) return;
+    arcadeGpuInitialized = true;
+    const engine = gpuEngine;
+    void engine
+      .init()
+      .then((kind) => {
+        if (destroyed) return;
+        updateGpuBadge(kind);
+        syncGovernorResolution();
+        engine.syncAtlasToGpu();
+      })
+      .catch((err) => {
+        appLogger.error('gpu', 'gpu.initPromise', 'GPU 初始化非同步異常，強制啟用 Canvas 2D 保底', err);
+        if (!destroyed) {
+          updateGpuBadge(engine.forceCanvas2DFallback());
+          syncGovernorResolution();
+        }
+      });
+  };
+
   shell.append(
     ambientGlow,
+    platformShell.element,
     utilityBar,
     consoleView.element,
-    studioWorkbench.element,
+    ecsWorkbench.element,
+    rhythmWorkspace.element,
+    spriteModalEl,
     drawerView.element,
     irisWipe.curtain,
   );
   root.appendChild(shell);
   consoleView.startBootSequence();
+  const urlParams = new URLSearchParams(window.location.search);
+  const bootMode = urlParams.get('mode');
+  const autostart = urlParams.get('autostart') === '1';
+  if (bootMode === 'rhythm' || autostart) {
+    setPlatformMode('rhythm', 'rhythm');
+    if (autostart) {
+      rhythmWorkspace.setVisible(true, 'lobby');
+    }
+  } else if (bootMode === 'arcade') {
+    setPlatformMode('arcade', 'arcade');
+  } else {
+    setPlatformMode('studio', 'studio');
+  }
   nativeBridge.hideSplash();
-  appLogger.success('lifecycle', 'app.boot', 'Pixel Atelier OS 掌機外殼啟動完成', {
+  appLogger.success('lifecycle', 'app.boot', 'Pixer 原教旨引擎工作站啟動完成', {
     shellTheme: activeShell,
     perfProfile,
+    platformMode,
     nativePlatform: nativeBridge.platform,
   });
-
-  void gpuEngine
-    .init()
-    .then((kind) => {
-      if (destroyed) return;
-      updateGpuBadge(kind);
-      syncGovernorResolution();
-      gpuEngine.syncAtlasToGpu();
-    })
-    .catch((err) => {
-      appLogger.error('gpu', 'gpu.initPromise', 'GPU 初始化非同步異常，強制啟用 Canvas 2D 保底', err);
-      if (!destroyed) {
-        updateGpuBadge(gpuEngine.forceCanvas2DFallback());
-        syncGovernorResolution();
-      }
-    });
 
   let fpsSmooth = 60;
   let consecutiveFrameErrors = 0;
@@ -609,8 +872,12 @@ export function createApp(): AppHandle | null {
           }
         } else {
           nativeBridge.setKeepAwake(false);
-          if (governor.shouldRenderThisFrame(dt, false)) {
-            studioWorkbench?.tick(dt);
+          if (spriteModalOpen) {
+            spriteAtelierView.tickPreview(dt);
+          } else if (platformMode === 'rhythm' && rhythmWorkspace?.isVisible()) {
+            rhythmWorkspace.tick(dt);
+          } else if (platformMode === 'studio' && ecsWorkbench?.isVisible()) {
+            ecsWorkbench.tick(dt);
           }
         }
         consecutiveFrameErrors = 0;
@@ -621,7 +888,6 @@ export function createApp(): AppHandle | null {
           gpuEngine,
           host,
           consoleView,
-          studioWorkbench,
           utilityBar,
           onGpuKindChange: (kind) => updateGpuBadge(kind),
         });
@@ -643,11 +909,12 @@ export function createApp(): AppHandle | null {
       disposeTactileFeedback();
       disposeHapticSink();
       irisWipe.destroy();
-      studioWorkbench?.destroy();
+      platformShell?.destroy();
+      ecsWorkbench?.destroy();
+      rhythmWorkspace?.destroy();
       drawerView?.destroy();
       consoleView.destroy();
       spriteAtelierView.destroy();
-      workshopView.destroy();
       gpuEngine.dispose();
       host.destroy();
       delete window.__PIXEL_ATELIER_AGENT__;

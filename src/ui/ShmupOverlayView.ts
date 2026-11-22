@@ -33,6 +33,8 @@ export class ShmupOverlayView {
   private readonly grazeFillEl: HTMLElement;
 
   private readonly onCommand: (commandId: string) => void;
+  private readonly ac = new AbortController();
+  private hangarAc: AbortController | null = null;
   private lastHangarKey = '';
 
   constructor(callbacks: ShmupOverlayCallbacks) {
@@ -48,9 +50,15 @@ export class ShmupOverlayView {
     );
     this.hangarGrid = el('div', 'shmup-fighter-grid');
     const footer = el('div', 'shmup-hangar-foot');
-    const launchBtn = btn('toy-btn is-primary shmup-launch-btn', '🚀 確認出擊', undefined, () => {
-      this.onCommand('launch_sortie');
-    });
+    const launchBtn = btn(
+      'toy-btn is-primary shmup-launch-btn',
+      '🚀 確認出擊',
+      undefined,
+      () => {
+        this.onCommand('launch_sortie');
+      },
+      this.ac.signal,
+    );
     footer.appendChild(launchBtn);
     this.hangarModal.append(header, this.hangarGrid, footer);
 
@@ -65,17 +73,29 @@ export class ShmupOverlayView {
     bossTrack.appendChild(this.bossFillEl);
     this.bossBarEl.append(this.bossLabelEl, bossTrack);
 
-    this.bombBtn = btn('shmup-bomb-btn', '💣 2', '觸發全屏消彈核爆 (快捷鍵 V)', () => {
-      this.onCommand('bomb');
-    });
+    this.bombBtn = btn(
+      'shmup-bomb-btn',
+      '💣 2',
+      '觸發全屏消彈核爆 (快捷鍵 V)',
+      () => {
+        this.onCommand('bomb');
+      },
+      this.ac.signal,
+    );
     this.sortieTop.append(this.fighterInfoEl, this.bossBarEl, this.bombBtn);
 
     this.sortieBottom = el('div', 'shmup-bottom');
     const weaponBar = el('div', 'shmup-weapons');
     for (const tab of WEAPON_TABS) {
-      const b = btn(`shmup-weapon-btn is-${tab.kind}`, tab.label, '切換主武器色系 (快捷鍵 C)', () => {
-        this.onCommand(`weapon:${tab.kind}`);
-      });
+      const b = btn(
+        `shmup-weapon-btn is-${tab.kind}`,
+        tab.label,
+        '切換主武器色系 (快捷鍵 C)',
+        () => {
+          this.onCommand(`weapon:${tab.kind}`);
+        },
+        this.ac.signal,
+      );
       this.weaponBtns.set(tab.kind, b);
       weaponBar.appendChild(b);
     }
@@ -95,6 +115,14 @@ export class ShmupOverlayView {
   public reset(): void {
     this.element.classList.add('panel-hidden');
     this.lastHangarKey = '';
+  }
+
+  public destroy(): void {
+    this.hangarAc?.abort();
+    this.hangarAc = null;
+    this.ac.abort();
+    this.reset();
+    this.hangarGrid.textContent = '';
   }
 
   private statBar(val: number): string {
@@ -119,6 +147,9 @@ export class ShmupOverlayView {
       const hKey = `${hud.selectedFighterId}|${hud.fighters.length}`;
       if (hKey !== this.lastHangarKey) {
         this.lastHangarKey = hKey;
+        this.hangarAc?.abort();
+        this.hangarAc = new AbortController();
+        const cardSig = this.hangarAc.signal;
         this.hangarGrid.textContent = '';
         for (const f of hud.fighters) {
           const isSel = f.id === hud.selectedFighterId;
@@ -126,9 +157,13 @@ export class ShmupOverlayView {
           card.type = 'button';
           card.className = `shmup-fighter-card${isSel ? ' is-selected' : ''}`;
           card.style.setProperty('--fighter-accent', f.accentHex);
-          card.addEventListener('click', () => {
-            this.onCommand(`select_fighter:${f.id}`);
-          });
+          card.addEventListener(
+            'click',
+            () => {
+              this.onCommand(`select_fighter:${f.id}`);
+            },
+            { signal: cardSig },
+          );
 
           const top = el('div', 'shmup-card-top');
           top.append(el('span', 'shmup-card-name', f.name), el('span', 'shmup-card-code', f.code));

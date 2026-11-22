@@ -392,7 +392,7 @@ select {
 }
 
 .palette-chip {
-  aspect-ratio: 1 / 1;
+  height: 40px;
   border-radius: 10px;
   border: 2px solid var(--ink);
   box-shadow: 0 2px 0 var(--ink);
@@ -1467,6 +1467,65 @@ body.is-handheld-lock {
   align-items: center;
 }
 
+.atelier-publish-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-well);
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 0 3px 0 var(--ink);
+}
+
+.atelier-publish-title {
+  font-size: 0.84rem;
+  color: var(--ink);
+}
+
+.atelier-publish-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.atelier-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.atelier-publish-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.atelier-flag-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.atelier-publish-actions {
+  gap: 8px;
+}
+
+.atelier-publish-status {
+  margin: 0;
+  font-size: 0.74rem;
+}
+
 .workshop-canvas-stage {
   overflow-x: auto;
   overscroll-behavior: contain;
@@ -1505,3 +1564,283 @@ body.is-handheld-lock {
     flex-wrap: wrap;
   }
 }
+
+/* ---------- Pixer Studio 6.0 Orthogonal Forge Panel ---------- */
+.studio-ortho-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--bg-card);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 0 4px 0 var(--ink);
+  color: var(--ink);
+}
+
+.studio-ortho-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 2px solid rgba(56, 40, 32, 0.14);
+}
+
+.studio-ortho-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.studio-ortho-heading {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+
+.studio-ortho-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.74rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+}
+
+.studio-ortho-actions,
+.studio-ortho-btn-group {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.studio-ortho-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  background: var(--bg-well);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+}
+
+.studio-ortho-strip-label,
+.studio-ortho-field-label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--ink-soft);
+}
+
+.studio-ortho-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.studio-ortho-input,
+.studio-ortho-select {
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink);
+  background: #fffdf8;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  padding: 5px 9px;
+}
+
+.studio-ortho-status {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink);
+  padding: 7px 11px;
+  background: #fff7e6;
+  border-left: 4px solid var(--accent-coral);
+  border-radius: 6px;
+}
+
+.studio-ortho-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.studio-ortho-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.studio-ortho-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg-well);
+  border: 2px solid var(--ink);
+  border-radius: 14px;
+}
+
+.studio-ortho-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.studio-ortho-sec-title {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 900;
+  color: var(--ink);
+}
+
+.studio-ortho-check-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.studio-ortho-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border: 1.5px solid rgba(56, 40, 32, 0.28);
+  border-radius: 10px;
+}
+
+.studio-ortho-check input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-coral);
+}
+
+.studio-ortho-select-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.studio-ortho-select-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.studio-ortho-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.studio-ortho-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  background: var(--bg-card);
+  border: 1.5px solid rgba(56, 40, 32, 0.24);
+  border-radius: 10px;
+}
+
+.studio-ortho-metric-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.studio-ortho-metric-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.studio-ortho-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.studio-ortho-warn-ok {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #1f6b47;
+  padding: 6px 9px;
+  background: #e9f9f0;
+  border-radius: 8px;
+}
+
+.studio-ortho-warn-item {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #8f1d3b;
+  padding: 6px 9px;
+  background: #ffe8ed;
+  border-radius: 8px;
+}
+
+.studio-ortho-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 185px;
+  overflow-y: auto;
+}
+
+.studio-ortho-history-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.75rem;
+  padding: 5px 8px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  border: 1px solid rgba(56, 40, 32, 0.16);
+}
+
+.studio-ortho-history-rev {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-coral-deep);
+  flex-shrink: 0;
+}
+
+.studio-ortho-history-msg {
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 0;
+}
+
+@media (max-width: 920px) {
+  .studio-ortho-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .studio-ortho-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .studio-ortho-inline-field {
+    margin-left: 0;
+  }
+}
+

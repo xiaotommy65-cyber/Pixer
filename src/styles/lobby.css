@@ -1395,22 +1395,22 @@ body[data-perf='eco'] .lobby-lower-dock {
 }
 
 .switch-stage[data-boot-stage='holding'] .switch-console {
-  transform: translateY(0) rotateX(0deg) rotateZ(0deg) scale(1.04);
+  transform: none;
 }
 
 @media (min-width: 761px) and (hover: hover) {
   .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'][data-perspective='focus'] .desk-console-slot {
-    perspective: 1100px;
+    perspective: none;
   }
 
   .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'][data-perspective='focus'] .switch-console {
-    transform-style: preserve-3d;
-    transform: rotateX(calc(var(--py, 0) * -4deg)) rotateY(calc(var(--px, 0) * 5deg)) scale(1);
-    transition: transform 160ms ease-out, filter 320ms ease;
+    transform-style: flat;
+    transform: none;
+    filter: none;
   }
 
   .switch-stage[data-boot-stage='awake'][data-shell-phase='HOME_LOBBY'][data-perspective='focus'] .cart-slot {
-    transform: translate3d(calc(var(--px, 0) * 6px), calc(var(--py, 0) * 4px), 0);
+    transform: translate3d(calc(var(--px, 0) * 3px), calc(var(--py, 0) * 2px), 0);
   }
 }
 

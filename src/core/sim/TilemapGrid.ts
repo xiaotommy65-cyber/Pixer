@@ -11,6 +11,8 @@ export const COLLISION_SOLID = 1;
 export const COLLISION_CLOUD = 2;
 export const COLLISION_HAZARD = 3;
 export const COLLISION_DESTRUCTIBLE = 4;
+export const COLLISION_SLOPE_UP = 5;   // 45-degree ramp rising left-to-right (/)
+export const COLLISION_SLOPE_DOWN = 6; // 45-degree ramp descending left-to-right (\)
 
 export const AUTO_MASK_N = 1;
 export const AUTO_MASK_E = 2;
@@ -428,12 +430,19 @@ export class TilemapGrid {
     const probeCol = Math.floor(probeX / TILE_SIZE);
     const footRow = Math.floor((y + h + 2) / TILE_SIZE);
     const k = this.getCollision(probeCol, footRow);
-    return k === COLLISION_SOLID || k === COLLISION_CLOUD || k === COLLISION_DESTRUCTIBLE;
+    return (
+      k === COLLISION_SOLID ||
+      k === COLLISION_CLOUD ||
+      k === COLLISION_DESTRUCTIBLE ||
+      k === COLLISION_SLOPE_UP ||
+      k === COLLISION_SLOPE_DOWN
+    );
   }
 
   /**
    * Resolves horizontal then vertical AABB sweep against chunked tile collision in O(area / 256).
-   * Supports solid tiles, one-way clouds (from above), and 4px ceiling corner correction.
+   * Uses automatic Zero-GC substepping (<= 8px per substep) to eliminate high-speed tunneling,
+   * and supports solid tiles, one-way clouds, 45-degree slopes, and 4px ceiling corner correction.
    */
   public resolveAabbMotion(
     box: { x: number; y: number; vx: number; vy: number },
@@ -450,98 +459,120 @@ export class TilemapGrid {
     out.hitHazard = false;
     out.landVy = 0;
 
-    // 1. Horizontal sweep
-    const prevY0 = box.y + hbY;
-    const prevY1 = prevY0 + hbH - 0.001;
-    const r0x = Math.max(0, Math.floor(prevY0 / TILE_SIZE));
-    const r1x = Math.min(this.rows - 1, Math.floor(prevY1 / TILE_SIZE));
+    if (dt <= 0) return;
 
-    box.x += box.vx * dt;
+    const maxStepPx = TILE_SIZE * 0.5; // 8px max displacement per substep prevents tunneling
+    const maxDelta = Math.max(Math.abs(box.vx * dt), Math.abs(box.vy * dt));
+    const substeps = maxDelta > maxStepPx ? Math.min(16, Math.ceil(maxDelta / maxStepPx)) : 1;
+    const subDt = dt / substeps;
     const maxWorldX = this.cols * TILE_SIZE - (hbX + hbW);
-    if (box.x < -hbX) {
-      box.x = -hbX;
-      box.vx = 0;
-      out.hitWall = true;
-    } else if (box.x > maxWorldX) {
-      box.x = maxWorldX;
-      box.vx = 0;
-      out.hitWall = true;
-    }
 
-    const hx0 = box.x + hbX;
-    const hx1 = hx0 + hbW;
-    const c0x = Math.max(0, Math.floor(hx0 / TILE_SIZE));
-    const c1x = Math.min(this.cols - 1, Math.floor((hx1 - 0.001) / TILE_SIZE));
+    for (let step = 0; step < substeps; step++) {
+      // 1. Horizontal sweep
+      const prevY0 = box.y + hbY;
+      const prevY1 = prevY0 + hbH - 0.001;
+      const r0x = Math.max(0, Math.floor(prevY0 / TILE_SIZE));
+      const r1x = Math.min(this.rows - 1, Math.floor(prevY1 / TILE_SIZE));
 
-    for (let r = r0x; r <= r1x; r++) {
-      for (let c = c0x; c <= c1x; c++) {
-        const k = this.getCollision(c, r);
-        if (k === COLLISION_HAZARD) out.hitHazard = true;
-        if (k !== COLLISION_SOLID && k !== COLLISION_DESTRUCTIBLE) continue;
-        const tx = c * TILE_SIZE;
-        if (box.vx > 0) {
-          box.x = tx - hbX - hbW;
-          box.vx = 0;
-          out.hitWall = true;
-        } else if (box.vx < 0) {
-          box.x = tx + TILE_SIZE - hbX;
-          box.vx = 0;
-          out.hitWall = true;
+      box.x += box.vx * subDt;
+      if (box.x < -hbX) {
+        box.x = -hbX;
+        box.vx = 0;
+        out.hitWall = true;
+      } else if (box.x > maxWorldX) {
+        box.x = maxWorldX;
+        box.vx = 0;
+        out.hitWall = true;
+      }
+
+      const hx0 = box.x + hbX;
+      const hx1 = hx0 + hbW;
+      const c0x = Math.max(0, Math.floor(hx0 / TILE_SIZE));
+      const c1x = Math.min(this.cols - 1, Math.floor((hx1 - 0.001) / TILE_SIZE));
+
+      for (let r = r0x; r <= r1x; r++) {
+        for (let c = c0x; c <= c1x; c++) {
+          const k = this.getCollision(c, r);
+          if (k === COLLISION_HAZARD) out.hitHazard = true;
+          if (k !== COLLISION_SOLID && k !== COLLISION_DESTRUCTIBLE) continue;
+          const tx = c * TILE_SIZE;
+          if (box.vx > 0) {
+            box.x = tx - hbX - hbW;
+            box.vx = 0;
+            out.hitWall = true;
+          } else if (box.vx < 0) {
+            box.x = tx + TILE_SIZE - hbX;
+            box.vx = 0;
+            out.hitWall = true;
+          }
         }
       }
-    }
 
-    // 2. Vertical sweep
-    const preBottom = box.y + hbY + hbH;
-    const preVy = box.vy;
-    box.y += box.vy * dt;
+      // 2. Vertical sweep
+      const preBottom = box.y + hbY + hbH;
+      const preVy = box.vy;
+      box.y += box.vy * subDt;
 
-    const vx0 = box.x + hbX;
-    const vx1 = vx0 + hbW;
-    const c0y = Math.max(0, Math.floor(vx0 / TILE_SIZE));
-    const c1y = Math.min(this.cols - 1, Math.floor((vx1 - 0.001) / TILE_SIZE));
-    const hy0 = box.y + hbY;
-    const hy1 = hy0 + hbH;
-    const r0y = Math.max(0, Math.floor(hy0 / TILE_SIZE));
-    const r1y = Math.min(this.rows - 1, Math.floor((hy1 - 0.001) / TILE_SIZE));
+      const vx0 = box.x + hbX;
+      const vx1 = vx0 + hbW;
+      const c0y = Math.max(0, Math.floor(vx0 / TILE_SIZE));
+      const c1y = Math.min(this.cols - 1, Math.floor((vx1 - 0.001) / TILE_SIZE));
+      const hy0 = box.y + hbY;
+      const hy1 = hy0 + hbH;
+      const r0y = Math.max(0, Math.floor(hy0 / TILE_SIZE));
+      const r1y = Math.min(this.rows - 1, Math.floor((hy1 - 0.001) / TILE_SIZE));
 
-    for (let r = r0y; r <= r1y; r++) {
-      const ty = r * TILE_SIZE;
-      for (let c = c0y; c <= c1y; c++) {
-        const k = this.getCollision(c, r);
-        if (k === COLLISION_HAZARD) {
-          out.hitHazard = true;
-          continue;
-        }
-        if (k === COLLISION_CLOUD) {
-          if (box.vy >= 0 && preBottom <= ty + 6 && box.y + hbY + hbH >= ty) {
+      for (let r = r0y; r <= r1y; r++) {
+        const ty = r * TILE_SIZE;
+        for (let c = c0y; c <= c1y; c++) {
+          const k = this.getCollision(c, r);
+          if (k === COLLISION_HAZARD) {
+            out.hitHazard = true;
+            continue;
+          }
+          if (k === COLLISION_SLOPE_UP || k === COLLISION_SLOPE_DOWN) {
+            const tx = c * TILE_SIZE;
+            const footCx = vx0 + hbW * 0.5;
+            const localX = Math.max(0, Math.min(TILE_SIZE, footCx - tx));
+            const surfY = k === COLLISION_SLOPE_UP ? ty + TILE_SIZE - localX : ty + localX;
+            if (box.vy >= 0 && box.y + hbY + hbH >= surfY - 2 && preBottom <= ty + TILE_SIZE + 4) {
+              box.y = surfY - hbY - hbH;
+              box.vy = 0;
+              out.onGround = true;
+              if (preVy > out.landVy) out.landVy = preVy;
+            }
+            continue;
+          }
+          if (k === COLLISION_CLOUD) {
+            if (box.vy >= 0 && preBottom <= ty + 6 && box.y + hbY + hbH >= ty) {
+              box.y = ty - hbY - hbH;
+              box.vy = 0;
+              out.onGround = true;
+              if (preVy > out.landVy) out.landVy = preVy;
+            }
+            continue;
+          }
+          if (k !== COLLISION_SOLID && k !== COLLISION_DESTRUCTIBLE) continue;
+
+          if (box.vy >= 0 && preBottom <= ty + 8 && box.y + hbY + hbH > ty) {
             box.y = ty - hbY - hbH;
             box.vy = 0;
             out.onGround = true;
-            out.landVy = preVy;
-          }
-          continue;
-        }
-        if (k !== COLLISION_SOLID && k !== COLLISION_DESTRUCTIBLE) continue;
-
-        if (box.vy >= 0 && preBottom <= ty + 8) {
-          box.y = ty - hbY - hbH;
-          box.vy = 0;
-          out.onGround = true;
-          out.landVy = preVy;
-        } else if (box.vy < 0) {
-          // 4px ceiling corner correction matching WorldHeroPhysics
-          const tx = c * TILE_SIZE;
-          const leftClip = box.x + hbX + hbW - tx;
-          const rightClip = tx + TILE_SIZE - (box.x + hbX);
-          if (leftClip > 0 && leftClip <= 4 && !this.isSolidAt(c - 1, r)) {
-            box.x -= leftClip;
-          } else if (rightClip > 0 && rightClip <= 4 && !this.isSolidAt(c + 1, r)) {
-            box.x += rightClip;
-          } else {
-            box.y = ty + TILE_SIZE - hbY;
-            box.vy = 0;
-            out.hitCeiling = true;
+            if (preVy > out.landVy) out.landVy = preVy;
+          } else if (box.vy < 0 && box.y + hbY < ty + TILE_SIZE) {
+            // 4px ceiling corner correction matching WorldHeroPhysics
+            const tx = c * TILE_SIZE;
+            const leftClip = box.x + hbX + hbW - tx;
+            const rightClip = tx + TILE_SIZE - (box.x + hbX);
+            if (leftClip > 0 && leftClip <= 4 && !this.isSolidAt(c - 1, r)) {
+              box.x -= leftClip;
+            } else if (rightClip > 0 && rightClip <= 4 && !this.isSolidAt(c + 1, r)) {
+              box.x += rightClip;
+            } else {
+              box.y = ty + TILE_SIZE - hbY;
+              box.vy = 0;
+              out.hitCeiling = true;
+            }
           }
         }
       }
