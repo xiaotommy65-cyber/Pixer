@@ -284,11 +284,15 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     `Engine-First guardrail: photorealistic JPEG/WebP assets are forbidden in src/assets/ (found: ${srcAssetImages.join(', ')})`,
   );
 
-  // 3b. Security, CI/lockfile, PWA subpath, and public/ hygiene guards
+  // 3b. Security, test-hygiene, CI/lockfile, PWA subpath, and public/ hygiene guards
   const allSrcFiles = collectTsFiles(path.join(rootDir, 'src'));
   for (const file of allSrcFiles) {
     const src = fs.readFileSync(file, 'utf8');
     const rel = path.relative(rootDir, file);
+    check(
+      !file.endsWith('.test.ts'),
+      `Production directory src/ must not contain test files (move ${rel} to scripts/sim/)`,
+    );
     check(
       !/\bnew\s+Function\s*\(/.test(src) && !/\beval\s*\(/.test(src),
       `Security invariant violation: ${rel} must not use eval() or new Function()`,

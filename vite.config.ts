@@ -18,7 +18,7 @@ export default defineConfig(() => {
               { name: 'cartridges', test: /src\/game\// },
               {
                 name: 'ecs-workbench',
-                test: /src\/ui\/(EcsWorkbench[A-Za-z]*|EcsWorldRulesInspectorPanel|EcsMapDesignerPanel|EventGraphEditorView|ExternalImportModalView|InteropWorkerClient|SpriteAtelierView)/,
+                test: /src\/ui\/(EcsWorkbench[A-Za-z]*|EcsWorldRulesInspectorPanel|EcsMapDesignerPanel|EventGraphEditorView|ExternalImportModalView|InteropWorkerClient|SpriteAtelier[A-Za-z]*)/,
               },
               { name: 'core-ecs-interop', test: /src\/core\/(ecs|interop|ai)\// },
             ],

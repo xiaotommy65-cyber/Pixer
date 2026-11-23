@@ -1,7 +1,7 @@
 # Pixer Codebase Navigation Map (Zero-Grep Routing Guide)
 
 > **Purpose**: Read this file FIRST (together with `AGENTS.md`) to locate exact files, symbols, and cross-module call chains in **1 lookup** instead of broad directory scans.
-> **Snapshot**: 194 code files · ~94,450 LOC · Primary Entry: `src/main.ts` · Worker Entry: `src/workers/interop.worker.ts` · Edge API Entry: `workers/api/src/index.ts`.
+> **Snapshot**: 202 code files · ~94,613 LOC · Primary Entry: `src/main.ts` · Worker Entry: `src/workers/interop.worker.ts` · Edge API Entry: `workers/api/src/index.ts`.
 
 ---
 
@@ -49,18 +49,18 @@ flowchart LR
 | **啟動流程、`?play=<slug>`、雙模式切換** | `src/main.ts` → `src/AppShellHelpers.ts` → `src/ui/PixerPlatformShell.ts` | `npm run build` |
 | **WebGPU / WebGL2 / Canvas2D PBR 著色器與打光** | `src/core/gpu/GpuEngine.ts` → `WebGpuBackend.ts` / `WebGpuShaders.ts` / `WebGl2Backend.ts` / `WebGl2Shaders.ts` → `SceneGpuBridge.ts` | `scripts/sim/ArchitectureTests.ts`, `CoreSubsystemTests.ts` |
 | **8 頁圖集、自訂精靈編譯、調色盤** | `src/assets/TextureAtlas.ts` → `src/core/ecs/EcsCustomSpriteCompiler.ts` → `src/assets/sprites/PaletteData.ts` | `scripts/sim/WorldMap.test.ts`, `Pixer7Tests.ts` |
-| **真 ECS 世界、多房間地圖、傳送門、機關、AI** | `src/core/ecs/EcsCartridgeRuntime.ts` → `EcsWorldMapController.ts` → `EcsActionPhysicsSystems.ts` → `EcsProjectSchema.ts` / `EcsTilemapTypes.ts` | `src/core/ecs/EcsCore.test.ts`, `scripts/sim/WorldMap.test.ts` |
-| **ECS 編輯器交易指令（Undo/Redo）與 MCP 工具** | `src/core/ecs/EcsStudioSession.ts` → `src/core/ai/PixerMcpProtocol.ts` → `src/core/ai/AgentBridge.ts` → `scripts/pixer-mcp.ts` | `src/core/ecs/EcsCore.test.ts`, `WorldMap.test.ts` |
-| **無損事件圖 ↔ 腳本 VM** | `src/core/ecs/EcsEventGraph.ts` → `src/core/ecs/SandboxScriptVm.ts` → `src/ui/EventGraphEditorView.ts` | `src/core/ecs/EcsCore.test.ts` |
+| **真 ECS 世界、多房間地圖、傳送門、機關、AI** | `src/core/ecs/EcsCartridgeRuntime.ts` → `EcsSnapshotProjector.ts` / `EcsWorldMapController.ts` → `EcsActionPhysicsSystems.ts` → `EcsProjectSchema.ts` / `EcsTilemapTypes.ts` | `scripts/sim/EcsCore.test.ts`, `scripts/sim/WorldMap.test.ts` |
+| **ECS 編輯器交易指令（Undo/Redo）與 MCP 工具** | `src/core/ecs/EcsStudioSession.ts` → `src/core/ai/PixerMcpProtocol.ts` → `src/core/ai/AgentBridge.ts` → `scripts/pixer-mcp.ts` | `scripts/sim/EcsCore.test.ts`, `WorldMap.test.ts` |
+| **無損事件圖 ↔ 腳本 VM** | `src/core/ecs/EcsEventGraph.ts` → `src/core/ecs/SandboxScriptVm.ts` → `src/ui/EventGraphEditorView.ts` | `scripts/sim/EcsCore.test.ts` |
 | **工作站 UI（架構/階層/地圖/規則/檢視器）** | `src/ui/EcsWorkbenchView.ts` → `EcsWorkbenchShellBuilder.ts` / `EcsWorkbenchMapCanvasController.ts` / `EcsWorkbenchHierarchyPanels.ts` / `EcsWorkbenchEntityInspector.ts` / `EcsWorkbenchSceneInspector.ts` / `EcsWorldRulesInspectorPanel.ts` / `EcsMapDesignerPanel.ts` / `EcsWorkbenchAtlasPanel.ts` / `EcsWorkbenchPrefabInspector.ts` | `scripts/sim/WorldMap.test.ts`, `ArchitectureTests.ts` |
-| **像素畫室（繪製精靈與一鍵發佈瓦片/印章）** | `src/ui/SpriteAtelierView.ts` → `src/main.ts` (`onPublishMapTile` / `onPublishPrefabStamp`) | `npm run build` |
+| **像素畫室（繪製精靈與一鍵發佈瓦片/印章）** | `src/ui/SpriteAtelierView.ts` → `src/ui/SpriteAtelierPixelOps.ts` → `src/main.ts` (`onPublishMapTile` / `onPublishPrefabStamp`) | `npm run build` |
 | **外部匯入（Aseprite / LDtk / Tiled / ZIP）** | `src/ui/ExternalImportModalView.ts` → `InteropWorkerClient.ts` → `src/workers/interop.worker.ts` → `src/core/interop/{InteropBundleLoader,AsepriteParser,LdtkImporter,TiledImporter}.ts` | `scripts/sim/Interop.test.ts` |
-| **掌機殼、輸入、震動、實體手把** | `src/ui/ConsoleView.ts` → `ConsoleShellRouter.ts` / `VirtualGamepadInput.ts` / `GamepadHardwareBridge.ts` → `src/core/input/*` & `src/core/hal/*` | `scripts/sim/HalAndInputTests.ts` |
+| **掌機殼、輸入、震動、實體手把** | `src/ui/ConsoleView.ts` → `ConsoleSpatialController.ts` / `ConsoleShellRouter.ts` / `VirtualGamepadInput.ts` / `GamepadHardwareBridge.ts` → `src/core/input/*` & `src/core/hal/*` | `scripts/sim/HalAndInputTests.ts` |
 | **內建卡匣內容（PA-14/15/01/02/11/12）** | `src/game/BuiltinCartridges.ts` → `src/game/{obsidianCitadel,emeraldRuins,rhythmBastion,astralRift}/*` | `scripts/sim/CartridgeActionTests.ts`, `WorldMap.test.ts` |
 | **PA-01 / PA-02 傳統資料卡匣運行時** | `src/core/sim/DataCartridgeRuntime.ts` → `DataRuntimeShmup.ts` / `GenreControllers.ts` / `CartridgeSchema.ts` | `scripts/sim/CartridgeActionTests.ts` |
 | **外部音訊層（無 AI 合成）** | `src/core/audio/ExternalAudioBank.ts`（相容別名 `ToySynth.ts`）→ `src/core/runtime/EngineHost.ts` | `scripts/sim/CloudOffload.test.ts`, `ArchitectureTests.ts` |
 | **雲端疏導（R2 CDN + Supabase + Edge API）** | `src/core/cloud/CloudSyncClient.ts` → `workers/api/src/{index,supabaseStore,types}.ts` → `supabase/migrations/20261122000000_pixer_cloud_schema.sql` | `scripts/sim/CloudOffload.test.ts` |
-| **空間可達性預言機 & 腳本化試玩驗證** | `src/core/ai/EcsSpatialOracle.ts` → `src/core/ai/EcsPlaytestVerifier.ts` | `src/core/ecs/EcsCore.test.ts`, `DualPerspective3D.test.ts` |
+| **空間可達性預言機 & 腳本化試玩驗證** | `src/core/ai/EcsSpatialOracle.ts` → `src/core/ai/EcsPlaytestVerifier.ts` | `scripts/sim/EcsCore.test.ts`, `DualPerspective3D.test.ts` |
 
 ---
 
@@ -73,11 +73,11 @@ flowchart LR
   - `WebGl2Backend.ts` (882L) + `WebGl2Shaders.ts` (1,036L) — GLSL ES 3.00 parity backend.
   - `Canvas2DBackend.ts` (518L) — Guaranteed software fallback.
   - `GpuTypes.ts` (195L) — Viewport presets (`1280×720`), `AtlasPoolStats`, PBR structs.
-- **`src/core/ecs/` (15 files, 10,532L)** *(100% DOM-free)*
-  - Core primitives: `EntityManager.ts` (164L), `ComponentStore.ts` (557L), `EcsCoreWorld.ts` (209L), `EcsWorld.ts` (466L).
-  - Schema & authoring: `EcsProjectSchema.ts` (643L), `EcsTilemapTypes.ts` (580L), `EcsStudioSession.ts` (1,206L), `EcsCustomSpriteCompiler.ts` (568L).
-  - Runtime & scripting: `EcsCartridgeRuntime.ts` (1,812L), `EcsWorldMapController.ts` (1,236L), `EcsActionPhysicsSystems.ts` (800L), `SandboxScriptVm.ts` (479L), `EcsEventGraph.ts` (472L).
-  - Test/barrel: `EcsCore.test.ts` (1,328L — *note: test file placed inside `src/`*), `index.ts` (12L).
+- **`src/core/ecs/` (15 prod files, 9,261L)** *(100% DOM-free; zero `*.test.ts` inside `src/`)*
+  - Core primitives: `EntityManager.ts` (163L), `ComponentStore.ts` (556L), `EcsCoreWorld.ts` (208L), `EcsWorld.ts` (465L).
+  - Schema & authoring: `EcsProjectSchema.ts` (642L), `EcsTilemapTypes.ts` (579L), `EcsStudioSession.ts` (1,205L), `EcsCustomSpriteCompiler.ts` (567L).
+  - Runtime, projection & scripting: `EcsCartridgeRuntime.ts` (1,122L), `EcsSnapshotProjector.ts` (760L, Zero-GC snapshot/light/HUD/FP-wall projector), `EcsWorldMapController.ts` (1,235L), `EcsActionPhysicsSystems.ts` (799L), `SandboxScriptVm.ts` (478L), `EcsEventGraph.ts` (471L), `index.ts` (11L).
+  - Unit tests live in `scripts/sim/EcsCore.test.ts` (1,328L), enforced by `ArchitectureTests.ts`.
 - **`src/core/runtime/` (13 files, 5,113L)** *(100% DOM-free)*
   - Active prod: `EngineHost.ts` (590L, **sole UI facade**), `CartridgeRunner.ts` (481L), `CartridgeRegistry.ts` (154L), `SceneGpuBridge.ts` (1,492L), `DisplayThermalGovernor.ts` (197L), `SaveService.ts` (349L), `CartridgePngCodec.ts` (269L), `AppLogger.ts` (340L), `LogPersistence.ts` (326L), `EventBus.ts` (87L), `SeededRng.ts` (38L).
   - *Tested-only (unwired in `main.ts`)*: `CameraRigDirector.ts` (567L), `GameFlowController.ts` (223L).
@@ -106,8 +106,8 @@ flowchart LR
 - **`src/game/` (5 files, 2,529L)**: `BuiltinCartridges.ts` (`PA-01` Cloudberry Hop + `PA-02` Sugar Starlight + ECS registrations) + `obsidianCitadel/` (`PA-14`), `emeraldRuins/` (`PA-15`), `rhythmBastion/` (`PA-11`), `astralRift/` (`PA-12`).
 - **`workers/api/` (3 TS + `wrangler.toml`, 732L)** & **`supabase/` (1 SQL, 122L)**: Edge API (`handleEdgeRequest`, `createSupabaseMetadataStore`) + PostgreSQL 4-table RLS migration.
 
-### C. UI Workstation, Arcade Shell & Styles (`src/ui/` 50 files + `src/styles/` 4 CSS = 24,200L)
-- **Workstation (`EcsWorkbench`)**: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (868L coordinator), `EcsWorkbenchShellBuilder.ts` (408L DOM layout), `EcsWorkbenchCatalog.ts` (305L registries/diagnostics), `EcsWorkbenchLiveMutator.ts` (183L live preview), `EcsWorkbenchMapCanvasController.ts` (366L 2D/3D map pointer/overlay), `EcsWorkbenchHierarchyPanels.ts` (274L), `EcsWorkbenchEntityInspector.ts` (772L), `EcsWorkbenchSceneInspector.ts` (250L), `EcsWorkbenchPrefabInspector.ts` (346L), `EcsWorkbenchAtlasPanel.ts` (259L), `EcsWorldRulesInspectorPanel.ts` (770L), `EcsMapDesignerPanel.ts` (664L), `EventGraphEditorView.ts` (1,148L), `ExternalImportModalView.ts` (560L), `InteropWorkerClient.ts` (149L), `SpriteAtelierView.ts` (1,729L).
+### C. UI Workstation, Arcade Shell & Styles (`src/ui/` 51 files + `src/styles/` 4 CSS = 24,280L)
+- **Workstation (`EcsWorkbench`)**: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (868L coordinator), `EcsWorkbenchShellBuilder.ts` (408L DOM layout), `EcsWorkbenchCatalog.ts` (305L registries/diagnostics), `EcsWorkbenchLiveMutator.ts` (183L live preview), `EcsWorkbenchMapCanvasController.ts` (366L 2D/3D map pointer/overlay), `EcsWorkbenchHierarchyPanels.ts` (274L), `EcsWorkbenchEntityInspector.ts` (772L), `EcsWorkbenchSceneInspector.ts` (250L), `EcsWorkbenchPrefabInspector.ts` (346L), `EcsWorkbenchAtlasPanel.ts` (259L), `EcsWorldRulesInspectorPanel.ts` (770L), `EcsMapDesignerPanel.ts` (664L), `EventGraphEditorView.ts` (1,148L), `ExternalImportModalView.ts` (560L), `InteropWorkerClient.ts` (149L), `SpriteAtelierView.ts` (1,313L), `SpriteAtelierPixelOps.ts` (494L).
 - **Arcade Shell (`ConsoleView`)**: `ConsoleView.ts` (664L), `ConsoleSpatialController.ts` (150L), `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`, `HomeLobbyView.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts` (356L), `DioramaPalette.ts` (266L), `DioramaSceneRenderer.ts` (617L), `BootBlinkOverlay.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `ShmupOverlayView.ts`, `CardArt.ts`, `ProceduralSurfaceTextures.ts`, `MomoMascot.ts`, `TransitionMascot.ts`.
 - **Input / Settings / Native**: `VirtualGamepadInput.ts`, `GamepadHardwareBridge.ts`, `TouchControlsBuilder.ts`, `TouchStateMerger.ts`, `SystemSettingsDrawerView.ts`, `SettingsDrawerTypes.ts`, `SystemLogPanelView.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `BrowserAssetLoader.ts`, `PixelIcons.ts`, `dom.ts`.
 - **Styles**: `switch.css` (2,100L), `lobby.css` (1,928L), `atelier.css` (1,847L), `studio7.css` (1,702L).

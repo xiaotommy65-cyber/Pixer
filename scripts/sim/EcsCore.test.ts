@@ -1,19 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TextureAtlas } from '../../assets/TextureAtlas.ts';
-import { buildHdMaterialSprites } from '../../assets/sprites/HdMaterialSprites.ts';
-import { EcsCartridgeRuntime } from './EcsCartridgeRuntime.ts';
+import { TextureAtlas } from '../../src/assets/TextureAtlas.ts';
+import { buildHdMaterialSprites } from '../../src/assets/sprites/HdMaterialSprites.ts';
+import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import {
   countEntityOverrides,
   getEntityPrefabId,
   resolveEntityComponents,
   type EcsProjectV2,
-} from './EcsProjectSchema.ts';
-import { runScriptedPlaytest } from '../ai/EcsPlaytestVerifier.ts';
-import { analyzeActionReachability, observeSceneSemantics } from '../ai/EcsSpatialOracle.ts';
-import { PixerMcpSession } from '../ai/PixerMcpProtocol.ts';
-import { EcsStudioSession } from './EcsStudioSession.ts';
-import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../types/WorldTypes.ts';
+} from '../../src/core/ecs/EcsProjectSchema.ts';
+import { runScriptedPlaytest } from '../../src/core/ai/EcsPlaytestVerifier.ts';
+import { analyzeActionReachability, observeSceneSemantics } from '../../src/core/ai/EcsSpatialOracle.ts';
+import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
+import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
+import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../../src/core/types/WorldTypes.ts';
 import {
   addEventGraphNode,
   compileEventGraphToScript,
@@ -26,7 +26,7 @@ import {
   INVALID_ENTITY,
   unpackEntityGeneration,
   unpackEntityIndex,
-} from './index.ts';
+} from '../../src/core/ecs/index.ts';
 
 function makeActionFixture(
   entities: EcsProjectV2['entities'],

@@ -10,7 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "sim": "node --experimental-strip-types scripts/headless-sim.ts",
-    "test": "node --experimental-strip-types --test src/core/ecs/EcsCore.test.ts scripts/sim/WorldMap.test.ts scripts/sim/Engine10Core.test.ts scripts/sim/Interop.test.ts scripts/sim/DualPerspective3D.test.ts scripts/sim/Hd2dFeel.test.ts scripts/sim/CloudOffload.test.ts",
+    "test": "node --experimental-strip-types --test scripts/sim/EcsCore.test.ts scripts/sim/WorldMap.test.ts scripts/sim/Engine10Core.test.ts scripts/sim/Interop.test.ts scripts/sim/DualPerspective3D.test.ts scripts/sim/Hd2dFeel.test.ts scripts/sim/CloudOffload.test.ts",
     "mcp": "node --experimental-strip-types scripts/pixer-mcp.ts",
     "cap:sync": "npm run build && cap sync",
     "cap:ios": "cap open ios",
