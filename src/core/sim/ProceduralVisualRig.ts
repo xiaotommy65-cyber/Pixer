@@ -110,7 +110,7 @@ function acquireRigEntitySlot(pool: EntityDesc[], idx: number): EntityDesc {
 
 /**
  * Pure, DOM-free, Zero-GC procedural visual rig & ambient particle system
- * elevated from PA-06 (CelestialParkour) into the unified DataCartridgeRuntime.
+ * integrated into the unified DataCartridgeRuntime.
  * Drives Verlet scarf/cape chains, 2-Bone IK limbs/claws, afterimage motion trails,
  * 6-state animation selection, and divergence-free Curl-Noise ambient particles.
  */

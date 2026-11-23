@@ -1,7 +1,12 @@
 import type { TextureAtlas } from '../../assets/TextureAtlas.ts';
 import { HybridAiDirector, type AiProvider } from '../ai/AiProvider.ts';
 import { serializeCartridgeObservation, type UnifiedGameObservation } from '../ai/ObservationSerializer.ts';
-import type { SoundPreset, TactilePhase, TactileSwitchProfile, ToySynth } from '../audio/ToySynth.ts';
+import type {
+  ExternalAudioBank,
+  SoundPreset,
+  TactilePhase,
+  TactileSwitchProfile,
+} from '../audio/ExternalAudioBank.ts';
 import type { HapticProfile, HapticSide } from '../hal/HapticEngine.ts';
 import { SystemHal } from '../hal/SystemHal.ts';
 import { validateCartridgeJson, type CartridgeJsonV1 } from '../sim/CartridgeSchema.ts';
@@ -51,7 +56,7 @@ export class EngineHost {
   public readonly hal: SystemHal;
   public readonly events: EngineEventBus;
   public readonly ai: HybridAiDirector;
-  private readonly synth: ToySynth;
+  private readonly synth: ExternalAudioBank;
   private readonly save: SaveService;
   private atlas: TextureAtlas | null = null;
   private onMomoReact?: () => void;
@@ -64,7 +69,7 @@ export class EngineHost {
 
   constructor(
     runner: CartridgeRunner,
-    synth: ToySynth,
+    synth: ExternalAudioBank,
     save: SaveService,
     onMomoReact?: () => void,
     hal?: SystemHal,

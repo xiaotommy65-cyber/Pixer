@@ -3,6 +3,8 @@ name: Deploy Pixel Atelier to GitHub Pages
 on:
   push:
     branches: ['main']
+  pull_request:
+    branches: ['main']
   workflow_dispatch:
 
 permissions:
@@ -28,19 +30,24 @@ jobs:
           node-version: '22'
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Typecheck (lint)
+        run: bun run lint
       - name: Run headless sim & architecture checks
         run: bun run sim
       - name: Run full unit test suite
         run: npm run test
-      - name: Typecheck & Build
+      - name: Build production bundle
         run: bun run build
       - name: Setup GitHub Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
   deploy:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

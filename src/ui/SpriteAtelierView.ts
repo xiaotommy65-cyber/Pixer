@@ -7,7 +7,7 @@ import {
   parseGridToIndices,
   TILE_PX,
 } from '../assets/TextureAtlas.ts';
-import type { ToySynth } from '../core/audio/ToySynth.ts';
+import type { ExternalAudioBank } from '../core/audio/ExternalAudioBank.ts';
 import type { EcsCustomSpriteDef } from '../core/ecs/EcsProjectSchema.ts';
 import type { EcsMapLayerName } from '../core/ecs/EcsTilemapTypes.ts';
 import type { GpuEngine } from '../core/gpu/GpuEngine.ts';
@@ -222,7 +222,7 @@ export class SpriteAtelierView {
   public readonly element: HTMLElement;
 
   private gpu: GpuEngine;
-  private synth: ToySynth;
+  private synth: ExternalAudioBank;
   private save: SaveService;
   private onHeroSaved?: () => void;
   private publishBridge: SpriteAtelierPublishBridge | null = null;
@@ -289,7 +289,7 @@ export class SpriteAtelierView {
 
   constructor(
     gpu: GpuEngine,
-    synth: ToySynth,
+    synth: ExternalAudioBank,
     save: SaveService,
     onHeroSaved?: () => void,
     publishBridge?: SpriteAtelierPublishBridge,
@@ -367,12 +367,16 @@ export class SpriteAtelierView {
     this.element = el('section', 'studio-card');
 
     const head = el('div', 'studio-head');
-    head.innerHTML = `
-      <div>
-        <h2>🎨 精靈畫室 3.1（16×16 / 32×32 / 48×64 HD-2D 像素工坊）</h2>
-        <p class="studio-sub">支援多尺寸畫布、PNG 圖片 Oklab 量化匯入、自動描邊立體化、法線打光預覽，並可一鍵發佈為地圖瓦片與物件印章！</p>
-      </div>
-    `;
+    const headTitleWrap = el('div');
+    headTitleWrap.append(
+      el('h2', undefined, '🎨 精靈畫室 3.1（16×16 / 32×32 / 48×64 HD-2D 像素工坊）'),
+      el(
+        'p',
+        'studio-sub',
+        '支援多尺寸畫布、PNG 圖片 Oklab 量化匯入、自動描邊立體化、法線打光預覽，並可一鍵發佈為地圖瓦片與物件印章！',
+      ),
+    );
+    head.appendChild(headTitleWrap);
 
     // Slot selector row
     const slotRow = el('div', 'tool-row');

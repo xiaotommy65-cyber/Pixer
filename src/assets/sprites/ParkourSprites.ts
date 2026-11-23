@@ -1,7 +1,7 @@
 /**
- * 16x16 Toybox-palette pixel grids for PA-06 Celestial Parkour & Grappling Hook sprites.
+ * 16x16 Toybox-palette pixel grids for parkour & grappling hook action sprites.
  * Silhouettes, visor rims, crystal facets, gold grapple rings, and steel zip-blocks are aligned
- * to the Engine 3.0 generated concept sheet and quantized via TOYBOX_PALETTE with 'e'/'f' bloom hints.
+ * to the TOYBOX_PALETTE with 'e'/'f' bloom hints.
  */
 export const PARKOUR_SPRITE_GRIDS: Record<string, string[]> = {
   parkour_hero_idle: [

@@ -1,4 +1,4 @@
-import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ToySynth.ts';
+import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ExternalAudioBank.ts';
 import type { HapticProfile, HapticSide } from '../core/hal/HapticEngine.ts';
 import { setElementIconLabel, type PixelIconName } from './PixelIcons.ts';
 
@@ -260,12 +260,12 @@ interface TactileTargetSpec {
 }
 
 const TACTILE_SELECTOR =
-  '.jc-sys-btn, .aux-sys-btn, .grip-seg-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .rpg-agent-btn, .rpg-act-btn, .shmup-fighter-card, .shmup-weapon-btn, .shmup-bomb-btn, .chr-btn, .chr-tab, .chr-card, .chr-choice, .toy-btn, .shell-swatch, .palette-chip';
+  '.jc-sys-btn, .aux-sys-btn, .grip-seg-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .shmup-fighter-card, .shmup-weapon-btn, .shmup-bomb-btn, .toy-btn, .shell-swatch, .palette-chip';
 
 function classifyTactileTarget(node: HTMLElement): TactileTargetSpec | null {
   if ((node as HTMLButtonElement).disabled || node.matches(':disabled')) return null;
   if (node.closest('.diamond, .jc-bumper, .stick')) return null;
-  if (node.matches('.jc-sys-btn, .aux-sys-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn, .rpg-agent-btn')) {
+  if (node.matches('.jc-sys-btn, .aux-sys-btn, .eject-btn, .handheld-exit-btn, .handheld-settings-btn')) {
     return { profile: 'system', sound: true, hapticMs: 10 };
   }
   return { profile: 'ui', sound: true, hapticMs: 9 };

@@ -78,7 +78,7 @@ export function createSupabaseMetadataStore(env: WorkerEnv): CloudMetadataStore 
       if (!saved) throw new Error('Supabase upsertProject returned empty representation');
 
       // Append immutable revision audit entry
-      await fetch(`${baseUrl}/rest/v1/project_revisions`, {
+      const revResp = await fetch(`${baseUrl}/rest/v1/project_revisions`, {
         method: 'POST',
         headers: restHeaders('return=minimal'),
         body: JSON.stringify({
@@ -89,6 +89,9 @@ export function createSupabaseMetadataStore(env: WorkerEnv): CloudMetadataStore 
           note: input.note ?? '',
         }),
       });
+      if (!revResp.ok) {
+        throw new Error(`Supabase insert project_revisions failed: HTTP ${revResp.status}`);
+      }
 
       return saved;
     },

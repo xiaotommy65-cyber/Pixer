@@ -1,4 +1,4 @@
-import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ToySynth.ts';
+import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ExternalAudioBank.ts';
 import type { GamepadJustPressedState, WebGamepadSampler } from '../core/input/InputPipeline.ts';
 import type { HapticProfile, HapticSide } from '../core/hal/HapticEngine.ts';
 import type { InputState } from '../core/types/WorldTypes.ts';

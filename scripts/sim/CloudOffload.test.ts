@@ -133,19 +133,55 @@ test('Cloud Offload Edge API: health probe, share slug validation & security rej
   assert.equal(health.ok, true);
   assert.equal(health.architecture, 'cloudflare-r2-supabase-option-a');
 
-  // Path traversal on R2 asset proxy must reject with 400
+  // Path traversal & malformed percent-encoding on R2 asset proxy must reject with 400
   const badAssetResp = await handleEdgeRequest(
     new Request('https://api.pixer.test/api/assets/..%2F..%2Fsecrets.json'),
     env,
   );
   assert.equal(badAssetResp.status, 400);
 
-  // Unconfigured AI proxy returns 503 so client cleanly falls back to local provider
-  const aiResp = await handleEdgeRequest(
+  const malformedPctResp = await handleEdgeRequest(
+    new Request('https://api.pixer.test/api/assets/%E0%A4%A'),
+    env,
+  );
+  assert.equal(malformedPctResp.status, 400);
+
+  // Unauthenticated AI proxy call must reject with 401 (prevents LLM quota abuse)
+  const unauthAiResp = await handleEdgeRequest(
     new Request('https://api.pixer.test/api/ai/advise', { method: 'POST', body: '{}' }),
     env,
   );
+  assert.equal(unauthAiResp.status, 401);
+
+  // Authenticated but unconfigured AI proxy returns 503 so client cleanly falls back to local provider
+  const aiResp = await handleEdgeRequest(
+    new Request('https://api.pixer.test/api/ai/advise', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer valid-alice-jwt', 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+    env,
+  );
   assert.equal(aiResp.status, 503);
+
+  // Unexpected backend failure returns 500 JSON while preserving CORS headers
+  const brokenEnv: WorkerEnv = {
+    ...env,
+    __TEST_STORE__: {
+      ...env.__TEST_STORE__!,
+      async getProjectBySlug() {
+        throw new Error('simulated db outage');
+      },
+    },
+  };
+  const errResp = await handleEdgeRequest(
+    new Request('https://api.pixer.test/api/projects/emerald-ruins-demo', {
+      headers: { Origin: 'https://xiaotommy65-cyber.github.io' },
+    }),
+    brokenEnv,
+  );
+  assert.equal(errResp.status, 500);
+  assert.equal(errResp.headers.get('Access-Control-Allow-Origin'), 'https://xiaotommy65-cyber.github.io');
 });
 
 test('CloudSyncClient + Edge API: content-addressed R2 audio upload, immutable cache & ExternalAudioBank wiring', async () => {
@@ -185,25 +221,43 @@ test('CloudSyncClient + Edge API: content-addressed R2 audio upload, immutable c
   bank.destroy();
 });
 
-test('CloudSyncClient + Edge API: ETag optimistic lock publishing, 304 Not Modified, owner isolation & SRAM timestamp merge', async () => {
+test('CloudSyncClient + Edge API: ETag optimistic lock publishing, audioManifest round-trip, 304 Not Modified, owner isolation & SRAM timestamp merge', async () => {
   const env = createMockCloudEnv();
   const alice = makeEdgeClient(env);
   alice.setAuthToken('valid-alice-jwt');
 
-  // 1. Alice publishes Emerald Ruins as public project
+  // 0. Upload external audio manifest JSON to R2
+  const manifestJson = JSON.stringify({
+    baseUrl: 'https://cdn.pixer.app/assets/audio',
+    sfx: { jump: 'slash.opus' },
+  });
+  const manifestUpload = await alice.uploadExternalAsset(new TextEncoder().encode(manifestJson), 'pack-v1.json');
+  assert.equal(manifestUpload.ok, true);
+  assert.ok(manifestUpload.r2Key?.startsWith('assets/manifests/'));
+
+  // Reject unsafe audioManifestR2Key path traversal
+  const badManifestPub = await alice.publishProject('emerald-ruins-demo', EMERALD_RUINS_PROJECT, {
+    visibility: 'public',
+    audioManifestR2Key: '../secrets/keys.json',
+  });
+  assert.equal(badManifestPub.ok, false);
+
+  // 1. Alice publishes Emerald Ruins as public project linked to R2 audioManifest
   const pub1 = await alice.publishProject('emerald-ruins-demo', EMERALD_RUINS_PROJECT, {
     visibility: 'public',
     note: 'Initial M1 release',
+    audioManifestR2Key: manifestUpload.r2Key,
   });
   assert.equal(pub1.ok, true);
   assert.equal(pub1.shareQuery, '?play=emerald-ruins-demo');
   assert.ok(pub1.etag && pub1.etag.length >= 16);
 
-  // 2. Anonymous player fetches via ?play=emerald-ruins-demo + verifies 304 Not Modified
+  // 2. Anonymous player fetches via ?play=emerald-ruins-demo + receives linked audioManifest + verifies 304 Not Modified
   const anon = makeEdgeClient(env);
   const fetched = await anon.fetchSharedProject('emerald-ruins-demo');
   assert.equal(fetched.ok, true);
   assert.equal(fetched.ok && !fetched.notModified && fetched.data.project.meta.code, 'PA-15');
+  assert.equal(fetched.ok && !fetched.notModified && fetched.data.audioManifest?.sfx?.jump, 'slash.opus');
 
   const cached304 = await anon.fetchSharedProject('emerald-ruins-demo', pub1.etag);
   assert.equal(cached304.ok && cached304.notModified, true);
@@ -231,7 +285,7 @@ test('CloudSyncClient + Edge API: ETag optimistic lock publishing, 304 Not Modif
   assert.deepEqual(stalePush.sram, { stage: 3, stars: 9 });
 });
 
-test('Edge Remote Streamable HTTP MCP (/api/mcp) enforces Bearer auth and executes tools/call', async () => {
+test('Edge Remote Streamable HTTP MCP (/api/mcp) enforces Bearer auth, private slug isolation, and executes tools/call', async () => {
   const env = createMockCloudEnv();
 
   const unauthResp = await handleEdgeRequest(
@@ -270,4 +324,34 @@ test('Edge Remote Streamable HTTP MCP (/api/mcp) enforces Bearer auth and execut
   assert.equal(rpc.id, 7);
   assert.equal(rpc.result?.isError, false);
   assert.ok((rpc.result?.structuredContent?.commands?.length ?? 0) >= 25);
+
+  // Private project slug must not be loaded by unowned MCP ?slug= query
+  const alice = makeEdgeClient(env);
+  alice.setAuthToken('valid-alice-jwt');
+  const privPub = await alice.publishProject('private-secret-demo', EMERALD_RUINS_PROJECT, {
+    visibility: 'private',
+  });
+  assert.equal(privPub.ok, true);
+
+  const privMcpResp = await handleEdgeRequest(
+    new Request('https://api.pixer.test/api/mcp?slug=private-secret-demo', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer secret-mcp-token',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'tools/call',
+        params: { name: 'export_project_json', arguments: {} },
+      }),
+    }),
+    env,
+  );
+  assert.equal(privMcpResp.status, 200);
+  const privRpc = (await privMcpResp.json()) as {
+    result?: { structuredContent?: { project?: { meta?: { code?: string } } } };
+  };
+  assert.equal(privRpc.result?.structuredContent?.project?.meta?.code, 'PA-14');
 });
