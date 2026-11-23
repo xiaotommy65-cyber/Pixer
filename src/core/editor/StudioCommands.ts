@@ -1,4 +1,5 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
+import type { CardDeckEngineConfig, CardEngineCardDef } from '../sim/CardDeckEngine.ts';
 import type {
   CartridgeArchetypeDef,
   CartridgeArtMoodDef,
@@ -8,6 +9,7 @@ import type {
 } from '../sim/CartridgeSchema.ts';
 import type { CartridgeDualPerspectiveConfig } from '../sim/DualPerspectiveRuntime.ts';
 import type { VmRule } from '../sim/EventActionVm.ts';
+import type { FighterEngineConfig, FighterMoveDef } from '../sim/FighterFrameEngine.ts';
 import type { OrthogonalArtBlueprint } from '../sim/OrthogonalArt.ts';
 import type { CartridgeAtmosphereDef, CartridgeVisualRigDef } from '../sim/ProceduralVisualRig.ts';
 import {
@@ -22,6 +24,8 @@ import {
 export type StudioTemplateId =
   | 'parkour_flagship'
   | 'dual_perspective'
+  | 'card_roguelike'
+  | 'fighter_arena'
   | 'platformer';
 
 export type TileCollisionBrush = 'empty' | 'solid' | 'cloud' | 'slope_l' | 'slope_r';
@@ -60,6 +64,10 @@ export type StudioCommand =
   | { type: 'clear_spawns'; stageIndex?: number; archetype?: string }
   | { type: 'upsert_art_blueprint'; id: string; blueprint: OrthogonalArtBlueprint }
   | { type: 'set_dual_perspective'; perspective: CartridgeDualPerspectiveConfig | undefined }
+  | { type: 'set_card_engine'; cardEngine: CardDeckEngineConfig | undefined }
+  | { type: 'upsert_card'; card: CardEngineCardDef }
+  | { type: 'set_fighter_engine'; fighterEngine: FighterEngineConfig | undefined }
+  | { type: 'upsert_fighter_move'; target?: 'p1' | 'p2' | 'both'; move: FighterMoveDef }
   | { type: 'upsert_rule'; stageIndex?: number; ruleIndex?: number; rule: VmRule }
   | { type: 'remove_rule'; stageIndex?: number; ruleIndex: number }
   | { type: 'upsert_sprite'; spriteId: string; grid: readonly string[] }
@@ -227,6 +235,251 @@ export function createStudioTemplate(
             { archetype: 'key', x: 12 * TILE_SIZE, y: 3 * TILE_SIZE },
             { archetype: 'gate', x: 13 * TILE_SIZE, y: 9 * TILE_SIZE },
           ],
+        },
+      ],
+    };
+  }
+
+  if (template === 'card_roguelike') {
+    return {
+      version: 1,
+      meta: {
+        id: overrides?.id ?? 'studio-card',
+        code: overrides?.code ?? 'ST-CD',
+        title: overrides?.title ?? '正交星輝牌局',
+        subtitle: '純資料驅動牌組狀態區 + 意向預告 + 連擊規則',
+        genre: 'platformer',
+        genreHud: 'card',
+        viewport: 'classic',
+        glowIntensity: 1.05,
+      },
+      cardEngine: {
+        heroName: '工坊術士',
+        heroBlueprintId: 'atelier_striker',
+        heroMaxHp: 40,
+        maxEnergy: 3,
+        drawPerTurn: 4,
+        starterDeck: ['strike', 'strike', 'aegis', 'aegis', 'ember_bolt', 'focus_spark'],
+        rewardPool: ['ember_bolt', 'focus_spark'],
+        cards: {
+          strike: {
+            id: 'strike',
+            name: '星刃斬',
+            shortDesc: '造成 6 點傷害',
+            cost: 1,
+            target: 'single_enemy',
+            artBlueprintId: 'card_art_strike',
+            accentHex: '#ff708d',
+            effects: [{ kind: 'damage', value: 6 }],
+          },
+          aegis: {
+            id: 'aegis',
+            name: '鍛爐護盾',
+            shortDesc: '獲得 6 點護甲',
+            cost: 1,
+            target: 'self',
+            artBlueprintId: 'card_art_shield',
+            accentHex: '#5ec2f7',
+            effects: [{ kind: 'block', value: 6 }],
+          },
+          ember_bolt: {
+            id: 'ember_bolt',
+            name: '赤炎連彈',
+            shortDesc: '造成 11 傷害並易傷 2 回合',
+            cost: 2,
+            target: 'single_enemy',
+            artBlueprintId: 'card_art_flame',
+            accentHex: '#ffd447',
+            effects: [
+              { kind: 'damage', value: 11 },
+              { kind: 'applyStatus', target: 'target', status: 'vulnerable', value: 2 },
+            ],
+          },
+          focus_spark: {
+            id: 'focus_spark',
+            name: '星泉湧動',
+            shortDesc: '+1 能量並抽 1 張牌',
+            cost: 0,
+            target: 'self',
+            artBlueprintId: 'card_art_surge',
+            accentHex: '#56d39c',
+            effects: [
+              { kind: 'energy', value: 1 },
+              { kind: 'draw', value: 1 },
+            ],
+          },
+        },
+        encounters: [
+          {
+            id: 'forge-golem-wave',
+            name: '鍛爐守衛戰',
+            enemies: [
+              {
+                id: 'golem',
+                name: '鍛爐魔像',
+                artBlueprintId: 'sentinel_golem',
+                maxHp: 36,
+                intents: [
+                  { kind: 'attack', value: 7, label: '重錘 7' },
+                  { kind: 'defend', value: 6, label: '岩盾 6' },
+                  { kind: 'attack', value: 11, label: '熔岩震擊 11' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      player: {
+        controller: 'card',
+        sprite: 'hero_a',
+        w: 16,
+        h: 16,
+        maxHearts: 4,
+      },
+      archetypes: {},
+      stages: [
+        {
+          id: 'arena-1',
+          name: '星輝牌桌',
+          worldWidth: 320,
+          worldHeight: 180,
+          skyTop: '#16102d',
+          skyBottom: '#352259',
+          bgmTheme: 'dungeon',
+          hint: '左右選牌 · A 出牌 · Y 結束回合',
+          spawn: { x: 64, y: 110 },
+        },
+      ],
+    };
+  }
+
+  if (template === 'fighter_arena') {
+    const defaultMoves: FighterMoveDef[] = [
+      {
+        id: 'light',
+        name: '輕拳',
+        input: 'light',
+        stance: 'ground',
+        startup: 4,
+        active: 4,
+        recovery: 7,
+        damage: 8,
+        chipDamage: 1,
+        hitstun: 14,
+        blockstun: 8,
+        hitstop: 3,
+        knockbackX: 88,
+        knockbackY: -20,
+        meterGain: 10,
+        meterCost: 0,
+        cancelInto: ['heavy', 'special'],
+        pose: 'strike',
+        hitbox: { x: 12, y: -22, w: 18, h: 12 },
+      },
+      {
+        id: 'heavy',
+        name: '重蹴',
+        input: 'heavy',
+        stance: 'ground',
+        startup: 7,
+        active: 5,
+        recovery: 12,
+        damage: 14,
+        chipDamage: 2,
+        hitstun: 18,
+        blockstun: 11,
+        hitstop: 5,
+        knockbackX: 140,
+        knockbackY: -65,
+        meterGain: 16,
+        meterCost: 0,
+        cancelInto: ['special'],
+        pose: 'strike',
+        hitbox: { x: 14, y: -24, w: 22, h: 16 },
+      },
+      {
+        id: 'special',
+        name: '星閃破',
+        input: 'special',
+        stance: 'ground',
+        startup: 6,
+        active: 7,
+        recovery: 15,
+        damage: 20,
+        chipDamage: 4,
+        hitstun: 24,
+        blockstun: 14,
+        hitstop: 7,
+        knockbackX: 195,
+        knockbackY: -120,
+        lungeVx: 175,
+        meterGain: 0,
+        meterCost: 25,
+        pose: 'strike',
+        hitbox: { x: 16, y: -26, w: 26, h: 20 },
+      },
+    ];
+    return {
+      version: 1,
+      meta: {
+        id: overrides?.id ?? 'studio-fighter',
+        code: overrides?.code ?? 'ST-FT',
+        title: overrides?.title ?? '正交工房格鬥場',
+        subtitle: '幀資料狀態機 + 攻防判定盒 + 取消連段',
+        genre: 'platformer',
+        genreHud: 'fighter',
+        viewport: 'classic',
+        glowIntensity: 1.05,
+      },
+      fighterEngine: {
+        stageWidth: 320,
+        floorY: 146,
+        roundTimeSec: 60,
+        p1: {
+          id: 'p1',
+          name: '緋刃使',
+          artBlueprintId: 'atelier_striker',
+          paletteRow: 0,
+          maxHp: 100,
+          walkSpeed: 102,
+          jumpVy: -248,
+          pushbox: { x: -7, y: -24, w: 14, h: 24 },
+          hurtbox: { x: -9, y: -26, w: 18, h: 26 },
+          moves: defaultMoves,
+        },
+        p2: {
+          id: 'p2',
+          name: '赤炎拳師',
+          artBlueprintId: 'crimson_rival',
+          paletteRow: 2,
+          maxHp: 100,
+          walkSpeed: 96,
+          jumpVy: -242,
+          pushbox: { x: -7, y: -24, w: 14, h: 24 },
+          hurtbox: { x: -9, y: -26, w: 18, h: 26 },
+          moves: defaultMoves,
+        },
+      },
+      player: {
+        controller: 'fighter',
+        sprite: 'hero_a',
+        w: 16,
+        h: 24,
+        maxHearts: 4,
+      },
+      archetypes: {},
+      stages: [
+        {
+          id: 'dojo-1',
+          name: '暮色道場',
+          worldWidth: 320,
+          worldHeight: 180,
+          skyTop: '#241840',
+          skyBottom: '#f29f6d',
+          bgmTheme: 'boss',
+          hint: '左右移動/後退防禦 · A 輕拳 · Y 重蹴 · X 必殺技',
+          spawn: { x: 88, y: 122 },
+          islands: [{ startTile: 0, countTiles: 20, topY: 146 }],
         },
       ],
     };
@@ -665,6 +918,53 @@ export function applyStudioCommandToDoc(
         nextDoc: next,
         summary: cmd.perspective?.enabled !== false && cmd.perspective ? '啟用 1P ↔ 3P 雙視角透視引擎' : '停用雙視角透視模式',
       };
+    }
+    case 'set_card_engine': {
+      next.cardEngine = cmd.cardEngine;
+      if (cmd.cardEngine) {
+        next.player = { ...next.player, controller: 'card' };
+        next.meta = { ...next.meta, genreHud: 'card' };
+      }
+      return { nextDoc: next, summary: '設定正交卡牌引擎參數' };
+    }
+    case 'upsert_card': {
+      if (next.cardEngine) {
+        next.cardEngine = {
+          ...next.cardEngine,
+          cards: { ...next.cardEngine.cards, [cmd.card.id]: cmd.card },
+        };
+      }
+      return { nextDoc: next, summary: `更新卡牌「${cmd.card.name}」` };
+    }
+    case 'set_fighter_engine': {
+      next.fighterEngine = cmd.fighterEngine;
+      if (cmd.fighterEngine) {
+        next.player = { ...next.player, controller: 'fighter' };
+        next.meta = { ...next.meta, genreHud: 'fighter' };
+      }
+      return { nextDoc: next, summary: '設定格鬥幀資料引擎參數' };
+    }
+    case 'upsert_fighter_move': {
+      if (next.fighterEngine) {
+        const patchMoves = (list: readonly FighterMoveDef[]) => {
+          const moves = [...list];
+          const idx = moves.findIndex((m) => m.id === cmd.move.id);
+          if (idx >= 0) moves[idx] = cmd.move;
+          else moves.push(cmd.move);
+          return moves;
+        };
+        const target = cmd.target ?? 'p1';
+        next.fighterEngine = {
+          ...next.fighterEngine,
+          p1: target === 'p1' || target === 'both'
+            ? { ...next.fighterEngine.p1, moves: patchMoves(next.fighterEngine.p1.moves) }
+            : next.fighterEngine.p1,
+          p2: target === 'p2' || target === 'both'
+            ? { ...next.fighterEngine.p2, moves: patchMoves(next.fighterEngine.p2.moves) }
+            : next.fighterEngine.p2,
+        };
+      }
+      return { nextDoc: next, summary: `更新格鬥招式「${cmd.move.name}」` };
     }
     case 'upsert_rule': {
       if (cmd.stageIndex !== undefined && next.stages[cmd.stageIndex]) {

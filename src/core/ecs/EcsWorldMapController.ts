@@ -1,5 +1,15 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import { OCCLUSION_GRID_MAX } from '../gpu/GpuTypes.ts';
+import {
+  computeSymmetricFovInto,
+  createSymmetricFovScratch,
+  hasGridLineOfSight,
+} from '../math/Visibility2D.ts';
+import {
+  createPathfinderWorkspace,
+  findAStarNextCell,
+  findAStarPathInto,
+} from '../sim/GridPathfinder.ts';
 import type {
   InputState,
   LightDesc,
@@ -108,6 +118,21 @@ export class EcsWorldMapController {
   private prevJump = false;
 
   private readonly scratchPos: [number, number] = [0, 0];
+  private readonly pathWorkspace = createPathfinderWorkspace(OCCLUSION_GRID_MAX * OCCLUSION_GRID_MAX);
+  private readonly fovScratch = createSymmetricFovScratch(512);
+  private currentGlobalsRef: ReadonlyMap<string, number> | null = null;
+  private readonly isCellWalkablePredicate = (c: number, r: number): boolean => {
+    const room = this.activeRoom;
+    const wm = this.project.worldMap;
+    if (!room || !wm || !this.currentGlobalsRef) return false;
+    return !isRoomCellSolid(room, c, r, this.currentGlobalsRef, wm.tileDefs);
+  };
+  private readonly isCellOpaquePredicate = (c: number, r: number): boolean => {
+    const room = this.activeRoom;
+    const wm = this.project.worldMap;
+    if (!room || !wm || !this.currentGlobalsRef) return true;
+    return isRoomCellSolid(room, c, r, this.currentGlobalsRef, wm.tileDefs);
+  };
 
   constructor(project: EcsProjectV2) {
     this.project = project;
@@ -123,6 +148,78 @@ export class EcsWorldMapController {
 
   public getActiveRoomId(): string {
     return this.activeRoomId;
+  }
+
+  /**
+   * Zero-GC symmetric integer-rational grid line-of-sight check across the active room.
+   */
+  public hasRoomLineOfSight(
+    c0: number,
+    r0: number,
+    c1: number,
+    r1: number,
+    globals: ReadonlyMap<string, number>,
+  ): boolean {
+    if (!this.activeRoom) return false;
+    this.currentGlobalsRef = globals;
+    return hasGridLineOfSight(c0, r0, c1, r1, this.isCellOpaquePredicate);
+  }
+
+  /**
+   * Zero-GC Binary Min-Heap A* pathfinder across the active room, writing `[startCell, ..., goalCell]`
+   * (`row * cols + col`) into `outCells` and returning the path length (`0` if unreachable).
+   */
+  public findRoomPathCells(
+    startCol: number,
+    startRow: number,
+    goalCol: number,
+    goalRow: number,
+    globals: ReadonlyMap<string, number>,
+    outCells: Int32Array | Uint16Array,
+  ): number {
+    const room = this.activeRoom;
+    if (!room) return 0;
+    this.currentGlobalsRef = globals;
+    return findAStarPathInto(
+      room.cols,
+      room.rows,
+      startCol,
+      startRow,
+      goalCol,
+      goalRow,
+      this.isCellWalkablePredicate,
+      outCells,
+      undefined,
+      undefined,
+      1,
+      this.pathWorkspace,
+    );
+  }
+
+  /**
+   * Zero-GC Euclidean Symmetric Shadowcasting FOV across the active room, writing `1` (visible) or `0` (hidden)
+   * into `outMask` and returning the count of visible grid cells.
+   */
+  public computeRoomFovMask(
+    originCol: number,
+    originRow: number,
+    radius: number,
+    globals: ReadonlyMap<string, number>,
+    outMask: Uint8Array,
+  ): number {
+    const room = this.activeRoom;
+    if (!room) return 0;
+    this.currentGlobalsRef = globals;
+    return computeSymmetricFovInto(
+      room.cols,
+      room.rows,
+      originCol,
+      originRow,
+      radius,
+      this.isCellOpaquePredicate,
+      outMask,
+      this.fovScratch,
+    );
   }
 
   public getRoomBanner(): string {
@@ -1099,16 +1196,98 @@ export class EcsWorldMapController {
         const spd = isPhase2 && profile.phase2Speed !== undefined ? profile.phase2Speed : profile.moveSpeed;
         const chasing = dist < profile.chaseRange && dist > profile.stopRange;
         if (chasing) {
+          let moveDirX = dx / dist;
+          let moveDirY = dy / dist;
+          const room = this.activeRoom;
+          const wm = this.project.worldMap;
+          if (room && wm) {
+            const ts = wm.tileSize;
+            const eCol = Math.max(0, Math.min(room.cols - 1, Math.floor(ex / ts)));
+            const eRow = Math.max(0, Math.min(room.rows - 1, Math.floor(ey / ts)));
+            const hCol = Math.max(0, Math.min(room.cols - 1, Math.floor(heroCx / ts)));
+            const hRow = Math.max(0, Math.min(room.rows - 1, Math.floor(heroCy / ts)));
+            this.currentGlobalsRef = world.globals;
+            if (!hasGridLineOfSight(eCol, eRow, hCol, hRow, this.isCellOpaquePredicate)) {
+              const nextCell = findAStarNextCell(
+                room.cols,
+                room.rows,
+                eCol,
+                eRow,
+                hCol,
+                hRow,
+                this.isCellWalkablePredicate,
+                undefined,
+                1,
+                this.pathWorkspace,
+              );
+              if (nextCell >= 0) {
+                const nextCol = nextCell % room.cols;
+                const nextRow = (nextCell - nextCol) / room.cols;
+                const ndx = (nextCol + 0.5) * ts - ex;
+                const ndy = (nextRow + 0.5) * ts - ey;
+                const ndist = Math.hypot(ndx, ndy);
+                if (ndist > 0.001) {
+                  moveDirX = ndx / ndist;
+                  moveDirY = ndy / ndist;
+                }
+              }
+            }
+          }
+          const origX = etr.x;
+          const origY = etr.y;
           this.moveWithTileCollision(
-            etr.x,
-            etr.y,
+            origX,
+            origY,
             etr.w,
             etr.h,
-            (dx / dist) * spd * dt,
-            (dy / dist) * spd * dt,
+            moveDirX * spd * dt,
+            moveDirY * spd * dt,
             world,
             this.scratchPos,
           );
+          if (
+            room &&
+            wm &&
+            Math.hypot(this.scratchPos[0] - origX, this.scratchPos[1] - origY) < spd * dt * 0.15
+          ) {
+            const ts = wm.tileSize;
+            const eCol = Math.max(0, Math.min(room.cols - 1, Math.floor(ex / ts)));
+            const eRow = Math.max(0, Math.min(room.rows - 1, Math.floor(ey / ts)));
+            const hCol = Math.max(0, Math.min(room.cols - 1, Math.floor(heroCx / ts)));
+            const hRow = Math.max(0, Math.min(room.rows - 1, Math.floor(heroCy / ts)));
+            this.currentGlobalsRef = world.globals;
+            const nextCell = findAStarNextCell(
+              room.cols,
+              room.rows,
+              eCol,
+              eRow,
+              hCol,
+              hRow,
+              this.isCellWalkablePredicate,
+              undefined,
+              1,
+              this.pathWorkspace,
+            );
+            if (nextCell >= 0) {
+              const nextCol = nextCell % room.cols;
+              const nextRow = (nextCell - nextCol) / room.cols;
+              const ndx = (nextCol + 0.5) * ts - ex;
+              const ndy = (nextRow + 0.5) * ts - ey;
+              const ndist = Math.hypot(ndx, ndy);
+              if (ndist > 0.001) {
+                this.moveWithTileCollision(
+                  origX,
+                  origY,
+                  etr.w,
+                  etr.h,
+                  (ndx / ndist) * spd * dt,
+                  (ndy / ndist) * spd * dt,
+                  world,
+                  this.scratchPos,
+                );
+              }
+            }
+          }
           etr.x = this.scratchPos[0];
           etr.y = this.scratchPos[1];
           const mat = core.getComponent(eh, c.Material);

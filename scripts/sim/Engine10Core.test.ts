@@ -3,7 +3,10 @@ import test from 'node:test';
 import { zipSync, zlibSync } from 'fflate';
 import { createMcpFrameReader } from '../pixer-mcp.ts';
 import { ExternalAudioBank, isSafeAudioUrl } from '../../src/core/audio/ExternalAudioBank.ts';
+import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import { decodeZlibB64ToRgba, uint8ToBase64 } from '../../src/core/ecs/EcsCustomSpriteCompiler.ts';
+import { CASTLE_TILE_IDS, setRoomTile } from '../../src/core/ecs/EcsTilemapTypes.ts';
+import { StudioSession } from '../../src/core/editor/StudioSession.ts';
 import { loadExternalInteropFiles } from '../../src/core/interop/InteropBundleLoader.ts';
 import { decodeTiledLayerData } from '../../src/core/interop/TiledImporter.ts';
 import {
@@ -14,6 +17,9 @@ import {
   GameFlowController,
   resolveSceneCameraShot,
 } from '../../src/core/runtime/GameFlowController.ts';
+import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
+import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../../src/core/types/WorldTypes.ts';
+import { OBSIDIAN_CITADEL_PROJECT } from '../../src/game/obsidianCitadel/ObsidianCitadelProject.ts';
 
 test('CameraRigDirector converges 6DoF poses, projects 3D points accurately, and enforces static gameplay lock', () => {
   const cam = new CameraRigDirector('TITLE_ORBIT');
@@ -168,3 +174,101 @@ test('Security hardening: Interop ZIP path-traversal, Tiled zlib bomb & custom s
   assert.equal(decoded.length, 32 * 32 * 4);
   assert.equal(decoded.every((b) => b === 0), true);
 });
+
+test('Restored Genre Sub-Engines: CardDeckEngine (card_roguelike) & FighterFrameEngine (fighter_arena) run deterministically', () => {
+  // 1. Card Roguelike template -> CardDeckEngine
+  const cardSession = new StudioSession('card_roguelike');
+  const cardRuntime = new DataCartridgeRuntime(cardSession.getDocument());
+  const pressA = { ...createEmptyInputState(), action: true };
+  for (let i = 0; i < 12; i++) {
+    cardRuntime.step(1 / 60, i % 3 === 0 ? pressA : createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  const cardSnap = cardRuntime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.ok((cardSnap.hudPrimitives?.length ?? 0) > 0, 'CardDeckEngine must project card HUD primitives');
+
+  // 2. Fighter Arena template -> FighterFrameEngine
+  const fighterSession = new StudioSession('fighter_arena');
+  const fighterRuntime = new DataCartridgeRuntime(fighterSession.getDocument());
+  const attackIn = { ...createEmptyInputState(), right: true, action: true };
+  for (let i = 0; i < 30; i++) {
+    fighterRuntime.step(1 / 60, i % 2 === 0 ? attackIn : createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  const fighterSnap = fighterRuntime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.ok(fighterSnap.entities.length >= 2, 'FighterFrameEngine must project P1 and P2 fighters');
+});
+
+test('True ECS Arsenal Wiring: EcsWorldMapController wall-bypassing A* + FOV/LOS & EcsCartridgeRuntime live CameraRigDirector + GameFlowController', () => {
+  const proj = structuredClone(OBSIDIAN_CITADEL_PROJECT);
+  const room = proj.worldMap!.rooms[0];
+  const ts = proj.worldMap!.tileSize;
+
+  // Clear area cols 2..10, rows 4..12 to walkable stone floor, then place a horizontal wall barrier at row 8 across cols 4..8
+  for (let r = 4; r <= 12; r++) {
+    for (let c = 2; c <= 10; c++) {
+      setRoomTile(room, 'ground', c, r, CASTLE_TILE_IDS.STONE_FLOOR);
+      setRoomTile(room, 'wall', c, r, 0);
+    }
+  }
+  for (let c = 4; c <= 8; c++) {
+    setRoomTile(room, 'wall', c, 8, CASTLE_TILE_IDS.WALL_BRICK);
+  }
+  proj.entities = [
+    {
+      id: 'hero',
+      name: 'Hero',
+      roomId: room.id,
+      prefabId: 'castle_hero',
+      components: { transform: { x: 6 * ts + 4, y: 10 * ts + 4, w: 24, h: 24 }, tag: 'hero' },
+    },
+    {
+      id: 'sentinel_test',
+      name: 'Sentinel',
+      roomId: room.id,
+      prefabId: 'castle_sentinel',
+      components: { transform: { x: 6 * ts + 4, y: 6 * ts + 4, w: 24, h: 24 }, tag: 'sentinel' },
+    },
+  ];
+
+  const runtime = new EcsCartridgeRuntime(proj);
+  const wm = runtime.getWorldMapController();
+
+  // 1. Verify LOS is blocked across the wall barrier at (6, 6) -> (6, 10), while open cells have LOS
+  assert.equal(wm.hasRoomLineOfSight(6, 6, 6, 10, runtime.world.globals), false, 'Wall at row 8 must block direct LOS');
+  assert.equal(wm.hasRoomLineOfSight(6, 6, 3, 6, runtime.world.globals), true, 'Open horizontal corridor has LOS');
+
+  // 2. Verify Zero-GC A* finds a detour path around the wall barrier (cols 4..8)
+  const pathBuf = new Int32Array(128);
+  const pathLen = wm.findRoomPathCells(6, 6, 6, 10, runtime.world.globals, pathBuf);
+  assert.ok(pathLen > 5, `Expected detour A* path around wall, got length ${pathLen}`);
+
+  // 3. Verify Zero-GC Symmetric Shadowcasting FOV mask on active room
+  const fovMask = new Uint8Array(room.cols * room.rows);
+  const visCount = wm.computeRoomFovMask(6, 6, 6, runtime.world.globals, fovMask);
+  assert.ok(visCount > 10, `Expected visible cells > 10, got ${visCount}`);
+  assert.equal(fovMask[10 * room.cols + 6], 0, 'Hero cell behind solid wall must be occluded in FOV');
+
+  // 4. Step runtime for 45 frames with hero stationary: sentinel at (6, 6) must steer horizontally around the wall via A*!
+  const sentinelStartCol = 6 * ts + 4;
+  for (let i = 0; i < 45; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  const core = runtime.world.core;
+  const tagStore = core.getStore(core.components.Tag);
+  let sentinelX = sentinelStartCol;
+  for (let i = 0; i < tagStore.size(); i++) {
+    if (tagStore.getDenseDataAt(i).entityId === 'sentinel_test') {
+      const tr = core.getComponent(tagStore.getDenseEntityAt(i), core.components.Transform2D);
+      if (tr) sentinelX = tr.x;
+    }
+  }
+  assert.ok(
+    Math.abs(sentinelX - sentinelStartCol) > 12,
+    `Enemy behind horizontal wall must steer laterally via A* (start=${sentinelStartCol}, now=${sentinelX})`,
+  );
+
+  // 5. Verify live 6DoF CameraRigDirector & GameFlowController integration on EcsCartridgeRuntime
+  assert.equal(runtime.gameFlow.getScene(), 'playing');
+  assert.equal(runtime.cameraRig.getActiveShot(), 'PLAY_STANDARD');
+  assert.ok(Number.isFinite(runtime.cameraRig.viewProjMatrix[0]));
+});
+

@@ -71,6 +71,17 @@ function buildAutoPilotInput(
   out.shoulderL = false;
   out.shoulderR = false;
 
+  if (cartridge.cardEngine) {
+    if (frame % 25 === 10) out.action = true;
+    if (frame % 60 === 45) out.skillY = true;
+    return;
+  }
+  if (cartridge.fighterEngine) {
+    out.right = frame % 40 < 24;
+    if (frame % 18 === 6) out.action = true;
+    if (frame % 36 === 20) out.skillY = true;
+    return;
+  }
   if (cartridge.perspective && cartridge.perspective.enabled !== false) {
     out.up = frame % 90 < 55;
     out.right = frame >= 55 && frame < 75;
@@ -170,13 +181,13 @@ export function runHeadlessPlaytest(
   const finalSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
   const warnings: string[] = [];
 
-  if (maxDisp < 8) {
+  if (!valid.data.cardEngine && !valid.data.fighterEngine && maxDisp < 8) {
     warnings.push('主角在試玩過程中幾乎未移動，請檢查出生點是否卡在實心牆壁中');
   }
   if (finalSnap.status === 'lost' && frames <= 180) {
     warnings.push('主角在開局 3 秒內即陣亡，請檢查出生點下方是否有足夠立足平台');
   }
-  if (peakTiles === 0 && valid.data.player.controller !== 'shmup') {
+  if (peakTiles === 0 && !valid.data.cardEngine && !valid.data.fighterEngine && valid.data.player.controller !== 'shmup') {
     warnings.push('關卡中未偵測到任何地形瓦片，畫面可能顯得空洞');
   }
   if (valid.data.perspective?.enabled !== false && valid.data.perspective && !perspectiveToggled) {
@@ -269,7 +280,7 @@ export function inspectSceneComposition(
   if ((snap.ambientDarkness ?? 0) > 0.35 && snap.lights.length === 0) {
     readabilityWarnings.push('場景暗度偏高但缺乏點光源，可能影響角色與地形可讀性');
   }
-  if ((snap.bgParallaxLayers?.length ?? 0) === 0 && !snap.perspective) {
+  if ((snap.bgParallaxLayers?.length ?? 0) === 0 && !valid.data.cardEngine && !valid.data.fighterEngine && !snap.perspective) {
     readabilityWarnings.push('缺少遠景視差圖層 (bgParallaxLayers)，建議加入 2 層以上遠景增添層次');
   }
   if (
