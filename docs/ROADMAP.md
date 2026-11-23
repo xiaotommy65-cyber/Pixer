@@ -25,12 +25,12 @@ Every game and workstation built on Pixer runs **60Hz simulation & rendering loc
 
 ## Active Roadmap (Next Phases)
 
-### Phase 1 — Workstation Modularization & Web Worker Offload `[NEXT]`
-- Split `EcsWorkbenchView.ts` (3,712 LOC) into focused sub-panels (Viewport / Hierarchy / Inspector / World Rules M2 Inspector / Export).
-- Move `.zip` / `.aseprite` / `.ldtk` / `.tmj` parsing into a dedicated `interop.worker.ts` to keep the 60fps main thread unblocked.
-- Lazy-load `EcsWorkbenchView` / `ConsoleView` via dynamic `import()` to keep initial JS boot bundle under 300 KB.
+### Phase 1 — Workstation Modularization (M2 Rules Inspector) & Web Worker Offload `[DONE]`
+- Extracted `EcsWorkbenchAtlasPanel.ts` & `EcsWorkbenchPrefabInspector.ts` out of `EcsWorkbenchView.ts` (3,712 → 3,230 LOC).
+- Delivered pure data-driven **M2 Visual World Rules Inspector** (`EcsWorldRulesInspectorPanel.ts`): visual editing for `portals`, `interactions`, `aiProfiles`, `heroConfig`, and `hud[]` with full `EcsStudioSession` Undo/Redo parity and live BFS soft-lock oracle banner.
+- Offloaded `.zip` / `.aseprite` / `.ldtk` / `.tmj` archive decompression & parsing into `src/workers/interop.worker.ts` via `InteropWorkerClient.ts` (with automatic main-thread fallback).
 
-### Phase 2 — Cloudflare R2 CDN + Supabase Cloud Storage & Sharing `[PLANNED]`
+### Phase 2 — Cloudflare R2 CDN + Supabase Cloud Storage & Sharing `[NEXT]`
 - Host external audio packs (`.opus`/`.mp3`) and shareable cartridge bundles on **Cloudflare R2** (SHA-256 content-addressed immutable caching, \$0 egress).
 - Stand up **Supabase PostgreSQL + Auth + RLS** (`projects`, `project_revisions`, `user_saves`) with short share URLs (`/play/:slug`) and cross-device SRAM cloud sync.
 

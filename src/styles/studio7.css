@@ -1621,3 +1621,81 @@
 
 
 
+
+/* ==================== M2 World Rules Visual Inspector ==================== */
+.p7-rules-diag {
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  margin-bottom: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+.p7-rules-diag.is-ok {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #a7f3d0;
+}
+.p7-rules-diag.is-warn {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+.p7-rules-diag-title {
+  font-weight: 700;
+}
+.p7-rules-diag-list {
+  margin-top: 4px;
+  opacity: 0.92;
+}
+.p7-rules-subtabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.p7-rules-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.p7-rule-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+.p7-rule-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+}
+.p7-rule-card-actions {
+  display: flex;
+  gap: 4px;
+}
+.p7-rule-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--p7-text-muted, #94a3b8);
+}
+.p7-rule-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.p7-rule-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--p7-text, #e2e8f0);
+  cursor: pointer;
+}
