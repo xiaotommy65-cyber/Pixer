@@ -39,7 +39,7 @@ export function renderSceneHudOverlay(
 
     if (snap.bossMaxHp > 0 && snap.bossHp > 0) {
       const barW = 90;
-      const ratio = snap.bossHp / snap.bossMaxHp;
+      const ratio = Math.max(0, Math.min(1, snap.bossHp / snap.bossMaxHp));
       gpu.drawRect(viewW * 0.5 + camFracX, 11 + camFracY, barW + 6, 9, '#2b1d1a', 0.92, 0, false, 0, 1);
       gpu.drawRect(viewW * 0.5 - barW * 0.5 * (1 - ratio) + camFracX, 11 + camFracY, Math.max(2, barW * ratio), 4.5, '#ff708d', 1, 0, false, 0, 1);
     }
@@ -76,7 +76,8 @@ export function renderSceneHudOverlay(
         const bw = Math.max(2, isWorld ? p.w * zoom : p.w);
         const bh = Math.max(1, isWorld ? p.h * zoom : p.h);
         const alpha = p.alpha ?? 0.94;
-        const ratio = Math.max(0, Math.min(1, p.ratio ?? 1));
+        const rawRatio = p.ratio ?? 1;
+        const ratio = Number.isFinite(rawRatio) ? Math.max(0, Math.min(1, rawRatio)) : 0;
         gpu.drawRect(cx, cy, bw + 2, bh + 2, p.bgColor ?? '#1b1426', alpha, 0, false, 0, 1);
         if (ratio > 0.001) {
           const fillW = Math.max(1.5, bw * ratio);

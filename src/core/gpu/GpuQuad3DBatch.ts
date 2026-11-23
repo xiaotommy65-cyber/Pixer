@@ -70,16 +70,16 @@ export class GpuQuad3DBatch {
     occTileSizeWorld = 32,
   ): void {
     this.cameraState.enabled = true;
-    this.cameraState.camCenterX = camCenterX;
-    this.cameraState.camCenterY = camCenterY;
-    this.cameraState.zoom = Math.max(0.1, zoom);
-    this.cameraState.pitchDeg = Math.max(20, Math.min(78, pitchDeg));
-    this.cameraState.fovDeg = Math.max(20, Math.min(65, fovDeg));
-    this.cameraState.viewW = viewW;
-    this.cameraState.viewH = viewH;
-    this.cameraState.occOriginWorldX = occOriginWorldX;
-    this.cameraState.occOriginWorldY = occOriginWorldY;
-    this.cameraState.occTileSizeWorld = Math.max(1, occTileSizeWorld);
+    this.cameraState.camCenterX = Number.isFinite(camCenterX) ? camCenterX : 0;
+    this.cameraState.camCenterY = Number.isFinite(camCenterY) ? camCenterY : 0;
+    this.cameraState.zoom = Number.isFinite(zoom) ? Math.max(0.1, zoom) : 1;
+    this.cameraState.pitchDeg = Number.isFinite(pitchDeg) ? Math.max(20, Math.min(78, pitchDeg)) : 42;
+    this.cameraState.fovDeg = Number.isFinite(fovDeg) ? Math.max(20, Math.min(65, fovDeg)) : 38;
+    this.cameraState.viewW = Number.isFinite(viewW) && viewW > 0 ? viewW : 320;
+    this.cameraState.viewH = Number.isFinite(viewH) && viewH > 0 ? viewH : 180;
+    this.cameraState.occOriginWorldX = Number.isFinite(occOriginWorldX) ? occOriginWorldX : 0;
+    this.cameraState.occOriginWorldY = Number.isFinite(occOriginWorldY) ? occOriginWorldY : 0;
+    this.cameraState.occTileSizeWorld = Number.isFinite(occTileSizeWorld) ? Math.max(1, occTileSizeWorld) : 32;
   }
 
   public getStats(): { opaqueCount: number; alphaCount: number; additiveCount: number; enabled: boolean } {
@@ -197,6 +197,9 @@ export class GpuQuad3DBatch {
     metallic = 0.06,
     emissive = 0,
   ): void {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !(w > 0) || !(h > 0) || !(alpha > 0.001)) {
+      return;
+    }
     const rect = atlas.getRect(id);
     let r = 1;
     let g = 1;
@@ -260,6 +263,17 @@ export class GpuQuad3DBatch {
     metallic = 0.1,
     obliqueShadowAlpha = 0.35,
   ): void {
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(zBase) ||
+      !(w > 0) ||
+      !(h > 0) ||
+      !(wallH > 0) ||
+      !(alpha > 0.001)
+    ) {
+      return;
+    }
     const topRect = atlas.getRect(topId);
     const sideRect = sideId ? atlas.getRect(sideId) : topRect;
     let tr = 1;
@@ -628,6 +642,17 @@ export class GpuQuad3DBatch {
     intensity = 0.45,
     falloffPower = 2.0,
   ): void {
+    if (
+      !Number.isFinite(cx) ||
+      !Number.isFinite(cy) ||
+      !Number.isFinite(z) ||
+      !(radius > 0) ||
+      !Number.isFinite(radius) ||
+      !(intensity > 0.001) ||
+      !Number.isFinite(intensity)
+    ) {
+      return;
+    }
     this.lightCount++;
     const n = packHexRgb(colorHex);
     const d = radius * 2;
@@ -655,7 +680,7 @@ export class GpuQuad3DBatch {
       1,
       1,
       0,
-      falloffPower,
+      Number.isFinite(falloffPower) && falloffPower > 0.05 ? falloffPower : 2.0,
       -2,
       0,
       1,
@@ -674,6 +699,17 @@ export class GpuQuad3DBatch {
     additive = false,
     emissive = 0.45,
   ): void {
+    if (
+      !Number.isFinite(cx) ||
+      !Number.isFinite(cy) ||
+      !Number.isFinite(cz) ||
+      !(size > 0) ||
+      !Number.isFinite(size) ||
+      !(alpha > 0.001) ||
+      !Number.isFinite(alpha)
+    ) {
+      return;
+    }
     const n = packHexRgb(colorHex);
     const half = size * 0.5;
     const tiltRad = 24 * DEG_TO_RAD;

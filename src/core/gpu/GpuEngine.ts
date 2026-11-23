@@ -358,7 +358,17 @@ export class GpuEngine {
     intensity: number,
     falloff = 2.0,
   ): void {
-    if (this.dynamicLightCount >= MAX_DYNAMIC_LIGHTS || radius <= 0 || intensity <= 0.001) return;
+    if (
+      this.dynamicLightCount >= MAX_DYNAMIC_LIGHTS ||
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !(radius > 0) ||
+      !Number.isFinite(radius) ||
+      !(intensity > 0.001) ||
+      !Number.isFinite(intensity)
+    ) {
+      return;
+    }
     const n = packHexRgb(colorHex);
     const base = this.dynamicLightCount * 8;
     this.dynamicLights[base] = x;
@@ -368,7 +378,7 @@ export class GpuEngine {
     this.dynamicLights[base + 4] = ((n >> 16) & 255) * INV_255;
     this.dynamicLights[base + 5] = ((n >> 8) & 255) * INV_255;
     this.dynamicLights[base + 6] = (n & 255) * INV_255;
-    this.dynamicLights[base + 7] = falloff > 0.05 ? falloff : 2.0;
+    this.dynamicLights[base + 7] = Number.isFinite(falloff) && falloff > 0.05 ? falloff : 2.0;
     this.dynamicLightCount++;
   }
 

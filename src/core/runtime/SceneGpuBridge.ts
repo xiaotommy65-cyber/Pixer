@@ -700,7 +700,7 @@ export class SceneGpuBridge implements HudWorldProjector {
       const px = this.viewW * 0.5 + (p.x - this.camCenterX) * this.zoom * ps;
       const py = this.viewH * 0.5 + (p.y - this.camCenterY) * this.zoom * ps;
       const pSize = p.size * this.zoom * ps;
-      const alpha = Math.max(0, 1 - p.life / p.maxLife);
+      const alpha = Math.max(0, 1 - p.life / Math.max(0.01, p.maxLife));
       if (p.sprite) {
         const add = p.additive ?? true;
         gpu.drawSpriteRaw(p.sprite, px, py, pSize, pSize, false, p.rot ?? 0, p.color, alpha, 0, add, 0.5, 0.5, 0, 0, add ? 0.9 : 0);
@@ -761,20 +761,25 @@ export class SceneGpuBridge implements HudWorldProjector {
     snap: RenderSceneSnapshot,
     benchmarkSprites: readonly BenchmarkSprite[] | null,
   ): GpuFrameStats {
-    const vw = Math.max(160, Math.round(snap.viewport?.width ?? GAME_W));
-    const vh = Math.max(90, Math.round(snap.viewport?.height ?? GAME_H));
+    const rawW = snap.viewport?.width ?? GAME_W;
+    const rawH = snap.viewport?.height ?? GAME_H;
+    const vw = Number.isFinite(rawW) ? Math.max(160, Math.round(rawW)) : GAME_W;
+    const vh = Number.isFinite(rawH) ? Math.max(90, Math.round(rawH)) : GAME_H;
     this.viewW = vw;
     this.viewH = vh;
     gpu.setLogicalViewport(vw, vh);
 
     this.defaultPaletteRow = snap.paletteRow ?? 0;
     this.activeCustomBlueprints = snap.customArtBlueprints;
-    this.frameTimeSec = snap.timeSec;
-    this.zoom = snap.cameraZoom ?? 1;
-    const snappedCamX = Math.round(snap.cameraX);
-    const snappedCamY = Math.round(snap.cameraY);
-    const camFracX = Math.max(-0.98, Math.min(0.98, (snap.cameraX - snappedCamX) * this.zoom));
-    const camFracY = Math.max(-0.98, Math.min(0.98, (snap.cameraY - snappedCamY) * this.zoom));
+    this.frameTimeSec = Number.isFinite(snap.timeSec) ? snap.timeSec : 0;
+    const rawZoom = snap.cameraZoom ?? 1;
+    this.zoom = Number.isFinite(rawZoom) && rawZoom > 0 ? Math.max(0.1, rawZoom) : 1;
+    const camX = Number.isFinite(snap.cameraX) ? snap.cameraX : 0;
+    const camY = Number.isFinite(snap.cameraY) ? snap.cameraY : 0;
+    const snappedCamX = Math.round(camX);
+    const snappedCamY = Math.round(camY);
+    const camFracX = Math.max(-0.98, Math.min(0.98, (camX - snappedCamX) * this.zoom));
+    const camFracY = Math.max(-0.98, Math.min(0.98, (camY - snappedCamY) * this.zoom));
 
     gpu.beginFrame(snap.skyTop, snap.skyBottom, snap.cozyFilter, snap.glowIntensity ?? 1.0, undefined, camFracX, camFracY);
 

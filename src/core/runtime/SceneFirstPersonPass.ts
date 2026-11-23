@@ -1,4 +1,5 @@
 import type { GpuEngine } from '../gpu/GpuEngine.ts';
+import { packHexRgb } from '../gpu/GpuColorCache.ts';
 import {
   getOrthogonalBlueprint,
   type OrthogonalArtBlueprint,
@@ -8,6 +9,7 @@ import { PerspectiveProjector } from '../sim/PerspectiveProjector.ts';
 import type { PerspectiveProjectionDesc, RenderSceneSnapshot } from '../types/WorldTypes.ts';
 import { drawOrthogonalBlueprintScreen } from './SceneOrthogonalHelper.ts';
 
+const MAX_SHADE_CACHE_ENTRIES = 4096;
 const SHADE_HEX_CACHE = new Map<number, string>();
 
 /** Quantized RGB hex cache (32 levels per channel) so 2.5D fog/normal shading produces zero per-frame strings. */
@@ -23,6 +25,9 @@ function shadeTintHex(shade01: number, fog01: number, fogR: number, fogG: number
   const key = (cr << 16) | (cg << 8) | cb;
   let hex = SHADE_HEX_CACHE.get(key);
   if (hex === undefined) {
+    if (SHADE_HEX_CACHE.size >= MAX_SHADE_CACHE_ENTRIES) {
+      SHADE_HEX_CACHE.clear();
+    }
     hex = `#${cr.toString(16).padStart(2, '0')}${cg.toString(16).padStart(2, '0')}${cb.toString(16).padStart(2, '0')}`;
     SHADE_HEX_CACHE.set(key, hex);
   }
@@ -30,16 +35,10 @@ function shadeTintHex(shade01: number, fog01: number, fogR: number, fogG: number
 }
 
 function parseHexRgbInto(hex: string, out: Uint8Array): void {
-  const clean = hex.startsWith('#') ? hex.slice(1) : hex;
-  if (clean.length === 6) {
-    out[0] = parseInt(clean.slice(0, 2), 16) || 18;
-    out[1] = parseInt(clean.slice(2, 4), 16) || 14;
-    out[2] = parseInt(clean.slice(4, 6), 16) || 36;
-  } else {
-    out[0] = 18;
-    out[1] = 14;
-    out[2] = 36;
-  }
+  const packed = packHexRgb(hex);
+  out[0] = (packed >> 16) & 255;
+  out[1] = (packed >> 8) & 255;
+  out[2] = packed & 255;
 }
 
 /**
@@ -64,7 +63,8 @@ export class SceneFirstPersonPass {
   ): void {
     const vw = viewW;
     const vh = viewH;
-    const horizonY = vh * 0.5 + (persp.pitchOffsetPx ?? 0);
+    const pitchOff = Number.isFinite(persp.pitchOffsetPx) ? (persp.pitchOffsetPx ?? 0) : 0;
+    const horizonY = Math.max(2, Math.min(vh - 2, vh * 0.5 + pitchOff));
     const fogColor = persp.fogColor ?? '#120e24';
     parseHexRgbInto(fogColor, this.fogRgbScratch);
     const fogR = this.fogRgbScratch[0];
@@ -80,7 +80,9 @@ export class SceneFirstPersonPass {
     gpu.drawSmoothGradient(vw * 0.5 + camFracX, horizonY + floorH * 0.5 + camFracY, vw + 4, floorH, persp.floorHorizonColor ?? fogColor, 0.86, 0, 1.45);
 
     // 2. Project 2.5D DDA walls & 4-way directional billboards
-    this.perspectiveProjector.projectFirstPerson(persp, snap.entities, vw, vh, persp.columnStepPx ?? 2);
+    const rawStep = persp.columnStepPx ?? 2;
+    const columnStep = Number.isFinite(rawStep) && rawStep > 0 ? Math.max(1, Math.round(rawStep)) : 2;
+    this.perspectiveProjector.projectFirstPerson(persp, snap.entities, vw, vh, columnStep);
 
     // 3. Draw vertical textured wall columns via Zero-GC UV slicing
     const wallCount = this.perspectiveProjector.wallColumnCount;
@@ -198,14 +200,15 @@ export class SceneFirstPersonPass {
     }
 
     // 6. Optional crisp GPU corner radar minimap
-    if (persp.showMinimap) {
+    if (persp.showMinimap && persp.wallCols > 0 && persp.wallRows > 0 && persp.wallGrid.length > 0) {
       const cellPx = 3;
+      const rows = Math.min(persp.wallRows, Math.floor(persp.wallGrid.length / persp.wallCols));
       const mw = persp.wallCols * cellPx;
-      const mh = persp.wallRows * cellPx;
+      const mh = rows * cellPx;
       const ox = vw - mw - 8 + camFracX;
       const oy = 8 + camFracY;
       gpu.drawRect(ox + mw * 0.5, oy + mh * 0.5, mw + 4, mh + 4, '#0c0918', 0.72);
-      for (let r = 0; r < persp.wallRows; r++) {
+      for (let r = 0; r < rows; r++) {
         const rowOff = r * persp.wallCols;
         for (let c = 0; c < persp.wallCols; c++) {
           if (persp.wallGrid[rowOff + c] > 0) {
