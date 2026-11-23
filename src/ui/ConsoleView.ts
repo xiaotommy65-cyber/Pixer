@@ -9,13 +9,11 @@ import type { ErgonomicGripMode } from '../core/hal/SystemHal.ts';
 import type { BootPickupStage } from './BootBlinkOverlay.ts';
 import { invalidateCardArtCache } from './CardArt.ts';
 import { CartridgeSlotController, type ConsolePhase } from './CartridgeSlotController.ts';
-import { ChronicleOverlayView } from './ChronicleOverlayView.ts';
 import { buildConsoleBodyDom } from './ConsoleBodyBuilder.ts';
 import { ConsoleHudPresenter } from './ConsoleHudPresenter.ts';
 import { buildJoyconsAndAuxRail } from './ConsoleJoyconBuilder.ts';
 import { ConsoleShellRouter, type ShellPhase } from './ConsoleShellRouter.ts';
 import { DeskWorldView } from './DeskWorldView.ts';
-import { RpgOverlayView } from './RpgOverlayView.ts';
 import { ShmupOverlayView } from './ShmupOverlayView.ts';
 import { VirtualGamepadInput } from './VirtualGamepadInput.ts';
 import {
@@ -142,9 +140,7 @@ export class ConsoleView {
       this.host.unlockAudio();
       this.host.dispatchCommand(cmdId);
     };
-    const rpgOverlay = new RpgOverlayView({ onCommand: onOverlayCommand });
     const shmupOverlay = new ShmupOverlayView({ onCommand: onOverlayCommand });
-    const chronicleOverlay = new ChronicleOverlayView(atlas, { onCommand: onOverlayCommand });
 
     const rig = buildJoyconsAndAuxRail(this.gamepad, {
       onOpenDrawer: () => this.router.openCartridgeDrawer(),
@@ -158,9 +154,7 @@ export class ConsoleView {
 
     const body = buildConsoleBodyDom({
       initialFilter: host.getScreenFilter(),
-      rpgOverlay,
       shmupOverlay,
-      chronicleOverlay,
       onReturnHome: () => this.router.returnToHomeLobby(),
       onClearSave: () => this.clearActiveSram(),
       onOpenSettings: () => opts.onOpenAdvancedSettings(),
@@ -238,9 +232,7 @@ export class ConsoleView {
         rSubEl: rig.rSubEl,
         auxLSubEl: rig.auxLSubEl,
         auxRSubEl: rig.auxRSubEl,
-        rpgOverlay,
         shmupOverlay,
-        chronicleOverlay,
       },
       {
         setAutofireBlocked: (blocked) => this.gamepad.setCartridgeAutofireBlocked(blocked),

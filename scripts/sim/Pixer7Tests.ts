@@ -556,7 +556,7 @@ export function testPixer7EcsMultiPageAtlasAndSlimCore(): void {
   const egApi = bridge.ecs.getEventGraph('turret_ai');
   check(Boolean(egApi && egApi.nodes.length >= 2), 'AgentBridge.ecs.getEventGraph() must return live IR');
 
-  // 7. Core Slimming Boundary Guard: BuiltinCartridges.ts must not statically import legacy hand-written games
+  // 7. Core Slimming Boundary Guard: BuiltinCartridges.ts must contain ZERO legacy hand-written games or PA-13 rhythm bloat
   const builtinsSrc = fs.readFileSync(path.join(process.cwd(), 'src/game/BuiltinCartridges.ts'), 'utf8');
   check(
     !builtinsSrc.includes('CelestialParkourGame') &&
@@ -564,8 +564,9 @@ export function testPixer7EcsMultiPageAtlasAndSlimCore(): void {
       !builtinsSrc.includes('EmberkeepDndGame') &&
       !builtinsSrc.includes('SandboxToyboxGame') &&
       !builtinsSrc.includes('LabyrinthDualviewGame') &&
-      builtinsSrc.includes("import('./LegacyCartridgePack.ts')"),
-    'Core slimming violation: BuiltinCartridges.ts must lazy-load LegacyCartridgePack via dynamic import with zero static legacy imports',
+      !builtinsSrc.includes('LegacyCartridgePack') &&
+      !builtinsSrc.includes('PulseResonanceCartridge'),
+    'Core slimming violation: BuiltinCartridges.ts must contain zero legacy hand-written games or PA-13 rhythm imports',
   );
 
   console.log(

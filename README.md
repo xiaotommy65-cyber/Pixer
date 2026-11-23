@@ -1,60 +1,48 @@
-# Pixel Atelier 🌸🎮
+# Pixer (Pixel Atelier) 🎮✨
 
-從零打造、手機＆桌機雙端適配的 **可愛工房風 WebGPU / WebGL2 幻想主機與 2D/2.5D 遊戲引擎**。
+Zero-GC、純 TypeScript 打造的 **HD-2D 像素 PBR 遊戲引擎（WebGPU / WebGL2 / Canvas 2D）**、**AI-Native True ECS 創作工作站** 與 **Switch 風格雙握把掌機展示殼**。
 
 ## ✨ 核心架構與特色
 
-- **GPU 優先渲染管線與正交引擎 5.0 ([`src/core/gpu/`](src/core/gpu/), [`src/core/sim/`](src/core/sim/))**
-  - **WebGPU (`WGSL`)**、**WebGL2 (`GLSL ES 3.00`)** 與 **Canvas 2D** 三層自動降級渲染管線，20-float 零 GC 實例批次，支援 `16,384` 實例上限、Karis Bloom、ACES 色調映射與動態光照。
-  - **四軸正交美術系統 (`OrthogonalArt`)**：以 `視角方向 × 組件圖層 × 調色盤 LUT × 材質／動作姿態` 組合角色、武器、1P 手持視角與卡牌卡圖。
-  - **1P ↔ 3P 雙視角無縫投射 (`PerspectiveProjector`)**：共用同一份 `TilemapGrid` 與世界實體狀態，支援 2.5D DDA 光線投射牆體、1D Z-Buffer 遮蔽與四方向看板精靈即時切換。
-  - **資料驅動卡牌與格鬥核心 (`CardDeckEngine`, `FighterFrameEngine`)**：原生四區牌組（牌庫／手牌／棄牌／消耗）＋多敵狀態系統，以及 60Hz 幀資料（前搖／判定／收招）、Hitbox／Hurtbox／Pushbox 與取消派生系統。
-  - **1024×1024 即時紋理圖集熱重載與動態槽回收 (`TextureAtlas`)**：支援精靈畫室熱重載與動態貼圖槽位回收再利用。
-- **Switch 風格雙握把掌機與實體插拔卡匣 ([`ConsoleView.ts`](src/ui/ConsoleView.ts), [`switch.css`](src/styles/switch.css))**
-  - 開機眨眼動畫（`BootBlinkOverlay`）、HOME 大廳卡片列（`HomeLobbyView`）、斜角系統選單（`AngledSystemMenuView`）、底部換片抽屜與三拍虹膜轉場（`IrisWipeTransition`）。
-  - 雙色 Joy-Con 握把、單手／雙手人體工學切換、觸控 DSP 濾波與實體 USB／藍牙手把對應、Stereo DualRumble 震動回饋、一鍵匯出 **PICO-8 風紀念卡匣 PNG**。
-- **九大原創可玩卡匣 ([`src/game/`](src/game/))**
-  1. `PA-01` **《草莓雲海跳跳》**（`cloudberry/`）：4 大空島 8 關卡收集 24 顆星，支援二段跳、空中衝刺與史萊姆王 Boss 戰。
-  2. `PA-02` **《糖霜流星號》**（`sugarStarlight/`）：3 款戰機 × 三色武裝 × 感應砲與 Bomb 系統，挑戰四大星區 Boss。
-  3. `PA-03` **《積木秘密基地》**（`sandbox/`）：10 關傳送門／浮橋／爆破謎題，搭配安全 DSL 積木腳本即時編輯器。
-  4. `PA-04` **《龍與地城：餘燼》**（`emberkeep/`）：8 層 BSP+SetPiece 程序化生成地城 CRPG，支援 d20 戰鬥、JSON 劇本匯入與 AI 託管。
-  5. `PA-05` **《星穹餘燼編年史》**（`astralChronicles/`）：5 大章節 HD-2D 動作 RPG、鏡頭運鏡、大地圖與完整裝備鍛造選單。
-  6. `PA-06` **《星穹鉤索跑酷》**（`celestialParkour/`）：繩擺鉤索、動量跑酷與高空特技挑戰。
-  7. `PA-07` **《星紋牌陣》**（`astralDeck/`）：純 JSON 資料驅動 Roguelike 牌組構築，四區循環、多敵鎖定、易傷／虛弱／灼燒／力量與戰後三選一選牌。
-  8. `PA-08` **《工房武鬥會》**（`atelierBrawler/`）：純 JSON 資料驅動 60Hz 幀資料 2D 格鬥，高低段防禦、命中確認取消連段、氣條超必殺與即時判定盒除錯（`L`）。
-  9. `PA-09` **《迴廊雙界》**（`labyrinthDualview/`）：同世界即時 `X` 鍵切換第一人稱 2.5D DDA 光線投射與第三人稱 HD-2D 俯視探索地城。
-- **雙創作工作站 ([`StudioWorkbenchView.ts`](src/ui/StudioWorkbenchView.ts))**
-  - **精靈畫室 (`SpriteAtelierView`)**：16×16 雙影格（A 站立 / B 跑跳）像素編輯器，支援鏡像對稱、油漆桶與即時 GPU 圖集熱重載。
-  - **積木工房 (`WorkshopView`)**：物理手感／粒子／GPU 光暈滑桿、2D 積木 DSL 編輯器與 D&D 地牢 JSON 劇本編輯器。
-  - **晶片音效琴 (`ToySynth`)**：零外部相依 Web Audio 合成器與 BGM 編曲器。
+- **原生多後端 Pixel PBR-Lite GPU 管線 ([`src/core/gpu/`](src/core/gpu/))**
+  - **WebGPU (`WGSL`)** → **WebGL2 (`GLSL ES 3.00`)** → **Canvas 2D** 三層自動降級渲染管線。
+  - **24-float 零 GC 實例批次**（單 Pass 上限 `16,384` 實例）、**8 頁 `1024×1024` `Texture2DArray` 紋理圖集池**（MaxRectsBin 動態打包與回收）、24 動態點光源、2D 牆體軟陰影遮蔽網格、即時平面水波倒影、3-Pass Karis Bloom、Oklab 色域混合與 Bayer 4×4 抖動。
+- **True Generational ECS ＋ 純資料多房間 HD-2D 世界引擎 ([`src/core/ecs/`](src/core/ecs/))**
+  - 世代控制 `EcsCoreWorld`（17 組稀疏集元件、5 階段 14 系統管線）、稀疏覆寫 Prefab 繼承、無 `eval()` 沙盒腳本 VM、無損雙向視覺事件圖（`EventGraphEditorView`）。
+  - 純資料驅動多房間 32×32 / 48×64 HD-2D 瓦片引擎（三層地圖、立體擠出牆、跨房傳送門、機關鎖門與多階段 Boss AI），以及專案內嵌自訂像素精靈（`grid` / `rgba_b64` / 13 種 Oklab+Bayer 程序化 PBR 配方）。
+- **外部業界標準格式匯入 ([`src/core/interop/`](src/core/interop/))**
+  - DOM-free 原生解析 **Aseprite (`.ase`/`.aseprite` + JSON)**、**LDtk (`.ldtk`)**、**Tiled (`.tmj`/`.json`)** 與 `.zip` 圖集打包，內建嚴格壓縮炸彈上限與路徑穿越防護。
+- **AI-Native 協作協議與空間預言機 ([`src/core/ai/`](src/core/ai/))**
+  - 28+ 條交易式 Undo/Redo 編輯指令、本地 Stdio MCP Server（`npm run mcp`，支援 UTF-8 位元組精確 `Content-Length` 與 NDJSON 雙協定）、多房間 BFS 軟鎖偵測預言機與 60Hz 腳本化試玩驗證器。
+- **純外部資產音訊層 ([`src/core/audio/ExternalAudioBank.ts`](src/core/audio/ExternalAudioBank.ts))**
+  - 徹底零 AI 合成噪音：透過宣告式 `ExternalAudioManifest` 載入外部 CDN 音檔（OGG Opus / MP3 串流 BGM ＋ LRU `AudioBuffer` SFX 快取），未掛載或離線時靜默安全降級。
+- **精選旗艦可玩卡匣 ([`src/game/`](src/game/))**
+  1. `PA-14` **《黑曜魔王城：赤月王座》**：True ECS 多房間 HD-2D 旗艦，三廳探險與 48×64 魔王雙階段 Boss 戰。
+  2. `PA-15` **《翠律遺跡：星露聖域》**：100% 專案自訂像素瓦片跨主題雙廳遺跡與守護巨像戰。
+  3. `PA-01` **《草莓雲海跳跳》**：4 大空島 8 關卡收集 24 顆星，支援二段跳、空中衝刺與史萊姆王 Boss 戰。
+  4. `PA-02` **《糖霜流星號》**：3 款戰機 × 三色武裝 × 感應砲與 Bomb 系統，挑戰四大星區 Boss。
+  5. `PA-11` **《星軌節奏塔防》** & `PA-12` **《時空裂隙：星界迴廊》**：True ECS 節拍塔防與多維位面飛鉤範例。
 
 ## 🚀 本地開發與驗證
 
-專案使用 `bun.lock` 鎖定套件版本（亦可搭配 Node.js 22+ 執行模擬測試）：
+專案使用 `bun.lock` 鎖定套件版本，並支援 Node.js 22+ 執行全部模擬與單元測試：
 
 ```bash
-bun install      # 或 npm install
-bun run dev      # 啟動開發伺服器 (port 3000)
-bun run lint     # TypeScript 嚴格型別檢查 (tsc --noEmit)
-bun run sim      # 執行無頭模擬、1,150+ 精靈壓力與架構邊界驗證
-bun run build    # 型別檢查並建置網頁／PWA 靜態檔案至 dist/
+bun install       # 安裝依賴
+bun run dev       # 啟動開發伺服器 (port 3000)
+npm run lint      # TypeScript 嚴格型別檢查 (tsc --noEmit)
+npm run sim       # 執行無頭模擬、效能基準與架構邊界守衛
+npm run test      # 執行全部單元測試套件（ECS / WorldMap / Interop / 3D / HD-2D / Security）
+npm run build     # 型別檢查並建置網頁／PWA 靜態產物至 dist/
+npm run mcp       # 啟動本地 Stdio MCP Server
 ```
 
-AI Agent 與進階工程規範請參閱 [`AGENTS.md`](AGENTS.md)。
+工程規範與模組地圖請參閱 [`AGENTS.md`](AGENTS.md)，路線圖請參閱 [`docs/ROADMAP.md`](docs/ROADMAP.md)。
 
-## 📱 Capacitor 雙平台原生 App 打包（iOS & Android）
-
-本專案已整合 Capacitor 原生橋接層（`com.pixelatelier.console`），支援 WebGPU/WebGL2 零 GC 批次渲染、動態解析度溫控器（`省電 / 平衡 / 畫質`）、原生 CoreHaptics / VibrationEffect 震動回饋、橫屏鎖定、遊戲期間螢幕恆亮、退背景自動存檔省電凍結，以及 PNG 紀念圖卡系統分享。
+## 📱 Capacitor 雙平台原生打包（iOS & Android）
 
 ```bash
-# 1. 初始化原生平台工程（首次建置執行）
-npx cap add ios
-npx cap add android
-
-# 2. 編譯網頁資產並同步至 iOS / Android 原生殼
+npx cap add ios && npx cap add android
 npm run cap:sync
-
-# 3. 開啟 Xcode 或 Android Studio 建置／上架雙商店
-npm run cap:ios
-npm run cap:android
+npm run cap:ios   # 或 npm run cap:android
 ```

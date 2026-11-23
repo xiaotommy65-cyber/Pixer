@@ -5,18 +5,10 @@ import type { RenderSceneSnapshot, SimEvent } from './SceneTypes.ts';
 export type BuiltinCartridgeId =
   | 'cloudberry-hop'
   | 'sugar-starlight'
-  | 'sandbox-toybox'
-  | 'emberkeep-dnd'
-  | 'astral-chronicles'
-  | 'celestial-parkour'
-  | 'astral-deck'
-  | 'atelier-brawler'
-  | 'labyrinth-dualview'
-  | 'skyward-forge'
   | 'rhythm-bastion'
   | 'astral-rift'
-  | 'pulse-resonance'
-  | 'obsidian-citadel';
+  | 'obsidian-citadel'
+  | 'emerald-ruins';
 
 export type CartridgeId = BuiltinCartridgeId | (string & {});
 

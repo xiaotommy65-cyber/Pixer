@@ -75,7 +75,7 @@ import {
   type DecodedPngImage,
 } from '../interop/index.ts';
 
-export type PixerPlatformMode = 'studio' | 'arcade' | 'rhythm';
+export type PixerPlatformMode = 'studio' | 'arcade';
 
 export interface PixelAtelierStudioAgentApi {
   dispatch(cmd: StudioCommand): StudioCommandResult;

@@ -1,6 +1,4 @@
 import type { ScreenFilterMode } from '../core/types/WorldTypes.ts';
-import type { ChronicleOverlayView } from './ChronicleOverlayView.ts';
-import type { RpgOverlayView } from './RpgOverlayView.ts';
 import type { ShmupOverlayView } from './ShmupOverlayView.ts';
 import { el, iconBtn } from './dom.ts';
 
@@ -31,9 +29,7 @@ export interface ConsoleBodyRefs {
 
 export function buildConsoleBodyDom(opts: {
   initialFilter: ScreenFilterMode;
-  rpgOverlay: RpgOverlayView;
   shmupOverlay: ShmupOverlayView;
-  chronicleOverlay: ChronicleOverlayView;
   onReturnHome: () => void;
   onClearSave: () => void;
   onOpenSettings: () => void;
@@ -100,9 +96,7 @@ export function buildConsoleBodyDom(opts: {
 
   screenFrame.append(
     canvas,
-    opts.rpgOverlay.element,
     opts.shmupOverlay.element,
-    opts.chronicleOverlay.element,
     resultOverlay,
     bootVeilEl,
     screenFilterLayer,

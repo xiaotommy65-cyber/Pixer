@@ -30,6 +30,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run headless sim & architecture checks
         run: bun run sim
+      - name: Run full unit test suite
+        run: npm run test
       - name: Typecheck & Build
         run: bun run build
       - name: Setup GitHub Pages

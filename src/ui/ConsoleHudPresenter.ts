@@ -5,8 +5,6 @@ import {
 import type { EngineHost } from '../core/runtime/EngineHost.ts';
 import type { GpuFrameStats } from '../core/gpu/GpuTypes.ts';
 import type { CartridgeId, CartridgeMeta, RenderSceneSnapshot } from '../core/types/WorldTypes.ts';
-import type { ChronicleOverlayView } from './ChronicleOverlayView.ts';
-import type { RpgOverlayView } from './RpgOverlayView.ts';
 import type { ShmupOverlayView } from './ShmupOverlayView.ts';
 
 export interface ConsoleHudRefs {
@@ -29,9 +27,7 @@ export interface ConsoleHudRefs {
   rSubEl: HTMLElement;
   auxLSubEl: HTMLElement;
   auxRSubEl: HTMLElement;
-  rpgOverlay: RpgOverlayView;
   shmupOverlay: ShmupOverlayView;
-  chronicleOverlay: ChronicleOverlayView;
 }
 
 export interface ConsoleHudCallbacks {
@@ -65,15 +61,11 @@ export class ConsoleHudPresenter {
   }
 
   public resetOverlays(): void {
-    this.refs.rpgOverlay.reset();
     this.refs.shmupOverlay.reset();
-    this.refs.chronicleOverlay.reset();
   }
 
   public destroy(): void {
-    this.refs.rpgOverlay.destroy();
     this.refs.shmupOverlay.destroy();
-    this.refs.chronicleOverlay.destroy();
   }
 
   private setStageDisplay(visible: boolean, text = ''): void {
@@ -160,9 +152,7 @@ export class ConsoleHudPresenter {
     this.updateStats(stats, fps);
     this.setStatusHint(snap.statusBanner);
 
-    this.refs.rpgOverlay.render(snap.rpgHud, isRunning);
     this.refs.shmupOverlay.render(snap.shmupHud, isRunning);
-    this.refs.chronicleOverlay.render(snap.chronicleHud, isRunning);
 
     this.updateControlLabels(insertedId, snap);
     if (insertedId) {

@@ -14,11 +14,10 @@ export default defineConfig(() => {
           codeSplitting: {
             groups: [
               { name: 'vendor-capacitor', test: /node_modules\/@capacitor/ },
-              {
-                name: 'legacy-cartridges',
-                test: /src\/game\/(astralChronicles|celestialParkour|emberkeep|labyrinthDualview|sandbox|LegacyCartridgePack)/,
-              },
+              { name: 'vendor-utils', test: /node_modules\/(fflate|maxrects-packer)/ },
               { name: 'cartridges', test: /src\/game\// },
+              { name: 'ecs-workbench', test: /src\/ui\/(EcsWorkbenchView|EcsMapDesignerPanel|EventGraphEditorView|ExternalImportModalView|SpriteAtelierView)/ },
+              { name: 'core-ecs-interop', test: /src\/core\/(ecs|interop|ai)\// },
             ],
           },
         },

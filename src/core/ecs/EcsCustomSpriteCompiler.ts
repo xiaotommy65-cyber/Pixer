@@ -1,4 +1,4 @@
-import { unzlibSync, zlibSync } from 'fflate';
+import { Unzlib, zlibSync } from 'fflate';
 import { PALETTE_THEMES } from '../../assets/sprites/PaletteData.ts';
 import type { TextureAtlas } from '../../assets/TextureAtlas.ts';
 import {
@@ -485,17 +485,33 @@ export function encodeRgbaToZlibB64(rgba: Uint8Array): string {
   return uint8ToBase64(compressed);
 }
 
-/** Decodes zlib-compressed Base64 RGBA8 sprite bytes safely to exact expected length. */
+const MAX_CUSTOM_SPRITE_RGBA_BYTES = 128 * 128 * 4;
+const MAX_CUSTOM_SPRITE_B64_CHARS = 256 * 1024;
+
+/** Decodes zlib-compressed Base64 RGBA8 sprite bytes safely with strict decompressed size bounds. */
 export function decodeZlibB64ToRgba(b64: string, expectedBytes: number): Uint8Array {
+  const safeExpected = Math.max(0, Math.min(MAX_CUSTOM_SPRITE_RGBA_BYTES, Math.round(expectedBytes)));
+  if (!b64 || b64.length > MAX_CUSTOM_SPRITE_B64_CHARS) {
+    return new Uint8Array(safeExpected);
+  }
   try {
     const raw = base64ToUint8(b64);
-    const inflated = unzlibSync(raw);
-    if (inflated.length === expectedBytes) return inflated;
-    const out = new Uint8Array(expectedBytes);
-    out.set(inflated.subarray(0, expectedBytes));
+    const out = new Uint8Array(safeExpected);
+    let written = 0;
+    const stream = new Unzlib((chunk) => {
+      if (written + chunk.byteLength > MAX_CUSTOM_SPRITE_RGBA_BYTES) {
+        throw new Error('Custom sprite zlib payload exceeds 128x128 RGBA limit');
+      }
+      const copyLen = Math.min(chunk.byteLength, safeExpected - written);
+      if (copyLen > 0) {
+        out.set(chunk.subarray(0, copyLen), written);
+      }
+      written += chunk.byteLength;
+    });
+    stream.push(raw, true);
     return out;
   } catch {
-    return new Uint8Array(expectedBytes);
+    return new Uint8Array(safeExpected);
   }
 }
 
