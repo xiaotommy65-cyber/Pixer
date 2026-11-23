@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { zipSync, zlibSync } from 'fflate';
 import { createMcpFrameReader } from '../pixer-mcp.ts';
+import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { ExternalAudioBank, isSafeAudioUrl } from '../../src/core/audio/ExternalAudioBank.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import { decodeZlibB64ToRgba, uint8ToBase64 } from '../../src/core/ecs/EcsCustomSpriteCompiler.ts';
@@ -271,4 +272,125 @@ test('True ECS Arsenal Wiring: EcsWorldMapController wall-bypassing A* + FOV/LOS
   assert.equal(runtime.cameraRig.getActiveShot(), 'PLAY_STANDARD');
   assert.ok(Number.isFinite(runtime.cameraRig.viewProjMatrix[0]));
 });
+
+test('Phase 5 Cinematic Director & Aesthetic Oracle: Auteur DSL, Toric Two-Shot, 3-Phase Spring Handback & MCP Critique', () => {
+  const proj = structuredClone(OBSIDIAN_CITADEL_PROJECT);
+  const mcp = new PixerMcpSession(proj);
+
+  // 1. Author a 3-shot throne room PV cutscene via transactional MCP upsert_cutscene
+  const upsertRes = mcp.invokeTool('dispatch_ecs_command', {
+    command: {
+      type: 'upsert_cutscene',
+      cutscene: {
+        id: 'throne_showdown_pv',
+        name: '赤月王座對峙 PV',
+        trigger: 'manual',
+        roomId: 'throne_sanctum',
+        handbackDurationSec: 0.45,
+        shots: [
+          {
+            id: 'shot_1_establishing',
+            durationSec: 0.8,
+            subject: 'hero',
+            shotSize: 'WS',
+            anchor: 'center',
+            motion: 'spring',
+            motivation: 'enter_throne_sanctum',
+            splashTitle: 'CRIMSON THRONE',
+            splashSubtitle: 'ACT III · FINAL SANCTUM',
+          },
+          {
+            id: 'shot_2_hero_resolve',
+            durationSec: 1.0,
+            subject: 'hero',
+            shotSize: 'CU',
+            anchor: 'center',
+            motion: 'push_in',
+            motivation: 'blade_unsheathed',
+            holdBeatSec: 0.25,
+            speaker: 'HERO',
+            subtitle: 'The crimson seal ends here!',
+          },
+          {
+            id: 'shot_3_toric_standoff',
+            durationSec: 1.2,
+            subject: 'hero',
+            secondarySubject: 'boss',
+            shotSize: 'MS',
+            anchor: 'two_shot',
+            motion: 'spring',
+            motivation: 'boss_awakening',
+            speaker: 'MALAKOR',
+            subtitle: 'Come, mortal!',
+          },
+        ],
+      },
+    },
+  });
+  assert.equal(upsertRes.isError, false, JSON.stringify(upsertRes.structuredContent));
+
+  // 2. Run the FilmFlow Headless Scout + 5-Axis Mathematical Cinematography Critic Oracle via MCP
+  const critiqueRes = mcp.invokeTool('critique_cutscene_aesthetics', {
+    cutsceneId: 'throne_showdown_pv',
+  });
+  assert.equal(critiqueRes.isError, false, JSON.stringify(critiqueRes.structuredContent));
+  const report = critiqueRes.structuredContent as {
+    ok: boolean;
+    overallScore: number;
+    grade: string;
+    pass: boolean;
+    handbackContinuityScore: number;
+    handbackResidualPx: number;
+    shots: Array<{ shotId: string; cameraZoom: number; shotScore: number }>;
+    asciiStoryboard: string[];
+  };
+  assert.equal(report.ok, true);
+  assert.equal(report.shots.length, 3);
+  assert.equal(report.asciiStoryboard.length, 3);
+  assert.ok(report.overallScore >= 80, `Expected overallScore >= 80, got ${report.overallScore}`);
+  assert.equal(report.pass, true);
+  assert.ok(report.handbackContinuityScore >= 85, `Expected handbackContinuityScore >= 85, got ${report.handbackContinuityScore}`);
+  assert.ok(report.asciiStoryboard[0].includes('CRIMSON THRONE'), 'ASCII storyboard includes splash banner');
+  assert.ok(report.asciiStoryboard[2].includes('B'), 'Two-shot ASCII viewfinder plots secondary subject B');
+
+  // 3. Verify live runtime execution: 21:9 letterbox HUD bars, dynamic zoom, Tilt-Shift focus pull, and seamless spring return
+  const runtime = new EcsCartridgeRuntime(mcp.session.getProject());
+  const wm = runtime.getWorldMapController();
+  wm.switchRoomForEditor(runtime.world, 'throne_sanctum', 640, 360);
+  assert.equal(runtime.playCutscene('throne_showdown_pv'), true);
+  assert.equal(runtime.getCinematicDirector().isCutscenePlaying(), true);
+
+  for (let i = 0; i < 35; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  const midSnap = runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.ok((midSnap.cameraZoom ?? 1) !== 1, 'Director dynamically drives cameraZoom during cutscene');
+  assert.ok(
+    midSnap.hudPrimitives?.some((h) => h.kind === 'box' && h.y === 0 && h.w === 640 && h.h > 10),
+    '21:9 top letterbox bar rendered in HUD',
+  );
+  assert.ok(
+    midSnap.hudPrimitives?.some((h) => h.kind === 'text' && h.text?.includes('CRIMSON THRONE')),
+    'Splash title banner rendered in HUD',
+  );
+
+  // Skip cutscene -> enters Phase-3 Spring Handback -> converges smoothly back to idle gameplay camera (Toric Boss Two-Shot in throne_sanctum)
+  assert.equal(runtime.getCinematicDirector().skipCutscene(), true);
+  assert.equal(runtime.getCinematicDirector().getPhase(), 'handback');
+  for (let i = 0; i < 40; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  assert.equal(runtime.getCinematicDirector().getPhase(), 'idle');
+  assert.equal(runtime.getCinematicDirector().letterboxRatio, 0);
+  const idleZoom = runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1).cameraZoom ?? 1;
+  assert.ok(idleZoom >= 0.82 && idleZoom <= 1.02, `Expected Toric boss-battle framing zoom in 0.82..1.02, got ${idleZoom}`);
+
+  // 4. Undo/Redo transactional verification for upsert_cutscene
+  assert.equal(mcp.invokeTool('undo').isError, false);
+  assert.equal((mcp.session.getProject().cutscenes ?? []).length, 0);
+  assert.equal(mcp.invokeTool('redo').isError, false);
+  assert.equal((mcp.session.getProject().cutscenes ?? []).length, 1);
+});
+
+
 

@@ -20,6 +20,7 @@ import {
   renderRoomAscii,
   type ReachabilityOptions,
 } from './EcsSpatialOracle.ts';
+import { critiqueCutsceneAesthetics } from './EcsCinematicOracle.ts';
 import {
   buildInteropStudioCommands,
   detectJsonInteropFormat,
@@ -469,6 +470,15 @@ export class PixerMcpSession {
         } catch (err) {
           return makeToolError(err instanceof Error ? err.message : String(err));
         }
+      }
+
+      case 'critique_cutscene_aesthetics': {
+        const cutsceneId = typeof args.cutsceneId === 'string' ? args.cutsceneId.trim() : '';
+        if (!cutsceneId) {
+          return makeToolError('Expected non-empty "cutsceneId" string');
+        }
+        const report = critiqueCutsceneAesthetics(this.session.getProject(), cutsceneId);
+        return report.ok ? makeToolSuccess(report) : makeToolError(report.suggestions[0] ?? 'Cutscene critique failed', report);
       }
 
       case 'export_project_json':

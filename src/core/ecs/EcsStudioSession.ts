@@ -8,10 +8,12 @@ import {
   getEntityPrefabId,
   resolveEntityComponents,
   validateCustomSpriteDef,
+  validateCutsceneDef,
   validateEcsProjectV2,
   type EcsComponentBundle,
   type EcsComponentOverrides,
   type EcsCustomSpriteDef,
+  type EcsCutsceneDef,
   type EcsEntityInitDef,
   type EcsHudGaugeDef,
   type EcsPrefabDef,
@@ -187,7 +189,9 @@ export type EcsStudioCommand =
   | { type: 'upsert_custom_sprite'; sprite: EcsCustomSpriteDef }
   | { type: 'remove_custom_sprite'; spriteId: string }
   | { type: 'upsert_animation'; animation: AnimationStateMachineDef }
-  | { type: 'remove_animation'; animationId: string };
+  | { type: 'remove_animation'; animationId: string }
+  | { type: 'upsert_cutscene'; cutscene: EcsCutsceneDef }
+  | { type: 'remove_cutscene'; cutsceneId: string };
 
 export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'ensure_world_map', category: 'world_map', fields: 'cols?, rows?, roomName?', note: 'Initialize a 32px multi-room HD-2D worldMap if missing.' },
@@ -217,6 +221,8 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'remove_custom_sprite', category: 'assets', fields: 'spriteId', note: 'Delete a project-embedded custom sprite and recycle its dynamic atlas slot.' },
   { type: 'upsert_animation', category: 'assets', fields: 'animation: {id, initialState, clips: [{name, frames[], fps, loop?, events?}], transitions: [{from, to, param, op, value, priority?}]}', note: 'Create or update a multi-frame AnimationStateMachineDef (bind via components.animatorId on entities or prefabs).' },
   { type: 'remove_animation', category: 'assets', fields: 'animationId', note: 'Remove an AnimationStateMachineDef by ID.' },
+  { type: 'upsert_cutscene', category: 'scene', fields: 'cutscene: {id, name, trigger?, roomId?, triggerGlobal?, handbackDurationSec?, skippable?, shots: [{id, durationSec, subject?, secondarySubject?, shotSize?: "EWS"|"WS"|"MS"|"CU"|"ECU", anchor?: "center"|"left_third"|"right_third"|"upper_third"|"lower_third"|"lead_room"|"two_shot", motion?: "cut"|"spring"|"push_in"|"pull_out"|"pan_smooth"|"impact_zoom", timeScale?, holdBeatSec?, motivation?, speaker?, subtitle?, splashTitle?, splashSubtitle?}]}', note: 'Create or update an Actor-Relative & Toric Space multi-shot cutscene / PV sequence with 3-Phase Seamless Spring Handback.' },
+  { type: 'remove_cutscene', category: 'scene', fields: 'cutsceneId', note: 'Remove a cutscene / PV sequence by ID.' },
   { type: 'set_atmosphere', category: 'scene', fields: 'patch: {skyTop?, skyBottom?, ambientDarkness?, waterLevelNorm?, waterTint?, shadowOcclusion?, shadowStrength?, shadowSoftness?, tiltShiftBlur?, tiltShiftFocusY?, ambientParticles?: "none"|"embers"|"fireflies"|"dust"|"snow", ambientParticleDensity?, juiceScale?}', note: 'Configure HD-2D sky, 2D raymarched wall shadow occlusion, Tilt-Shift DoF, ambient GPU particles, and combat hitstop/shake juice scale.' },
   { type: 'set_global', category: 'scene', fields: 'key, value', note: 'Set initial project global variable.' },
   { type: 'set_projection', category: 'scene', fields: 'patch: {mode?: "ortho_2d"|"hd2d_iso"|"hd2d_3d"|"first_person_25d", pitchDeg?, fovDeg?, wallHeightScale?, billboardTiltDeg?, obliqueShadowAlpha?, elevationScale?, perspectiveSkew?, activeDimensionMask?, allowDimensionShift?}', note: 'Switch between True 3D HD-2D Perspective (hd2d_3d), 3/4 Strong-Volume 2.5D (hd2d_iso), ortho_2d, or first_person_25d.' },
@@ -1072,6 +1078,34 @@ export class EcsStudioSession {
         }
         next.animations = next.animations.filter((a) => a.id !== cmd.animationId);
         summary = `移除幀動畫狀態機「${cmd.animationId}」`;
+        break;
+      }
+      case 'upsert_cutscene': {
+        const csErrs = validateCutsceneDef(cmd.cutscene, 'cutscene');
+        if (csErrs.length > 0) {
+          return { ok: false, revision: this.revision, summary: '導演分鏡腳本驗證失敗', errors: csErrs };
+        }
+        const cleaned = JSON.parse(JSON.stringify(cmd.cutscene)) as EcsCutsceneDef;
+        const list = [...(next.cutscenes ?? [])];
+        const idx = list.findIndex((c) => c.id === cleaned.id);
+        if (idx >= 0) list[idx] = cleaned;
+        else list.push(cleaned);
+        next.cutscenes = list;
+        summary = `更新導演分鏡腳本「${cleaned.name}」(${cleaned.shots.length} 顆鏡頭)`;
+        break;
+      }
+      case 'remove_cutscene': {
+        const list = next.cutscenes ?? [];
+        if (!list.some((c) => c.id === cmd.cutsceneId)) {
+          return {
+            ok: false,
+            revision: this.revision,
+            summary: '找不到導演分鏡腳本',
+            errors: [`Cutscene '${cmd.cutsceneId}' not found`],
+          };
+        }
+        next.cutscenes = list.filter((c) => c.id !== cmd.cutsceneId);
+        summary = `移除導演分鏡腳本「${cmd.cutsceneId}」`;
         break;
       }
       default:
