@@ -67,20 +67,21 @@ flowchart LR
 ## 3. Layer-by-Layer Module Inventory
 
 ### A. Pure Engine Core (`src/core/` — Zero UI / Zero `src/game/` / Zero Capacitor)
-- **`src/core/gpu/` (7 files, 6,689L)** *(Canvas/WebGPU/WebGL2 DOM allowed)*
-  - `GpuEngine.ts` (1,639L) — Multi-backend coordinator, 24-float PBR instancing, shadow grid, atlas sync.
-  - `WebGpuBackend.ts` (1,358L) + `WebGpuShaders.ts` (1,061L) — Primary WGSL pipeline + 3-Pass Karis Bloom.
-  - `WebGl2Backend.ts` (882L) + `WebGl2Shaders.ts` (1,036L) — GLSL ES 3.00 parity backend.
-  - `Canvas2DBackend.ts` (518L) — Guaranteed software fallback.
-  - `GpuTypes.ts` (195L) — Viewport presets (`1280×720`), `AtlasPoolStats`, PBR structs.
+- **`src/core/gpu/` (9 files, 6,887L)** *(Canvas/WebGPU/WebGL2 DOM allowed)*
+  - `GpuEngine.ts` (1,107L) — Multi-backend coordinator, 24-float PBR 2D instancing, shadow grid, atlas sync.
+  - `GpuQuad3DBatch.ts` (714L) + `GpuColorCache.ts` (22L) — Zero-GC 3D Quad batching/geometry emitters & bounded packed hex RGB cache.
+  - `WebGpuBackend.ts` (1,357L) + `WebGpuShaders.ts` (1,060L) — Primary WGSL pipeline + 3-Pass Karis Bloom.
+  - `WebGl2Backend.ts` (881L) + `WebGl2Shaders.ts` (1,035L) — GLSL ES 3.00 parity backend.
+  - `Canvas2DBackend.ts` (517L) — Guaranteed software fallback.
+  - `GpuTypes.ts` (194L) — Viewport presets (`1280×720`), `AtlasPoolStats`, PBR structs.
 - **`src/core/ecs/` (15 prod files, 9,261L)** *(100% DOM-free; zero `*.test.ts` inside `src/`)*
   - Core primitives: `EntityManager.ts` (163L), `ComponentStore.ts` (556L), `EcsCoreWorld.ts` (208L), `EcsWorld.ts` (465L).
   - Schema & authoring: `EcsProjectSchema.ts` (642L), `EcsTilemapTypes.ts` (579L), `EcsStudioSession.ts` (1,205L), `EcsCustomSpriteCompiler.ts` (567L).
   - Runtime, projection & scripting: `EcsCartridgeRuntime.ts` (1,122L), `EcsSnapshotProjector.ts` (760L, Zero-GC snapshot/light/HUD/FP-wall projector), `EcsWorldMapController.ts` (1,235L), `EcsActionPhysicsSystems.ts` (799L), `SandboxScriptVm.ts` (478L), `EcsEventGraph.ts` (471L), `index.ts` (11L).
   - Unit tests live in `scripts/sim/EcsCore.test.ts` (1,328L), enforced by `ArchitectureTests.ts`.
-- **`src/core/runtime/` (13 files, 5,113L)** *(100% DOM-free)*
-  - Active prod: `EngineHost.ts` (590L, **sole UI facade**), `CartridgeRunner.ts` (481L), `CartridgeRegistry.ts` (154L), `SceneGpuBridge.ts` (1,492L), `DisplayThermalGovernor.ts` (197L), `SaveService.ts` (349L), `CartridgePngCodec.ts` (269L), `AppLogger.ts` (340L), `LogPersistence.ts` (326L), `EventBus.ts` (87L), `SeededRng.ts` (38L).
-  - *Tested-only (unwired in `main.ts`)*: `CameraRigDirector.ts` (567L), `GameFlowController.ts` (223L).
+- **`src/core/runtime/` (17 files, 5,234L)** *(100% DOM-free)*
+  - Active prod: `EngineHost.ts` (594L, **sole UI facade**), `CartridgeRunner.ts` (480L), `CartridgeRegistry.ts` (153L), `SceneGpuBridge.ts` (884L), `SceneFirstPersonPass.ts` (240L, 2.5D DDA pass), `SceneTrue3DPass.ts` (320L, True 3D HD-2D pass), `SceneOrthogonalHelper.ts` (64L), `SceneHudOverlayPass.ts` (112L), `DisplayThermalGovernor.ts` (196L), `SaveService.ts` (348L), `CartridgePngCodec.ts` (268L), `AppLogger.ts` (339L), `LogPersistence.ts` (325L), `EventBus.ts` (86L), `SeededRng.ts` (37L).
+  - *Tested-only (unwired in `main.ts`)*: `CameraRigDirector.ts` (566L), `GameFlowController.ts` (222L).
 - **`src/core/ai/` (10 files, 3,495L)** *(100% DOM-free)*
   - Authoring & MCP: `AgentBridge.ts` (460L), `PixerMcpProtocol.ts` (485L), `EcsSpatialOracle.ts` (1,292L), `EcsPlaytestVerifier.ts` (376L), `ObservationSerializer.ts` (153L).
   - Providers: `HybridAiDirector.ts` (182L), `LocalAiProvider.ts` (260L), `RemoteAiProvider.ts` (191L), `AiTypes.ts` (76L), `AiProvider.ts` (20L).

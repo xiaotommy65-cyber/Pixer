@@ -2,49 +2,23 @@ import { TextureAtlas, type SpriteId } from '../../assets/TextureAtlas.ts';
 import { mixOklabRgb01 } from '../math/ColorMath.ts';
 import { appLogger } from '../runtime/AppLogger.ts';
 import { Canvas2DBackend } from './Canvas2DBackend.ts';
+import { hexToRgb01, INV_255, packHexRgb } from './GpuColorCache.ts';
+import { GpuQuad3DBatch } from './GpuQuad3DBatch.ts';
 import {
   FLOATS_PER_INSTANCE,
-  FLOATS_PER_QUAD3D,
   MAX_DYNAMIC_LIGHTS,
   MAX_INSTANCES_PER_PASS,
-  MAX_QUAD3D_INSTANCES,
   type GpuBackendKind,
-  type GpuCamera3DState,
   type GpuFrameStats,
   type GpuOcclusionState,
   type IGpuBackend,
-  type Quad3DPassData,
   type SkyGradient,
   type SpriteRect,
 } from './GpuTypes.ts';
 import { WebGl2Backend } from './WebGl2Backend.ts';
 import { WebGpuBackend } from './WebGpuBackend.ts';
 
-const MAX_QUAD3D_BLEND_INSTANCES = 4096;
-const DEG_TO_RAD = Math.PI / 180;
-
-const INV_255 = 1 / 255;
-const MAX_COLOR_CACHE_ENTRIES = 512;
-const PACKED_RGB_CACHE = new Map<string, number>();
-
-function packHexRgb(hex: string): number {
-  const cached = PACKED_RGB_CACHE.get(hex);
-  if (cached !== undefined) return cached;
-
-  const clean = hex.startsWith('#') ? hex.slice(1) : hex;
-  const parsed = clean.length === 6 ? parseInt(clean, 16) : 0xffffff;
-  const packed = Number.isNaN(parsed) ? 0xffffff : parsed & 0xffffff;
-  if (PACKED_RGB_CACHE.size >= MAX_COLOR_CACHE_ENTRIES) {
-    PACKED_RGB_CACHE.clear();
-  }
-  PACKED_RGB_CACHE.set(hex, packed);
-  return packed;
-}
-
-export function hexToRgb01(hex: string): [number, number, number] {
-  const n = packHexRgb(hex);
-  return [((n >> 16) & 255) * INV_255, ((n >> 8) & 255) * INV_255, (n & 255) * INV_255];
-}
+export { hexToRgb01 };
 
 export class GpuEngine {
   public readonly atlas: TextureAtlas;
@@ -52,34 +26,7 @@ export class GpuEngine {
   private canvas: HTMLCanvasElement;
   private alphaItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
   private addItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
-  private quad3dOpaqueItems = new Float32Array(MAX_QUAD3D_INSTANCES * FLOATS_PER_QUAD3D);
-  private quad3dAlphaItems = new Float32Array(MAX_QUAD3D_BLEND_INSTANCES * FLOATS_PER_QUAD3D);
-  private quad3dAddItems = new Float32Array(MAX_QUAD3D_BLEND_INSTANCES * FLOATS_PER_QUAD3D);
-  private quad3dOpaqueCount = 0;
-  private quad3dAlphaCount = 0;
-  private quad3dAddCount = 0;
-  private readonly camera3dState: GpuCamera3DState = {
-    enabled: false,
-    camCenterX: 0,
-    camCenterY: 0,
-    zoom: 1,
-    pitchDeg: 42,
-    fovDeg: 38,
-    viewW: 320,
-    viewH: 180,
-    occOriginWorldX: 0,
-    occOriginWorldY: 0,
-    occTileSizeWorld: 32,
-  };
-  private readonly quad3dPassData: Quad3DPassData = {
-    camera: this.camera3dState,
-    opaqueData: this.quad3dOpaqueItems,
-    opaqueCount: 0,
-    alphaData: this.quad3dAlphaItems,
-    alphaCount: 0,
-    additiveData: this.quad3dAddItems,
-    additiveCount: 0,
-  };
+  private readonly quad3d = new GpuQuad3DBatch();
   private readonly dynamicLights = new Float32Array(MAX_DYNAMIC_LIGHTS * 8);
   private dynamicLightCount = 0;
   private alphaCount = 0;
@@ -164,12 +111,7 @@ export class GpuEngine {
   }
 
   public getQuad3DStats(): { opaqueCount: number; alphaCount: number; additiveCount: number; enabled: boolean } {
-    return {
-      opaqueCount: this.quad3dOpaqueCount,
-      alphaCount: this.quad3dAlphaCount,
-      additiveCount: this.quad3dAddCount,
-      enabled: this.camera3dState.enabled,
-    };
+    return this.quad3d.getStats();
   }
 
   private replaceCanvasNode(): void {
@@ -376,10 +318,7 @@ export class GpuEngine {
     this.currentSky.tiltShiftBlur = 0;
     this.currentSky.tiltShiftFocusY = 0.52;
     this.occlusionState.enabled = false;
-    this.camera3dState.enabled = false;
-    this.quad3dOpaqueCount = 0;
-    this.quad3dAlphaCount = 0;
-    this.quad3dAddCount = 0;
+    this.quad3d.resetFrame();
     this.dynamicLightCount = 0;
     this.alphaCount = 0;
     this.addCount = 0;
@@ -397,17 +336,18 @@ export class GpuEngine {
     occOriginWorldY = 0,
     occTileSizeWorld = 32,
   ): void {
-    this.camera3dState.enabled = true;
-    this.camera3dState.camCenterX = camCenterX;
-    this.camera3dState.camCenterY = camCenterY;
-    this.camera3dState.zoom = Math.max(0.1, zoom);
-    this.camera3dState.pitchDeg = Math.max(20, Math.min(78, pitchDeg));
-    this.camera3dState.fovDeg = Math.max(20, Math.min(65, fovDeg));
-    this.camera3dState.viewW = this.viewW;
-    this.camera3dState.viewH = this.viewH;
-    this.camera3dState.occOriginWorldX = occOriginWorldX;
-    this.camera3dState.occOriginWorldY = occOriginWorldY;
-    this.camera3dState.occTileSizeWorld = Math.max(1, occTileSizeWorld);
+    this.quad3d.setCamera3D(
+      camCenterX,
+      camCenterY,
+      zoom,
+      pitchDeg,
+      fovDeg,
+      this.viewW,
+      this.viewH,
+      occOriginWorldX,
+      occOriginWorldY,
+      occTileSizeWorld,
+    );
   }
 
   public pushDynamicLight(
@@ -1010,56 +950,10 @@ export class GpuEngine {
     metallic = 0.12,
     emissive = 0,
   ): void {
-    let arr: Float32Array;
-    let count: number;
-    let maxCap: number;
-    if (pass === 0) {
-      arr = this.quad3dOpaqueItems;
-      count = this.quad3dOpaqueCount;
-      maxCap = MAX_QUAD3D_INSTANCES;
-    } else if (pass === 1) {
-      arr = this.quad3dAlphaItems;
-      count = this.quad3dAlphaCount;
-      maxCap = MAX_QUAD3D_BLEND_INSTANCES;
-    } else {
-      arr = this.quad3dAddItems;
-      count = this.quad3dAddCount;
-      maxCap = MAX_QUAD3D_BLEND_INSTANCES;
-    }
-    if (count >= maxCap) return;
-    const base = count * FLOATS_PER_QUAD3D;
-    arr[base] = ox;
-    arr[base + 1] = oy;
-    arr[base + 2] = oz;
-    arr[base + 3] = atlasPage;
-    arr[base + 4] = ux;
-    arr[base + 5] = uy;
-    arr[base + 6] = uz;
-    arr[base + 7] = roughness;
-    arr[base + 8] = vx;
-    arr[base + 9] = vy;
-    arr[base + 10] = vz;
-    arr[base + 11] = metallic;
-    arr[base + 12] = u0;
-    arr[base + 13] = v0;
-    arr[base + 14] = u1;
-    arr[base + 15] = v1;
-    arr[base + 16] = r;
-    arr[base + 17] = g;
-    arr[base + 18] = b;
-    arr[base + 19] = a;
-    arr[base + 20] = nx;
-    arr[base + 21] = ny;
-    arr[base + 22] = nz;
-    arr[base + 23] = emissive;
-    arr[base + 24] = mode;
-    arr[base + 25] = flash;
-    arr[base + 26] = shadeMult;
-    arr[base + 27] = paletteRow;
-    if (pass === 0) this.quad3dOpaqueCount++;
-    else if (pass === 1) this.quad3dAlphaCount++;
-    else this.quad3dAddCount++;
-    this.spriteTotal++;
+    this.quad3d.pushQuad3D(
+      pass, ox, oy, oz, ux, uy, uz, vx, vy, vz, u0, v0, u1, v1,
+      r, g, b, a, nx, ny, nz, mode, flash, shadeMult, paletteRow, atlasPage, roughness, metallic, emissive,
+    );
   }
 
   public drawFloorTile3D(
@@ -1077,48 +971,7 @@ export class GpuEngine {
     metallic = 0.06,
     emissive = 0,
   ): void {
-    const rect = this.atlas.getRect(id);
-    let r = 1;
-    let g = 1;
-    let b = 1;
-    if (tint) {
-      const n = packHexRgb(tint);
-      r = ((n >> 16) & 255) * INV_255;
-      g = ((n >> 8) & 255) * INV_255;
-      b = (n & 255) * INV_255;
-    }
-    const pass: 0 | 1 = alpha >= 0.99 ? 0 : 1;
-    this.pushQuad3D(
-      pass,
-      x,
-      y,
-      z,
-      w,
-      0,
-      0,
-      0,
-      h,
-      0,
-      rect.u0,
-      rect.v0,
-      rect.u1,
-      rect.v1,
-      r,
-      g,
-      b,
-      alpha,
-      0,
-      0,
-      1,
-      0,
-      0,
-      shadeMult,
-      paletteRow,
-      rect.page ?? 0,
-      roughness,
-      metallic,
-      emissive,
-    );
+    this.quad3d.drawFloorTile3D(this.atlas, id, x, y, w, h, z, tint, alpha, paletteRow, shadeMult, roughness, metallic, emissive);
   }
 
   /**
@@ -1143,244 +996,10 @@ export class GpuEngine {
     metallic = 0.1,
     obliqueShadowAlpha = 0.35,
   ): void {
-    const topRect = this.atlas.getRect(topId);
-    const sideRect = sideId ? this.atlas.getRect(sideId) : topRect;
-    let tr = 1;
-    let tg = 1;
-    let tb = 1;
-    if (tint) {
-      const n = packHexRgb(tint);
-      tr = ((n >> 16) & 255) * INV_255;
-      tg = ((n >> 8) & 255) * INV_255;
-      tb = (n & 255) * INV_255;
-    }
-    let wr = tr;
-    let wg = tg;
-    let wb = tb;
-    if (wallTint && !sideId) {
-      const n = packHexRgb(wallTint);
-      wr = ((n >> 16) & 255) * INV_255;
-      wg = ((n >> 8) & 255) * INV_255;
-      wb = (n & 255) * INV_255;
-    }
-    const zTop = zBase + wallH;
-    const pass: 0 | 1 = alpha >= 0.99 ? 0 : 1;
-
-    // 1. Top Roof Cap (+Z normal, slightly brighter catch-light)
-    this.pushQuad3D(
-      pass,
-      x,
-      y,
-      zTop,
-      w,
-      0,
-      0,
-      0,
-      h,
-      0,
-      topRect.u0,
-      topRect.v0,
-      topRect.u1,
-      topRect.v1,
-      tr,
-      tg,
-      tb,
-      alpha,
-      0,
-      0,
-      1,
-      0,
-      0,
-      1.1,
-      paletteRow,
-      topRect.page ?? 0,
-      roughness,
-      metallic,
-      0,
+    this.quad3d.drawBox3DWall(
+      this.atlas, topId, sideId, x, y, w, h, zBase, wallH, neighborMask,
+      tint, wallTint, alpha, paletteRow, roughness, metallic, obliqueShadowAlpha,
     );
-
-    const hasEast = (neighborMask & 2) !== 0;
-    const hasSouth = (neighborMask & 4) !== 0;
-    const hasWest = (neighborMask & 8) !== 0;
-    const sideMode = sideId ? 0 : 4;
-    const sidePage = sideRect.page ?? 0;
-
-    // 2. South Front Vertical Face (+Y normal, faces camera directly)
-    if (!hasSouth) {
-      this.pushQuad3D(
-        pass,
-        x,
-        y + h,
-        zTop,
-        w,
-        0,
-        0,
-        0,
-        0,
-        -wallH,
-        sideId ? sideRect.u0 : Math.max(0.5, w / 16),
-        sideId ? sideRect.v0 : Math.max(0.25, wallH / 16),
-        sideId ? sideRect.u1 : (x + y) * 0.017,
-        sideId ? sideRect.v1 : 0,
-        wr,
-        wg,
-        wb,
-        alpha,
-        0,
-        1,
-        0,
-        sideMode,
-        0,
-        0.92,
-        paletteRow,
-        sidePage,
-        roughness,
-        metallic,
-        0,
-      );
-    }
-
-    // 3. West Left Vertical Face (-X normal, visible on right side of screen!)
-    if (!hasWest) {
-      this.pushQuad3D(
-        pass,
-        x,
-        y,
-        zTop,
-        0,
-        h,
-        0,
-        0,
-        0,
-        -wallH,
-        sideId ? sideRect.u0 : Math.max(0.5, h / 16),
-        sideId ? sideRect.v0 : Math.max(0.25, wallH / 16),
-        sideId ? sideRect.u1 : (x * 1.3 + y) * 0.017,
-        sideId ? sideRect.v1 : 0,
-        wr,
-        wg,
-        wb,
-        alpha,
-        -1,
-        0,
-        0,
-        sideMode,
-        0,
-        0.74,
-        paletteRow,
-        sidePage,
-        roughness,
-        metallic,
-        0,
-      );
-    }
-
-    // 4. East Right Vertical Face (+X normal, visible on left side of screen!)
-    if (!hasEast) {
-      this.pushQuad3D(
-        pass,
-        x + w,
-        y + h,
-        zTop,
-        0,
-        -h,
-        0,
-        0,
-        0,
-        -wallH,
-        sideId ? sideRect.u0 : Math.max(0.5, h / 16),
-        sideId ? sideRect.v0 : Math.max(0.25, wallH / 16),
-        sideId ? sideRect.u1 : (x * 0.7 + y * 1.7) * 0.017,
-        sideId ? sideRect.v1 : 0,
-        wr,
-        wg,
-        wb,
-        alpha,
-        1,
-        0,
-        0,
-        sideMode,
-        0,
-        0.66,
-        paletteRow,
-        sidePage,
-        roughness,
-        metallic,
-        0,
-      );
-    }
-
-    // 5. Subtle 45-degree directional oblique cast shadow on exposed east/south floor
-    if (obliqueShadowAlpha > 0.01 && alpha >= 0.95) {
-      const shLen = Math.min(w * 0.65, wallH * 0.42);
-      const shA = Math.min(0.45, obliqueShadowAlpha * 0.48);
-      if (!hasEast) {
-        this.pushQuad3D(
-          1,
-          x + w,
-          y + shLen * 0.35,
-          zBase + 0.12,
-          shLen,
-          0,
-          0,
-          0,
-          h,
-          0,
-          0,
-          0,
-          1,
-          1,
-          0.04,
-          0.03,
-          0.09,
-          shA,
-          0,
-          0,
-          1,
-          2,
-          0,
-          1,
-          -2,
-          0,
-          1,
-          0,
-          0,
-        );
-      }
-      if (!hasSouth) {
-        this.pushQuad3D(
-          1,
-          x + shLen * 0.35,
-          y + h,
-          zBase + 0.12,
-          w,
-          0,
-          0,
-          0,
-          shLen * 0.62,
-          0,
-          0,
-          0,
-          1,
-          1,
-          0.04,
-          0.03,
-          0.09,
-          shA * 0.85,
-          0,
-          0,
-          1,
-          2,
-          0,
-          1,
-          -2,
-          0,
-          1,
-          0,
-          0,
-        );
-      }
-    }
   }
 
   /**
@@ -1406,57 +1025,9 @@ export class GpuEngine {
     swayX = 0,
     opaqueCutout = true,
   ): void {
-    const rect = this.atlas.getRect(id);
-    const dw = w ?? rect.w;
-    const dh = h ?? rect.h;
-    const u0 = flipX ? rect.u1 : rect.u0;
-    const u1 = flipX ? rect.u0 : rect.u1;
-    let r = 1;
-    let g = 1;
-    let b = 1;
-    if (tint) {
-      const n = packHexRgb(tint);
-      r = ((n >> 16) & 255) * INV_255;
-      g = ((n >> 8) & 255) * INV_255;
-      b = (n & 255) * INV_255;
-    }
-    const rad = tiltDeg * DEG_TO_RAD;
-    const sinT = Math.sin(rad);
-    const cosT = Math.cos(rad);
-    const ox = footX - dw * 0.5 + swayX;
-    const oy = footY - sinT * dh;
-    const oz = footZ + cosT * dh;
-    const pass: 0 | 1 | 2 = additive ? 2 : alpha >= 0.99 && opaqueCutout ? 0 : 1;
-    this.pushQuad3D(
-      pass,
-      ox,
-      oy,
-      oz,
-      dw,
-      0,
-      0,
-      -swayX,
-      sinT * dh,
-      -cosT * dh,
-      u0,
-      rect.v0,
-      u1,
-      rect.v1,
-      r,
-      g,
-      b,
-      alpha,
-      0,
-      cosT,
-      sinT,
-      0,
-      flash,
-      1.04,
-      paletteRow,
-      rect.page ?? 0,
-      roughness,
-      metallic,
-      emissive,
+    this.quad3d.drawBillboard3D(
+      this.atlas, id, footX, footY, footZ, w, h, tiltDeg, flipX, tint, alpha, flash,
+      additive, paletteRow, emissive, roughness, metallic, swayX, opaqueCutout,
     );
   }
 
@@ -1470,38 +1041,7 @@ export class GpuEngine {
     alpha = 0.44,
     softness = 0.62,
   ): void {
-    const n = packHexRgb(colorHex);
-    this.pushQuad3D(
-      1,
-      cx - w * 0.5,
-      cy - h * 0.5,
-      z + 0.25,
-      w,
-      0,
-      0,
-      0,
-      h,
-      0,
-      0,
-      0,
-      1,
-      1,
-      ((n >> 16) & 255) * INV_255,
-      ((n >> 8) & 255) * INV_255,
-      (n & 255) * INV_255,
-      alpha,
-      0,
-      0,
-      1,
-      3,
-      0,
-      softness,
-      -2,
-      0,
-      1,
-      0,
-      0,
-    );
+    this.quad3d.drawGroundShadow3D(cx, cy, z, w, h, colorHex, alpha, softness);
   }
 
   public drawLight3D(
@@ -1513,40 +1053,7 @@ export class GpuEngine {
     intensity = 0.45,
     falloffPower = 2.0,
   ): void {
-    this.lightTotal++;
-    const n = packHexRgb(colorHex);
-    const d = radius * 2;
-    this.pushQuad3D(
-      2,
-      cx - radius,
-      cy - radius,
-      z + 0.45,
-      d,
-      0,
-      0,
-      0,
-      d,
-      0,
-      0,
-      0,
-      1,
-      1,
-      ((n >> 16) & 255) * INV_255,
-      ((n >> 8) & 255) * INV_255,
-      (n & 255) * INV_255,
-      intensity,
-      0,
-      0,
-      1,
-      1,
-      0,
-      falloffPower,
-      -2,
-      0,
-      1,
-      0,
-      0.8,
-    );
+    this.quad3d.drawLight3D(cx, cy, z, radius, colorHex, intensity, falloffPower);
   }
 
   public drawParticle3D(
@@ -1559,42 +1066,7 @@ export class GpuEngine {
     additive = false,
     emissive = 0.45,
   ): void {
-    const n = packHexRgb(colorHex);
-    const half = size * 0.5;
-    const tiltRad = 24 * DEG_TO_RAD;
-    const sinT = Math.sin(tiltRad);
-    const cosT = Math.cos(tiltRad);
-    this.pushQuad3D(
-      additive ? 2 : 1,
-      cx - half,
-      cy - sinT * half,
-      cz + cosT * half,
-      size,
-      0,
-      0,
-      0,
-      sinT * size,
-      -cosT * size,
-      0,
-      0,
-      1,
-      1,
-      ((n >> 16) & 255) * INV_255,
-      ((n >> 8) & 255) * INV_255,
-      (n & 255) * INV_255,
-      alpha,
-      0,
-      cosT,
-      sinT,
-      2,
-      0,
-      1,
-      -2,
-      0,
-      0.5,
-      0,
-      emissive,
-    );
+    this.quad3d.drawParticle3D(cx, cy, cz, size, colorHex, alpha, additive, emissive);
   }
 
   public flush(timeSec: number): GpuFrameStats {
@@ -1602,9 +1074,6 @@ export class GpuEngine {
     if (!this.backend) {
       return this.lastStats;
     }
-    this.quad3dPassData.opaqueCount = this.quad3dOpaqueCount;
-    this.quad3dPassData.alphaCount = this.quad3dAlphaCount;
-    this.quad3dPassData.additiveCount = this.quad3dAddCount;
     const t0 = performance.now();
     const drawCalls = this.backend.renderFrame(
       this.currentSky,
@@ -1616,13 +1085,13 @@ export class GpuEngine {
       this.dynamicLights,
       this.dynamicLightCount,
       this.occlusionState,
-      this.camera3dState.enabled ? this.quad3dPassData : undefined,
+      this.quad3d.getPassData(),
     );
     const frameTimeMs = performance.now() - t0;
     this.lastStats.backend = this.backend.kind;
     this.lastStats.drawCalls = drawCalls;
-    this.lastStats.spriteCount = this.spriteTotal;
-    this.lastStats.lightCount = Math.max(this.lightTotal, this.dynamicLightCount);
+    this.lastStats.spriteCount = this.spriteTotal + this.quad3d.spriteCount;
+    this.lastStats.lightCount = Math.max(this.lightTotal + this.quad3d.lightCount, this.dynamicLightCount);
     this.lastStats.frameTimeMs = frameTimeMs;
     return this.lastStats;
   }
