@@ -43,12 +43,14 @@ import { OBSIDIAN_CITADEL_PROJECT } from '../game/obsidianCitadel/ObsidianCitade
 import { RHYTHM_BASTION_PROJECT } from '../game/rhythmBastion/RhythmBastionProject.ts';
 import { getRoomTile, type EcsMapLayerName } from '../core/ecs/EcsTilemapTypes.ts';
 import {
-  createAtlasThumbCanvas,
   createDefaultMapDesignerState,
   drawMapEditorOverlay,
   renderMapDesignerPane,
   type MapDesignerState,
 } from './EcsMapDesignerPanel.ts';
+import { renderAtlasPanel } from './EcsWorkbenchAtlasPanel.ts';
+import { renderPrefabInspectorPanel } from './EcsWorkbenchPrefabInspector.ts';
+import { EcsWorldRulesInspectorPanel } from './EcsWorldRulesInspectorPanel.ts';
 import { EventGraphEditorView } from './EventGraphEditorView.ts';
 import { ExternalImportModalView } from './ExternalImportModalView.ts';
 
@@ -248,7 +250,7 @@ export class EcsWorkbenchView {
   private readonly runtime: EcsCartridgeRuntime;
   private readonly liveInput = createEmptyInputState();
 
-  private leftTab: 'map' | 'hierarchy' | 'prefabs' | 'atlas' = 'map';
+  private leftTab: 'map' | 'rules' | 'hierarchy' | 'prefabs' | 'atlas' = 'map';
   private centerMode: 'viewport' | 'event_graph' = 'viewport';
   private selectedEntityId: string | null = null;
   private selectedPrefabId: string | null = null;
@@ -304,6 +306,7 @@ export class EcsWorkbenchView {
   private readonly undoBtn: HTMLButtonElement;
   private readonly redoBtn: HTMLButtonElement;
   private readonly leftTabMapBtn: HTMLButtonElement;
+  private readonly leftTabRulesBtn: HTMLButtonElement;
   private readonly leftTabHierarchyBtn: HTMLButtonElement;
   private readonly leftTabPrefabsBtn: HTMLButtonElement;
   private readonly leftTabAtlasBtn: HTMLButtonElement;
@@ -312,6 +315,7 @@ export class EcsWorkbenchView {
   private readonly viewportStageEl: HTMLDivElement;
   private readonly eventGraphView: EventGraphEditorView;
   private readonly externalImportModal: ExternalImportModalView;
+  private readonly worldRulesPanel: EcsWorldRulesInspectorPanel;
   private lastDiagReport: { ok: boolean; headline: string; lines: string[] } | null = null;
   private lastStatusSyncAccum = 0;
   private renderPixelW = 1280;
@@ -408,6 +412,11 @@ export class EcsWorkbenchView {
     this.leftTabMapBtn.className = this.leftTab === 'map' ? 'p7-seg-btn is-active' : 'p7-seg-btn';
     this.leftTabMapBtn.textContent = '地圖';
 
+    this.leftTabRulesBtn = document.createElement('button');
+    this.leftTabRulesBtn.type = 'button';
+    this.leftTabRulesBtn.className = 'p7-seg-btn';
+    this.leftTabRulesBtn.textContent = '規則';
+
     this.leftTabHierarchyBtn = document.createElement('button');
     this.leftTabHierarchyBtn.type = 'button';
     this.leftTabHierarchyBtn.className = this.leftTab === 'hierarchy' ? 'p7-seg-btn is-active' : 'p7-seg-btn';
@@ -424,10 +433,29 @@ export class EcsWorkbenchView {
     this.leftTabAtlasBtn.textContent = '圖集';
 
     this.leftTabMapBtn.addEventListener('click', () => this.setLeftTab('map'), { signal });
+    this.leftTabRulesBtn.addEventListener('click', () => this.setLeftTab('rules'), { signal });
     this.leftTabHierarchyBtn.addEventListener('click', () => this.setLeftTab('hierarchy'), { signal });
     this.leftTabPrefabsBtn.addEventListener('click', () => this.setLeftTab('prefabs'), { signal });
     this.leftTabAtlasBtn.addEventListener('click', () => this.setLeftTab('atlas'), { signal });
-    seg.append(this.leftTabMapBtn, this.leftTabHierarchyBtn, this.leftTabPrefabsBtn, this.leftTabAtlasBtn);
+    seg.append(this.leftTabMapBtn, this.leftTabRulesBtn, this.leftTabHierarchyBtn, this.leftTabPrefabsBtn, this.leftTabAtlasBtn);
+
+    this.worldRulesPanel = new EcsWorldRulesInspectorPanel({
+      onFocusRoom: (roomId) => this.switchActiveRoom(roomId),
+      getSpriteOptions: (proj) => {
+        const seen = new Set<string>();
+        const opts: { id: SpriteId; label: string }[] = [];
+        for (const cs of Object.values(proj.customSprites ?? {})) {
+          seen.add(cs.id);
+          opts.push({ id: cs.id as SpriteId, label: `[自訂] ${cs.name || cs.id}` });
+        }
+        for (const hd of HD_SPRITE_OPTIONS) {
+          if (seen.has(hd.id)) continue;
+          seen.add(hd.id);
+          opts.push(hd);
+        }
+        return opts;
+      },
+    });
 
     leftHead.append(leftHeadRow, this.projectSelectEl, seg);
     this.leftContentEl = document.createElement('div');
@@ -1237,9 +1265,10 @@ export class EcsWorkbenchView {
     return this.visible;
   }
 
-  public setLeftTab(tab: 'map' | 'hierarchy' | 'prefabs' | 'atlas'): void {
+  public setLeftTab(tab: 'map' | 'rules' | 'hierarchy' | 'prefabs' | 'atlas'): void {
     this.leftTab = tab;
     this.leftTabMapBtn.classList.toggle('is-active', tab === 'map');
+    this.leftTabRulesBtn.classList.toggle('is-active', tab === 'rules');
     this.leftTabHierarchyBtn.classList.toggle('is-active', tab === 'hierarchy');
     this.leftTabPrefabsBtn.classList.toggle('is-active', tab === 'prefabs');
     this.leftTabAtlasBtn.classList.toggle('is-active', tab === 'atlas');
@@ -1502,12 +1531,33 @@ export class EcsWorkbenchView {
           onOpenExternalImport: () => this.openExternalImportModal(),
         },
       );
+    } else if (this.leftTab === 'rules') {
+      this.worldRulesPanel.renderInto(
+        this.leftContentEl,
+        this.session.getProject(),
+        this.session,
+        this.runtime.getActiveRoomId(),
+      );
     } else if (this.leftTab === 'hierarchy') {
       this.renderHierarchyPane();
     } else if (this.leftTab === 'prefabs') {
       this.renderPrefabsPane();
     } else {
-      this.renderAtlasPane();
+      renderAtlasPanel(this.leftContentEl, this.atlas, this.session, {
+        onOpenExternalImport: () => this.openExternalImportModal(),
+        onOpenSpriteAtelier: () => {
+          if (this.callbacks.onOpenSpriteAtelierForTile) {
+            this.callbacks.onOpenSpriteAtelierForTile(this.mapState.layer);
+          } else {
+            this.callbacks.onOpenClassicWorkshop();
+          }
+        },
+        onSyncAtlasAndRefresh: () => {
+          this.previewGpu.syncAtlasToGpu();
+          this.callbacks.onAtlasMutated();
+          this.renderAllPanels();
+        },
+      });
     }
   }
 
@@ -1779,249 +1829,6 @@ export class EcsWorkbenchView {
     this.leftContentEl.append(search, addBtn, list);
   }
 
-  private renderAtlasPane(): void {
-    const stats = this.atlas.getAtlasStats();
-    const sheets = this.atlas.listSpriteSheets();
-
-    const statSec = document.createElement('div');
-    statSec.className = 'p7-section';
-    const stTitle = document.createElement('h3');
-    stTitle.className = 'p7-section-title';
-    stTitle.textContent = '多頁紋理圖集池狀態';
-
-    const kv = document.createElement('div');
-    kv.className = 'p7-kv-list p7-mono';
-    const rows: [string, string][] = [
-      ['啟用頁數', `${stats.pageCount} / ${stats.maxPages} 頁 (${stats.pageSize}px)`],
-      ['內建精靈', `${stats.builtinSprites}`],
-      ['動態精靈', `${stats.dynamicSprites}`],
-      ['精靈表數量', `${stats.spriteSheets}`],
-      ['圖集記憶體', `${(stats.totalBytes / (1024 * 1024)).toFixed(1)} MB`],
-    ];
-    for (const [k, v] of rows) {
-      const r = document.createElement('div');
-      r.className = 'p7-kv-row';
-      const s1 = document.createElement('span');
-      s1.textContent = k;
-      const s2 = document.createElement('span');
-      s2.textContent = v;
-      r.append(s1, s2);
-      kv.appendChild(r);
-    }
-    const openInteropBtn = document.createElement('button');
-    openInteropBtn.type = 'button';
-    openInteropBtn.className = 'p7-btn p7-btn-accent p7-select-full';
-    openInteropBtn.textContent = '匯入 Aseprite / LDtk / Tiled / ZIP';
-    openInteropBtn.addEventListener('click', () => this.openExternalImportModal());
-    statSec.append(stTitle, kv, openInteropBtn);
-
-    const sliceSec = document.createElement('div');
-    sliceSec.className = 'p7-section';
-    const slTitle = document.createElement('h3');
-    slTitle.className = 'p7-section-title';
-    slTitle.textContent = '精靈表切片匯入器';
-
-    const colsInput = document.createElement('input');
-    colsInput.type = 'number';
-    colsInput.min = '1';
-    colsInput.max = '16';
-    colsInput.value = '4';
-    colsInput.className = 'p7-input p7-mono';
-
-    const rowsInput = document.createElement('input');
-    rowsInput.type = 'number';
-    rowsInput.min = '1';
-    rowsInput.max = '16';
-    rowsInput.value = '2';
-    rowsInput.className = 'p7-input p7-mono';
-
-    const grid = document.createElement('div');
-    grid.className = 'p7-prop-grid';
-    const f1 = document.createElement('div');
-    f1.className = 'p7-field';
-    const l1 = document.createElement('label');
-    l1.textContent = '水平欄數 (Cols)';
-    f1.append(l1, colsInput);
-    const f2 = document.createElement('div');
-    f2.className = 'p7-field';
-    const l2 = document.createElement('label');
-    l2.textContent = '垂直列數 (Rows)';
-    f2.append(l2, rowsInput);
-    grid.append(f1, f2);
-
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = 'image/png,image/webp';
-    fileInput.className = 'panel-hidden';
-    fileInput.setAttribute('aria-label', '選擇本機 PNG 精靈表');
-    fileInput.addEventListener('change', () => {
-      const file = fileInput.files?.[0];
-      if (!file) return;
-      const cols = Math.max(1, Number(colsInput.value) || 4);
-      const rowsVal = Math.max(1, Number(rowsInput.value) || 2);
-      void this.importPngSpriteSheet(file, cols, rowsVal);
-    });
-
-    const uploadBtn = document.createElement('button');
-    uploadBtn.type = 'button';
-    uploadBtn.className = 'p7-btn';
-    uploadBtn.textContent = '選擇本機 PNG 精靈表...';
-    uploadBtn.addEventListener('click', () => {
-      fileInput.click();
-    });
-
-    const sampleBtn = document.createElement('button');
-    sampleBtn.type = 'button';
-    sampleBtn.className = 'p7-btn p7-btn-accent';
-    sampleBtn.textContent = '生成 4×2 星軌精靈表並切片';
-    sampleBtn.addEventListener('click', () => {
-      this.generateProceduralSampleSheet();
-    });
-
-    sliceSec.append(slTitle, grid, fileInput, uploadBtn, sampleBtn);
-
-    const listSec = document.createElement('div');
-    listSec.className = 'p7-section';
-    const lsTitle = document.createElement('h3');
-    lsTitle.className = 'p7-section-title';
-    lsTitle.textContent = '已切片精靈表清單';
-
-    if (sheets.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'p7-empty-note';
-      empty.textContent = '尚未匯入外部精靈表，可上傳 PNG 或一鍵生成範例精靈表測試多頁圖集池。';
-      listSec.append(lsTitle, empty);
-    } else {
-      listSec.appendChild(lsTitle);
-      for (const sh of sheets) {
-        const item = document.createElement('div');
-        item.className = 'p7-script-item';
-        const nm = document.createElement('strong');
-        nm.className = 'p7-item-title';
-        nm.textContent = sh.sheetId;
-        const meta = document.createElement('span');
-        meta.className = 'p7-meta-line p7-mono';
-        meta.textContent = `${sh.cols}×${sh.rows} 格 · ${sh.frameW}×${sh.frameH}px · 第 ${sh.pageIndex + 1} 頁`;
-        item.append(nm, meta);
-        listSec.appendChild(item);
-      }
-    }
-
-    const customSec = document.createElement('div');
-    customSec.className = 'p7-section';
-    const csHead = document.createElement('div');
-    csHead.className = 'p7-section-head';
-    const csTitle = document.createElement('h3');
-    csTitle.className = 'p7-section-title';
-    const customList = Object.values(this.session.getProject().customSprites ?? {});
-    csTitle.textContent = `專案自訂像素精靈 (${customList.length})`;
-    const csAddBtn = document.createElement('button');
-    csAddBtn.type = 'button';
-    csAddBtn.className = 'p7-btn p7-btn-xs p7-btn-accent';
-    csAddBtn.textContent = '+ 畫室繪製';
-    csAddBtn.addEventListener('click', () => {
-      if (this.callbacks.onOpenSpriteAtelierForTile) {
-        this.callbacks.onOpenSpriteAtelierForTile(this.mapState.layer);
-      } else {
-        this.callbacks.onOpenClassicWorkshop();
-      }
-    });
-    csHead.append(csTitle, csAddBtn);
-    customSec.appendChild(csHead);
-
-    if (customList.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'p7-empty-note';
-      empty.textContent = '尚未建立專案自訂精靈，可開啟像素畫室一鍵發佈或透過 MCP upsert_custom_sprite 生成。';
-      customSec.appendChild(empty);
-    } else {
-      for (const cs of customList) {
-        const row = document.createElement('div');
-        row.className = 'p7-custom-sprite-row';
-        const thumb = createAtlasThumbCanvas(this.atlas, cs.id, 32);
-        const meta = document.createElement('div');
-        meta.className = 'p7-custom-sprite-meta';
-        const nm = document.createElement('strong');
-        nm.className = 'p7-item-title';
-        nm.textContent = cs.name || cs.id;
-        const sub = document.createElement('span');
-        sub.className = 'p7-meta-line p7-mono';
-        sub.textContent = `${cs.width}×${cs.height} · ${cs.kind === 'procedural' ? `PBR:${cs.recipe?.pattern ?? 'proc'}` : '像素格'}`;
-        meta.append(nm, sub);
-        const delBtn = document.createElement('button');
-        delBtn.type = 'button';
-        delBtn.className = 'p7-btn p7-btn-xs';
-        delBtn.textContent = '刪';
-        delBtn.title = `移除自訂精靈 ${cs.id}`;
-        delBtn.addEventListener('click', () => {
-          this.session.dispatch({ type: 'remove_custom_sprite', spriteId: cs.id });
-        });
-        row.append(thumb, meta, delBtn);
-        customSec.appendChild(row);
-      }
-    }
-
-    this.leftContentEl.append(statSec, customSec, sliceSec, listSec);
-  }
-
-  private async importPngSpriteSheet(file: File, cols: number, rows: number): Promise<void> {
-    const bmp = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = bmp.width;
-    canvas.height = bmp.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      bmp.close();
-      return;
-    }
-    ctx.drawImage(bmp, 0, 0);
-    const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
-    bmp.close();
-    const cleanId = file.name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'sheet';
-    this.atlas.importSpriteSheet(cleanId, new Uint8Array(imgData.data.buffer), canvas.width, canvas.height, cols, rows);
-    this.previewGpu.syncAtlasToGpu();
-    this.callbacks.onAtlasMutated();
-    this.renderAllPanels();
-  }
-
-  private generateProceduralSampleSheet(): void {
-    const cols = 4;
-    const rows = 2;
-    const fw = 32;
-    const fh = 32;
-    const imgW = cols * fw;
-    const imgH = rows * fh;
-    const rgba = new Uint8Array(imgW * imgH * 4);
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const hueR = r === 0 ? 245 : 56;
-        const hueG = r === 0 ? 158 + c * 18 : 189;
-        const hueB = r === 0 ? 11 + c * 22 : 248 - c * 18;
-        for (let y = 0; y < fh; y++) {
-          for (let x = 0; x < fw; x++) {
-            const dx = x - fw * 0.5;
-            const dy = y - fh * 0.5;
-            const dist = Math.hypot(dx, dy);
-            const rad = 8 + c * 1.6;
-            if (dist <= rad) {
-              const dst = ((r * fh + y) * imgW + (c * fw + x)) * 4;
-              const edge = dist > rad - 2.5 ? 1.15 : 0.9;
-              rgba[dst] = Math.min(255, Math.round(hueR * edge));
-              rgba[dst + 1] = Math.min(255, Math.round(hueG * edge));
-              rgba[dst + 2] = Math.min(255, Math.round(hueB * edge));
-              rgba[dst + 3] = 255;
-            }
-          }
-        }
-      }
-    }
-    const id = `star_crystal_sheet_${this.atlas.listSpriteSheets().length + 1}`;
-    this.atlas.importSpriteSheet(id, rgba, imgW, imgH, cols, rows);
-    this.previewGpu.syncAtlasToGpu();
-    this.callbacks.onAtlasMutated();
-    this.renderAllPanels();
-  }
-
   private mutateLiveMaterial(
     entityId: string,
     patch: { metallic?: number; roughness?: number; emissive?: number },
@@ -2266,310 +2073,23 @@ export class EcsWorkbenchView {
   }
 
   private renderPrefabInspector(proj: EcsProjectV2, prefab: EcsPrefabDef): void {
-    this.rightTitleEl.textContent = `Prefab 模板：${prefab.name}`;
-    const instCount = this.session.getPrefabInstanceCount(prefab.id);
-
-    // Header Section
-    const headSec = document.createElement('div');
-    headSec.className = 'p7-section';
-
-    const topRow = document.createElement('div');
-    topRow.className = 'p7-section-head';
-    const titleEl = document.createElement('h3');
-    titleEl.className = 'p7-section-title';
-    titleEl.textContent = `模板 ID：${prefab.id}`;
-    const backBtn = document.createElement('button');
-    backBtn.type = 'button';
-    backBtn.className = 'p7-btn p7-btn-xs';
-    backBtn.textContent = '返回實體';
-    backBtn.addEventListener('click', () => {
-      this.selectedPrefabId = null;
-      this.renderAllPanels();
+    renderPrefabInspectorPanel(this.rightTitleEl, this.rightContentEl, proj, prefab, this.session, {
+      componentCatalog: COMPONENT_CATALOG,
+      spriteOptions: HD_SPRITE_OPTIONS,
+      createSliderRow: (...args) => this.createSliderRow(...args),
+      onBackToEntity: () => {
+        this.selectedPrefabId = null;
+        this.renderAllPanels();
+      },
+      onInstantiatePrefab: (prefabId) => this.instantiatePrefabOntoViewport(prefabId),
+      onSelectInstance: (entityId) => {
+        this.selectedEntityId = entityId;
+        this.selectedPrefabId = null;
+        this.renderAllPanels();
+      },
+      onMutateLiveMaterial: (prefabId, patch) => this.mutateLivePrefabMaterial(prefabId, patch),
+      onMutateLiveLight: (prefabId, patch) => this.mutateLivePrefabLight(prefabId, patch),
     });
-    topRow.append(titleEl, backBtn);
-
-    const syncMeta = document.createElement('div');
-    syncMeta.className = 'p7-meta-line p7-mono';
-    syncMeta.textContent = `同步連結 ${instCount} 個實例 · 修改模板屬性將自動傳播至所有未覆寫實例`;
-
-    const nameField = document.createElement('div');
-    nameField.className = 'p7-field';
-    const nameLbl = document.createElement('label');
-    nameLbl.textContent = '模板顯示名稱';
-    const nameInp = document.createElement('input');
-    nameInp.type = 'text';
-    nameInp.className = 'p7-input';
-    nameInp.value = prefab.name;
-    nameInp.setAttribute('aria-label', '模板顯示名稱');
-    nameInp.addEventListener('change', () => {
-      if (nameInp.value.trim()) {
-        this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, name: nameInp.value.trim() });
-      }
-    });
-    nameField.append(nameLbl, nameInp);
-
-    const actRow = document.createElement('div');
-    actRow.className = 'p7-prefab-actions';
-    const spawnBtn = document.createElement('button');
-    spawnBtn.type = 'button';
-    spawnBtn.className = 'p7-btn p7-btn-accent';
-    spawnBtn.textContent = '+ 立即生成實例';
-    spawnBtn.addEventListener('click', () => this.instantiatePrefabOntoViewport(prefab.id));
-    actRow.appendChild(spawnBtn);
-
-    headSec.append(topRow, syncMeta, nameField, actRow);
-
-    // Component Attach / Detach on Prefab
-    const compSec = document.createElement('div');
-    compSec.className = 'p7-section';
-    const compTitle = document.createElement('h3');
-    compTitle.className = 'p7-section-title';
-    compTitle.textContent = '模板元件插槽';
-    const compList = document.createElement('div');
-    compList.className = 'p7-comp-list';
-
-    const compRec = prefab.components as unknown as Record<string, unknown>;
-    const unmounted: typeof COMPONENT_CATALOG = [];
-    for (const def of COMPONENT_CATALOG) {
-      if (compRec[def.key] !== undefined) {
-        const row = document.createElement('div');
-        row.className = 'p7-comp-row';
-        const nm = document.createElement('span');
-        nm.className = 'p7-comp-name';
-        nm.textContent = def.label;
-        const rmBtn = document.createElement('button');
-        rmBtn.type = 'button';
-        rmBtn.className = 'p7-btn p7-btn-danger p7-btn-xs';
-        rmBtn.textContent = '移除';
-        rmBtn.addEventListener('click', () => {
-          this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, detachComponent: def.key });
-        });
-        row.append(nm, rmBtn);
-        compList.appendChild(row);
-      } else {
-        unmounted.push(def);
-      }
-    }
-    compSec.append(compTitle, compList);
-    if (unmounted.length > 0) {
-      const attachBar = document.createElement('div');
-      attachBar.className = 'p7-attach-bar';
-      const sel = document.createElement('select');
-      sel.className = 'p7-select';
-      sel.setAttribute('aria-label', '選擇要掛載至模板的元件');
-      for (const def of unmounted) {
-        const opt = document.createElement('option');
-        opt.value = def.key;
-        opt.textContent = def.label;
-        sel.appendChild(opt);
-      }
-      const addBtn = document.createElement('button');
-      addBtn.type = 'button';
-      addBtn.className = 'p7-btn p7-btn-accent';
-      addBtn.textContent = '+ 掛載至模板';
-      addBtn.addEventListener('click', () => {
-        const chosen = unmounted.find((u) => u.key === sel.value) ?? unmounted[0];
-        if (!chosen) return;
-        this.session.dispatch({
-          type: 'update_prefab',
-          prefabId: prefab.id,
-          attachComponent: { component: chosen.key, value: chosen.createDefault() },
-        });
-      });
-      attachBar.append(sel, addBtn);
-      compSec.appendChild(attachBar);
-    }
-
-    const sections: HTMLElement[] = [headSec, compSec];
-
-    // Prefab PBR Material Inspector (propagates live to all linked clones!)
-    if (prefab.components.sprite) {
-      const sp = prefab.components.sprite;
-      const matSec = document.createElement('div');
-      matSec.className = 'p7-section';
-      const matTitle = document.createElement('h3');
-      matTitle.className = 'p7-section-title';
-      matTitle.textContent = '模板 PBR 材質（同步傳播）';
-
-      const sprField = document.createElement('div');
-      sprField.className = 'p7-field';
-      const sprLbl = document.createElement('label');
-      sprLbl.textContent = '模板精靈資產';
-      const sprSel = document.createElement('select');
-      sprSel.className = 'p7-select p7-mono';
-      sprSel.setAttribute('aria-label', '模板精靈紋理選擇');
-      const seen = new Set<string>();
-      for (const cs of Object.values(proj.customSprites ?? {})) {
-        seen.add(cs.id);
-        const o = document.createElement('option');
-        o.value = cs.id;
-        o.textContent = `[自訂] ${cs.name || cs.id} (${cs.width}×${cs.height})`;
-        sprSel.appendChild(o);
-      }
-      for (const opt of HD_SPRITE_OPTIONS) {
-        if (seen.has(opt.id)) continue;
-        seen.add(opt.id);
-        const o = document.createElement('option');
-        o.value = opt.id;
-        o.textContent = opt.label;
-        sprSel.appendChild(o);
-      }
-      if (!seen.has(sp.sprite)) {
-        const o = document.createElement('option');
-        o.value = sp.sprite;
-        o.textContent = sp.sprite;
-        sprSel.appendChild(o);
-      }
-      sprSel.value = sp.sprite;
-      sprSel.addEventListener('change', () => {
-        this.session.dispatch({
-          type: 'update_prefab',
-          prefabId: prefab.id,
-          patch: { sprite: { sprite: sprSel.value as SpriteId } },
-        });
-      });
-      sprField.append(sprLbl, sprSel);
-
-      const sliders = document.createElement('div');
-      sliders.className = 'p7-slider-group';
-      sliders.append(
-        this.createSliderRow(
-          '模板金屬度 Metallic',
-          0,
-          1,
-          0.05,
-          sp.metallic ?? 0.25,
-          (v) => v.toFixed(2),
-          (v) => this.mutateLivePrefabMaterial(prefab.id, { metallic: v }),
-          (v) => this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, patch: { sprite: { metallic: v } } }),
-        ),
-        this.createSliderRow(
-          '模板粗糙度 Roughness',
-          0.05,
-          1,
-          0.05,
-          sp.roughness ?? 0.42,
-          (v) => v.toFixed(2),
-          (v) => this.mutateLivePrefabMaterial(prefab.id, { roughness: v }),
-          (v) => this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, patch: { sprite: { roughness: v } } }),
-        ),
-        this.createSliderRow(
-          '模板自發光 Emissive',
-          0,
-          1.5,
-          0.05,
-          sp.emissive ?? 0,
-          (v) => v.toFixed(2),
-          (v) => this.mutateLivePrefabMaterial(prefab.id, { emissive: v }),
-          (v) => this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, patch: { sprite: { emissive: v } } }),
-        ),
-      );
-      matSec.append(matTitle, sprField, sliders);
-      sections.push(matSec);
-    }
-
-    // Prefab Light Inspector
-    if (prefab.components.light) {
-      const lt = prefab.components.light;
-      const lightSec = document.createElement('div');
-      lightSec.className = 'p7-section';
-      const lightTitle = document.createElement('h3');
-      lightTitle.className = 'p7-section-title';
-      lightTitle.textContent = '模板動態光源（同步傳播）';
-
-      const colRow = document.createElement('div');
-      colRow.className = 'p7-color-row';
-      const colLbl = document.createElement('span');
-      colLbl.textContent = '模板光色 Color';
-      const colRight = document.createElement('div');
-      colRight.className = 'p7-toolbar-group';
-      const colHexText = document.createElement('span');
-      colHexText.className = 'p7-mono p7-slider-val';
-      colHexText.textContent = lt.color.toUpperCase();
-      const colInput = document.createElement('input');
-      colInput.type = 'color';
-      colInput.className = 'p7-color-input';
-      colInput.value = lt.color;
-      colInput.setAttribute('aria-label', '模板光源顏色');
-      colInput.addEventListener('input', () => {
-        colHexText.textContent = colInput.value.toUpperCase();
-        this.mutateLivePrefabLight(prefab.id, { color: colInput.value });
-      });
-      colInput.addEventListener('change', () => {
-        this.session.dispatch({
-          type: 'update_prefab',
-          prefabId: prefab.id,
-          patch: { light: { color: colInput.value } },
-        });
-      });
-      colRight.append(colHexText, colInput);
-      colRow.append(colLbl, colRight);
-
-      const lightSliders = document.createElement('div');
-      lightSliders.className = 'p7-slider-group';
-      lightSliders.append(
-        this.createSliderRow(
-          '模板照射半徑 Radius',
-          16,
-          180,
-          4,
-          lt.radius,
-          (v) => `${Math.round(v)}px`,
-          (v) => this.mutateLivePrefabLight(prefab.id, { radius: v }),
-          (v) => this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, patch: { light: { radius: v } } }),
-        ),
-        this.createSliderRow(
-          '模板光照強度 Intensity',
-          0.1,
-          2.0,
-          0.05,
-          lt.intensity ?? 0.9,
-          (v) => v.toFixed(2),
-          (v) => this.mutateLivePrefabLight(prefab.id, { intensity: v }),
-          (v) => this.session.dispatch({ type: 'update_prefab', prefabId: prefab.id, patch: { light: { intensity: v } } }),
-        ),
-      );
-      lightSec.append(lightTitle, colRow, lightSliders);
-      sections.push(lightSec);
-    }
-
-    // Linked Instances List
-    const linked = proj.entities.filter((e) => getEntityPrefabId(e) === prefab.id);
-    const linkSec = document.createElement('div');
-    linkSec.className = 'p7-section';
-    const linkTitle = document.createElement('h3');
-    linkTitle.className = 'p7-section-title';
-    linkTitle.textContent = `已連結實例清單 (${linked.length})`;
-    linkSec.appendChild(linkTitle);
-    if (linked.length === 0) {
-      const note = document.createElement('p');
-      note.className = 'p7-empty-note';
-      note.textContent = '目前尚無場景實例連結至此模板，可點擊上方「+ 立即生成實例」。';
-      linkSec.appendChild(note);
-    } else {
-      for (const inst of linked) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'p7-entity-row';
-        const nm = document.createElement('span');
-        nm.className = 'p7-entity-name';
-        nm.textContent = inst.name;
-        const meta = document.createElement('span');
-        meta.className = 'p7-meta-line p7-mono';
-        const ov = countEntityOverrides(inst);
-        meta.textContent = `${inst.id} · ${ov} 項覆寫`;
-        btn.append(nm, meta);
-        btn.addEventListener('click', () => {
-          this.selectedEntityId = inst.id;
-          this.selectedPrefabId = null;
-          this.renderAllPanels();
-        });
-        linkSec.appendChild(btn);
-      }
-    }
-    sections.push(linkSec);
-
-    this.rightContentEl.append(...sections);
   }
 
   private renderRightPanel(): void {
@@ -3704,6 +3224,7 @@ export class EcsWorkbenchView {
   public destroy(): void {
     this.unsubSession();
     this.ac.abort();
+    this.worldRulesPanel.destroy();
     this.externalImportModal.destroy();
     this.eventGraphView.destroy();
     this.previewGpu.dispose();

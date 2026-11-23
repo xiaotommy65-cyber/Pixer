@@ -5,45 +5,14 @@ import {
   buildSampleAsepriteFile,
   buildSampleLdtkSample,
   buildSampleTiledZlibSample,
-  loadExternalInteropFiles,
-  type DecodedPngImage,
   type InteropBundleFile,
   type InteropCommitOptions,
   type InteropImportResult,
 } from '../core/interop/index.ts';
+import { InteropWorkerClient } from './InteropWorkerClient.ts';
 
 export interface ExternalImportModalCallbacks {
   onCommit: (result: InteropImportResult, options: InteropCommitOptions) => void;
-}
-
-async function decodePngInBrowser(bytes: Uint8Array): Promise<DecodedPngImage | null> {
-  try {
-    const copy = new Uint8Array(bytes.byteLength);
-    copy.set(bytes);
-    const blob = new Blob([copy], { type: 'image/png' });
-    if (typeof createImageBitmap === 'function') {
-      const bmp = await createImageBitmap(blob);
-      const canvas = document.createElement('canvas');
-      canvas.width = bmp.width;
-      canvas.height = bmp.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        bmp.close();
-        return null;
-      }
-      ctx.drawImage(bmp, 0, 0);
-      const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
-      bmp.close();
-      return {
-        width: imgData.width,
-        height: imgData.height,
-        rgba: new Uint8Array(imgData.data.buffer.slice(0)),
-      };
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 function renderCustomSpriteThumb(def: EcsCustomSpriteDef, boxSize = 48): HTMLCanvasElement {
@@ -84,12 +53,13 @@ const FORMAT_BADGE_LABEL: Record<InteropImportResult['format'], string> = {
 
 /**
  * Workstation External Standard Format Importer Modal:
- * Supports Aseprite (.ase/.aseprite + JSON/PNG), LDtk (.ldtk), Tiled (.tmj/.json), and .zip bundles,
- * plus 3 built-in spec-compliant samples for instant zero-friction evaluation.
+ * Supports Aseprite (.ase/.aseprite + JSON/PNG), LDtk (.ldtk), Tiled (.tmj/.json), and .zip bundles
+ * parsed off the main thread via `InteropWorkerClient`.
  */
 export class ExternalImportModalView {
   public readonly element: HTMLDivElement;
   private readonly ac = new AbortController();
+  private readonly workerClient = new InteropWorkerClient();
   private readonly callbacks: ExternalImportModalCallbacks;
 
   private readonly fileInput: HTMLInputElement;
@@ -348,10 +318,10 @@ export class ExternalImportModalView {
 
   private async loadBundleFiles(files: InteropBundleFile[]): Promise<void> {
     this.currentFiles = files;
-    this.setStatus('正在解析外部檔案...', false);
+    this.setStatus('正在於背景 Worker 解析外部檔案...', false);
     this.commitBtn.disabled = true;
     try {
-      const res = await loadExternalInteropFiles(files, (bytes) => decodePngInBrowser(bytes), {
+      const res = await this.workerClient.parseFiles(files, {
         wallExtrudeH: this.wallExtrudeH,
       });
       this.parsedResult = res;
@@ -582,6 +552,7 @@ export class ExternalImportModalView {
   }
 
   public destroy(): void {
+    this.workerClient.destroy();
     this.ac.abort();
     this.element.remove();
   }

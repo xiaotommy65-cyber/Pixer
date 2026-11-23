@@ -16,7 +16,10 @@ export default defineConfig(() => {
               { name: 'vendor-capacitor', test: /node_modules\/@capacitor/ },
               { name: 'vendor-utils', test: /node_modules\/(fflate|maxrects-packer)/ },
               { name: 'cartridges', test: /src\/game\// },
-              { name: 'ecs-workbench', test: /src\/ui\/(EcsWorkbenchView|EcsMapDesignerPanel|EventGraphEditorView|ExternalImportModalView|SpriteAtelierView)/ },
+              {
+                name: 'ecs-workbench',
+                test: /src\/ui\/(EcsWorkbenchView|EcsWorkbenchAtlasPanel|EcsWorkbenchPrefabInspector|EcsWorldRulesInspectorPanel|EcsMapDesignerPanel|EventGraphEditorView|ExternalImportModalView|InteropWorkerClient|SpriteAtelierView)/,
+              },
               { name: 'core-ecs-interop', test: /src\/core\/(ecs|interop|ai)\// },
             ],
           },

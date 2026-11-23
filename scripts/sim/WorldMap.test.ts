@@ -229,6 +229,16 @@ test('Engine Core Purity Gate: core runtime & workbench contain ZERO hardcoded D
 
   const panelSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsMapDesignerPanel.ts'), 'utf8');
   assert.equal(panelSrc.includes('魔王城'), false, 'Map Designer Panel UI must use generic multi-room map labels');
+
+  const rulesPanelSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsWorldRulesInspectorPanel.ts'), 'utf8');
+  for (const token of workbenchForbiddenTokens) {
+    assert.equal(
+      rulesPanelSrc.includes(token),
+      false,
+      `M2 Rules Inspector UI must NOT hardcode game-specific token "${token}"`,
+    );
+  }
+  assert.equal(rulesPanelSrc.includes('魔王城'), false, 'M2 Rules Inspector UI must stay 100% theme-agnostic');
 });
 
 test('Non-Castle Proof: a custom Sci-Fi Space Station game runs purely from data with zero engine changes', () => {
@@ -999,4 +1009,106 @@ test('M1 AI-Native MCP Proof: Author a 2-room Sci-Fi Orbital Deck purely via MCP
   const report = playRes.structuredContent as { ok: boolean; activeRoomId: string; failureHints: string[] };
   assert.equal(report.ok, true, `Sci-Fi playtest failed: ${report.failureHints.join('; ')}`);
   assert.equal(report.activeRoomId, 'reactor_core');
+});
+
+test('M2 World Rules Inspector Parity: portals, interactions, AI profiles, heroConfig & HUD round-trip with Undo/Redo and live BFS diagnostics across PA-14 & PA-15', () => {
+  for (const baseProj of [OBSIDIAN_CITADEL_PROJECT, EMERALD_RUINS_PROJECT]) {
+    const session = new EcsStudioSession(baseProj);
+    const startRooms = session.getProject().worldMap!.rooms;
+    assert.ok(startRooms.length >= 2);
+    const r0 = startRooms[0].id;
+    const r1 = startRooms[1].id;
+
+    // 1. Add a locked portal requiring a non-existent global -> BFS detects soft-lock risk immediately
+    const addPortal = session.dispatch({
+      type: 'upsert_portal',
+      portal: {
+        id: 'm2_test_portal',
+        name: 'M2 Secret Gate',
+        fromRoomId: r0,
+        col: 2,
+        row: 2,
+        cols: 2,
+        rows: 1,
+        toRoomId: r1,
+        targetX: 96,
+        targetY: 96,
+        requiresGlobal: 'm2_missing_key',
+        lockedHint: '需要 M2 鑰匙',
+      },
+    });
+    assert.equal(addPortal.ok, true);
+    assert.ok(session.getProject().worldMap!.portals.some((p) => p.id === 'm2_test_portal'));
+
+    // 2. Upsert interaction rule, AI profile, heroConfig & HUD gauge transactionally
+    assert.equal(
+      session.dispatch({
+        type: 'upsert_interaction_rule',
+        rule: {
+          tag: 'm2_beacon',
+          trigger: 'slash_or_touch',
+          radius: 36,
+          oneShot: true,
+          setGlobal: 'm2_missing_key',
+          setGlobalValue: 1,
+          scoreDelta: 250,
+          popupText: 'M2 信標啟動',
+        },
+      }).ok,
+      true,
+    );
+    assert.equal(
+      session.dispatch({
+        type: 'upsert_ai_profile',
+        tag: 'm2_sentinel',
+        profile: {
+          chaseRange: 160,
+          stopRange: 22,
+          moveSpeed: 64,
+          contactDamage: 1,
+          contactRange: 24,
+          scoreOnDefeat: 300,
+          phase2HpRatio: 0.45,
+          phase2Speed: 88,
+        },
+      }).ok,
+      true,
+    );
+    assert.equal(
+      session.dispatch({
+        type: 'set_world_map_config',
+        heroConfig: {
+          ...(session.getProject().worldMap!.heroConfig ?? {}),
+          dashSpeedMultiplier: 2.8,
+        },
+      }).ok,
+      true,
+    );
+    assert.equal(
+      session.dispatch({
+        type: 'upsert_hud_gauge',
+        gauge: { kind: 'text', label: 'M2_KEY', globalKey: 'm2_missing_key', x: 16, y: 44, color: '#38bdf8' },
+      }).ok,
+      true,
+    );
+
+    const edited = session.getProject();
+    assert.equal(edited.worldMap!.heroConfig?.dashSpeedMultiplier, 2.8);
+    assert.ok(edited.worldMap!.interactions?.some((r) => r.tag === 'm2_beacon'));
+    assert.ok(edited.worldMap!.aiProfiles?.m2_sentinel?.phase2Speed === 88);
+    assert.ok(edited.hud.some((h) => h.label === 'M2_KEY'));
+
+    // 3. Undo all 5 edits cleanly back to original project state and Redo
+    for (let i = 0; i < 5; i++) {
+      assert.equal(session.undo().ok, true);
+    }
+    assert.equal(session.getProject().worldMap!.portals.some((p) => p.id === 'm2_test_portal'), false);
+    assert.equal(session.getProject().hud.some((h) => h.label === 'M2_KEY'), false);
+
+    const reachAfterUndo = analyzeWorldMapReachability(session.getProject());
+    assert.equal(reachAfterUndo.pass, true, `${baseProj.meta.id} must remain 0 soft-locks after Undo`);
+
+    assert.equal(session.redo().ok, true);
+    assert.ok(session.getProject().worldMap!.portals.some((p) => p.id === 'm2_test_portal'));
+  }
 });

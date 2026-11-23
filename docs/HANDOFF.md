@@ -1,24 +1,25 @@
-# Pixer — 工程交接書（Engineering Handoff · Phase 0 Complete → Phase 1）
+# Pixer — 工程交接書（Engineering Handoff · Phase 1 Complete → Phase 2）
 
-**交接基線**：Phase 0 完成（砍除 PA-13 音遊／`Stage3DPipeline.ts` 與全部 AI 合成音訊改採 `ExternalAudioBank`、精簡卡匣聚焦 `PA-14`/`PA-15`/`PA-01`/`PA-02`/`PA-11`/`PA-12`、補齊 MCP UTF-8 與 Interop 解壓炸彈防護、CI 補跑全套 48 項單測與主包瘦身至 217 kB，全線綠燈）  
-**下階段主線**：**Phase 1｜`EcsWorkbenchView` 模組拆分（含 M2 規則/傳送門/AI 可視化檢視器）＋ Web Worker 解包疏導**  
-**雲端目標架構**：Cloudflare（Pages + Workers + R2 CDN）＋ Supabase（PostgreSQL + Auth + RLS）
+**交接基線**：Phase 0 + Phase 1 完成（外部音訊層 `ExternalAudioBank`、精簡旗艦卡匣、MCP/Interop 安全硬化、M2「規則／機關／AI／傳送門／HUD」可視化檢視器、`EcsWorkbenchView` 子面板抽離、以及 `.zip`/`.aseprite`/`.ldtk`/`.tmj` Web Worker 背景解包疏導，全線綠燈）  
+**下階段主線**：**Phase 2｜Cloudflare R2 + Supabase（PostgreSQL + Auth + RLS）雲端資產、外部音訊包與作品短網址分享層**
 
 ---
 
-## 1. Phase 0 已驗收成果摘要
+## 1. Phase 1 已驗收成果
 
-| 項目 | 具體成果 | 狀態 |
+| 模組 | 成果與驗證 | 狀態 |
 |---|---|---|
-| **音訊減法與外部化** | 移除 `PA-13` 4K 音遊（`src/core/rhythm/`、`Stage3DPipeline.ts`、`Rhythm*View`、`rhythm.css`）與所有 AI 程式合成器（`ToySynth` 振盪器、`BgmSequencer`、`SynthPresets`、`AudioPatterns`）；替換為純外部資產 `ExternalAudioBank.ts`（CDN 串流 BGM + LRU `AudioBuffer` SFX + 靜默安全降級，並受 `ArchitectureTests.ts` 零振盪器守門員保護） | **DONE** |
-| **卡匣收斂大瘦身** | 移除 `PA-03..PA-10`、`LegacyCartridgePack`、`RpgOverlayView`、`ChronicleOverlayView`、`WorkshopTemplates`；保留使用者指定之 `PA-01`《草莓雲海跳跳》、`PA-02`《糖霜流星號》與 True ECS 旗艦 `PA-14`、`PA-15`（及 ECS 範例 `PA-11`/`PA-12`），全庫減少 **~28,068 LOC**，首屏主包由 **946.95 kB → 217.47 kB（-77%）**，零 Vite 500 kB 警告 | **DONE** |
-| **安全與協定硬化** | 修復 `scripts/pixer-mcp.ts` 多位元組 UTF-8 `Content-Length` 切幀 Bug；於 `InteropBundleLoader`、`AsepriteParser`、`TiledImporter`、`EcsCustomSpriteCompiler` 導入嚴格 ZIP/Zlib/Gzip 炸彈上限與路徑穿越阻擋 | **DONE** |
-| **CI 與衛生閘門** | 移除過期 `package-lock.json`（統一 `bun.lock`）、新增 `npm run test` 並納入 `.github/workflows/deploy.yml`、穩定化 `Module 3` 記憶體基準測試、同步 `README.md` / `AGENTS.md` / `metadata.json` / `docs/ROADMAP.md` | **DONE** |
+| **M2 世界規則可視化檢視器** | [`EcsWorldRulesInspectorPanel.ts`](src/ui/EcsWorldRulesInspectorPanel.ts) 接入工作站左側「規則」分頁：支援 `portals`、`interactions`、`aiProfiles`、`heroConfig`、`hud[]` 即時表單編輯、全交易式 Undo/Redo、以及頂部即時 BFS 軟鎖預言機警告；通過 `Engine Core Purity Gate` 與 `PA-14`/`PA-15` 雙主題單測 | **DONE** |
+| **工作站巨型單檔拆解** | 抽離 [`EcsWorkbenchAtlasPanel.ts`](src/ui/EcsWorkbenchAtlasPanel.ts) 與 [`EcsWorkbenchPrefabInspector.ts`](src/ui/EcsWorkbenchPrefabInspector.ts)，`EcsWorkbenchView.ts` 由 3,712 行降至 ~3,230 行 | **DONE** |
+| **Web Worker 外部解析疏導** | 新增 [`src/workers/interop.worker.ts`](src/workers/interop.worker.ts) 與 [`InteropWorkerClient.ts`](src/ui/InteropWorkerClient.ts)，於背景執行緒解壓與解碼 PNG/Aseprite/LDtk/Tiled/ZIP（含 30 秒逾時保護與無 Worker 自動降級），接入 `ExternalImportModalView` 並於 `destroy()` 乾淨終止 | **DONE** |
 
 ---
 
-## 2. 下一階段 Phase 1 切入點
+## 2. 下一階段 Phase 2 切入點（已核准方案 A）
 
-1. **拆分 `src/ui/EcsWorkbenchView.ts`（3,712 行）**並導入 M2「世界規則、傳送門、AI 與 HUD」可視化子檢視器（走既有 `EcsStudioSession` 交易式指令與 `analyzeWorldMapReachability` 軟鎖診斷）。
-2. **建立 `interop.worker.ts`**：將 `.zip`/`.aseprite`/`.ldtk`/`.tmj` 解析移出 60fps 主執行緒。
-3. **動態切包**：將工作站與掌機殼以 `import()` 延遲載入，為 Phase 2（Cloudflare R2 + Supabase 雲端資產／存檔／短網址分享）鋪路。
+1. **Supabase Schema + RLS (`supabase/migrations/`)**：建立 `projects`, `project_revisions`, `user_saves` 資料表與嚴格 Row Level Security 策略。
+2. **Cloudflare Workers Edge API (`workers/api/` · Hono + Zod)**：
+   - `GET/PUT /api/projects/:slug`（作品發布、ETag 樂觀鎖、版本紀錄）
+   - `POST /api/assets/presign`（白名單副檔名 `.opus`/`.mp3`/`.png`/`.json` + 容量上限核發 R2 上傳憑證）
+   - `POST /api/ai/*` 與 `POST /api/mcp`（Phase 3 接通 `RemoteAiProvider` 與 Streamable HTTP MCP）
+3. **前端雲端同步客戶端 (`src/core/cloud/CloudSyncClient.ts`)**：支援 `?play=<slug>` 分享網址直開遊玩、跨裝置雲端存檔合併與 R2 外部音訊包載入。

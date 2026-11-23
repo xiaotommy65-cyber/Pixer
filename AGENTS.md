@@ -25,8 +25,8 @@
 - `src/assets/` — `TextureAtlas.ts` (8-page `1024×1024` Atlas Pool + MaxRectsBin + PNG Slicer), `AtlasSpritesData.ts`, `src/assets/sprites/*` (`CastleSprites`, `HdMaterialSprites`, `AutoTileSprites`, `PixelFontData`), `WorkshopRecipes.ts`.
 - `src/game/` — `BuiltinCartridges.ts`: `PA-14` (`obsidianCitadel/`), `PA-15` (`emeraldRuins/`), `PA-01` (`cloudberry/`), `PA-02` (`sugarStarlight/`), `PA-11` (`rhythmBastion/`), `PA-12` (`astralRift/`).
 
-### `src/ui/` & `src/styles/` — Single Workstation & Handheld Showcase
-- Workstation: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (lazy `previewGpu`), `EcsMapDesignerPanel.ts`, `EventGraphEditorView.ts`, `ExternalImportModalView.ts`, `SpriteAtelierView.ts`.
+### `src/ui/`, `src/workers/` & `src/styles/` — Single Workstation, Web Worker Offload & Handheld Showcase
+- Workstation: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (lazy `previewGpu`), `EcsMapDesignerPanel.ts`, `EcsWorldRulesInspectorPanel.ts` (M2 rules/portals/AI/HUD + BFS oracle), `EcsWorkbenchAtlasPanel.ts`, `EcsWorkbenchPrefabInspector.ts`, `EventGraphEditorView.ts`, `ExternalImportModalView.ts`, `InteropWorkerClient.ts`, `src/workers/interop.worker.ts`, `SpriteAtelierView.ts`.
 - Arcade Shell: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`, `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `MomoMascot.ts`, `CardArt.ts`, `BrowserAssetLoader.ts`.
 - HUDs/Native/Styles: `ShmupOverlayView.ts`, `SystemSettingsDrawerView.ts`, `VirtualGamepadInput.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `PixelIcons.ts`, `dom.ts`; `src/styles/{studio7,atelier,switch,lobby}.css`.
 
