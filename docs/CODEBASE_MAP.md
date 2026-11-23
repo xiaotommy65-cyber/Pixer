@@ -97,10 +97,9 @@ flowchart LR
   - Input DSP: `InputPipeline.ts`, `InputMap.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `WebGamepadSampler.ts`.
   - HAL: `SystemHal.ts`, `HapticEngine.ts`.
 - **`src/core/types/` (5 files, 754L)**: `WorldTypes.ts` barrel → `SceneTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `CartridgeTypes.ts`.
-- **`src/core/sim/` (28 files, 16,089L)** & **`src/core/editor/` (3 files, 1,561L)** *(Legacy Data Runtime + Shared Primitives)*
-  - Actively used by `PA-01` & `PA-02`: `DataCartridgeRuntime.ts` (3,165L), `DataRuntimeShmup.ts` (1,112L), `GenreControllers.ts` (1,489L), `CartridgeSchema.ts` (957L), `TilemapGrid.ts`, `SoaEntityPool.ts`, `EventActionVm.ts`, `JuiceSystem.ts`, `DualPerspectiveRuntime.ts`, `PerspectiveProjector.ts`, `ProceduralStageCompiler.ts`, `ProceduralVisualRig.ts`, `OrthogonalArt.ts`, `AnimationStateMachine.ts`, `BehaviorTree.ts`, `TweenSystem.ts`, `CardDeckEngine.ts` (976L), `FighterFrameEngine.ts` (791L).
+- **`src/core/sim/` (19 files, 13,411L)** & **`src/core/editor/` (3 files, 1,561L)** *(Legacy Data Runtime + Shared Primitives)*
+  - Actively used by `PA-01` & `PA-02`: `DataCartridgeRuntime.ts` (3,165L), `DataRuntimeShmup.ts` (1,112L), `GenreControllers.ts` (1,489L), `CartridgeSchema.ts` (957L), `TilemapGrid.ts`, `SoaEntityPool.ts`, `EventActionVm.ts`, `JuiceSystem.ts`, `DualPerspectiveRuntime.ts`, `PerspectiveProjector.ts`, `ProceduralStageCompiler.ts`, `ProceduralVisualRig.ts`, `OrthogonalArt.ts`, `AnimationStateMachine.ts`, `BehaviorTree.ts`, `TweenSystem.ts`, `CardDeckEngine.ts` (976L), `FighterFrameEngine.ts` (791L), `GridPathfinder.ts` (522L).
   - *Legacy AgentBridge-only*: `StudioSession.ts` (231L), `StudioCommands.ts` (1,013L), `StudioPlaytestDiag.ts` (317L).
-  - *Dead in prod (only imported by old tests)*: `WorldKernel.ts`, `WorldEntitiesStep.ts`, `WorldHeroPhysics.ts`, `WorldInternalTypes.ts`, `WorldSnapshot.ts`, `Archetypes.ts`, `RuleMatrix.ts`, `CameraDirector.ts`, `CutsceneSequencer.ts`, `GridPathfinder.ts` (**10 files, 3,240 LOC**).
 
 ### B. Assets, Games & Edge Cloud
 - **`src/assets/` (15 files, 4,952L)**: `TextureAtlas.ts` (740L), `AtlasSpritesData.ts`, `WorkshopRecipes.ts`, `sprites/*` (`CastleSprites`, `HdMaterialSprites`, `PaletteData`, `CoreSprites`, `ChronicleSprites`, `ParkourSprites`, `DungeonSprites`, `AutoTileSprites`, `ShmupSprites`, `MomoSprites`, `PixelFontData`, `BossSprites`).

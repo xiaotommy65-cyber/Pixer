@@ -26,7 +26,6 @@ import { parseJsonlEntries, serializeEntriesToJsonl } from '../../src/core/runti
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
 import { buildDepthDrawOrder, computeParallaxScreenCoord, SceneGpuBridge } from '../../src/core/runtime/SceneGpuBridge.ts';
 import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
-import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
 import {
   validateCartridgeJson,
   type CartridgeJsonV1,
@@ -43,7 +42,6 @@ import {
   COLLISION_SOLID,
   TilemapGrid,
 } from '../../src/core/sim/TilemapGrid.ts';
-import { WorldKernel } from '../../src/core/sim/WorldKernel.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import { OBSIDIAN_CITADEL_PROJECT } from '../../src/game/obsidianCitadel/ObsidianCitadelProject.ts';
 import { check, collectTsFiles, emptyInput } from './SimTestHarness.ts';
@@ -942,25 +940,6 @@ export function testM41DynamicViewportAndCamera(): void {
   const px = gov.getTargetPixelSize();
   check(px.width === 960 && px.height === 540, 'DisplayThermalGovernor must scale pixel buffer from dynamic logical viewport');
 
-  const cam = new CameraDirector();
-  cam.setViewport(426, 240);
-  cam.reset(0, 0, 1.0, { minX: 0, minY: 0, maxX: 852, maxY: 480 });
-  const initX = cam.x;
-  const initY = cam.y;
-  check(initX === 213 && initY === 120, 'CameraDirector must clamp center to half of dynamic viewport');
-  const alignedFields = cam.toSnapshotFields(1.5, -2.5);
-  check(
-    alignedFields.cameraX === 1.5 && alignedFields.cameraY === -2.5,
-    `CameraDirector.toSnapshotFields must align against dynamic viewW/viewH (got ${alignedFields.cameraX}, ${alignedFields.cameraY})`,
-  );
-  cam.panTo(900, 900, 1.0, 0);
-  check(cam.x === 639 && cam.y === 360, 'CameraDirector must clamp max bounds using dynamic viewport');
-  const maxAligned = cam.toSnapshotFields();
-  check(
-    maxAligned.cameraX === 639 - 213 && maxAligned.cameraY === 360 - 120,
-    'CameraDirector.toSnapshotFields max bounds must offset cleanly by dynamic viewport half-extents',
-  );
-
   const tallCart: CartridgeJsonV1 = {
     version: 1,
     meta: {
@@ -1385,44 +1364,27 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
     check(r.v0 >= 128 / ATLAS_SIZE && r.v1 <= 1, `Dynamic sprite #${i} overflowed 1024x1024 atlas bounds`);
   }
 
-  // 4. Pre-warmed 240-Frame Zero-GC Benchmarks (WorldKernel + large-world DataCartridgeRuntime)
-  const world = new WorldKernel({
-    cartridgeId: 'sandbox-toybox',
-    worldWidth: 2048,
-    worldHeight: 512,
-    viewport: 'wide',
-  });
-  world.hero.x = 64;
-  world.hero.y = 300;
-  world.markSolidsDirty();
-  for (let i = 0; i < 64; i++) {
-    world.addSolidTileRect(i * 16, 320, 16, 16, 'grass');
-  }
-  world.addParallaxLayer({ sprite: 'cloud_m', x: 0, y: 200, w: 64, h: 32, scrollX: 0.3, repeatW: 2048 });
-  world.addForegroundTileRect(160, 288, 16, 16, 'tree_canopy', { alpha: 0.85 });
-  world.spawn('star', 120, 290);
-  world.spawn('torch', 144, 296);
+  // 4. Pre-warmed 240-Frame Zero-GC Benchmarks (EcsCartridgeRuntime + large-world DataCartridgeRuntime)
+  const ecsRt = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
 
   // Warmup (300 frames to stabilize TurboFan JIT & pool capacities)
   for (let i = 0; i < 300; i++) {
-    world.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
-    world.snapshot(params);
+    ecsRt.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
+    ecsRt.snapshot(params);
     rtA.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
     rtA.snapshot(params);
   }
 
-  // Verify 2-bank strict object reuse on both WorldSnapshot and DataCartridgeRuntime
-  const ws0 = world.snapshot(params);
-  const ws1 = world.snapshot(params);
-  const ws2 = world.snapshot(params);
-  const ws3 = world.snapshot(params);
+  // Verify in-place zero-GC snapshot reuse on EcsCartridgeRuntime and 2-bank ping-pong reuse on DataCartridgeRuntime
+  const es0 = ecsRt.snapshot(params);
+  const es1 = ecsRt.snapshot(params);
   check(
-    ws0 === ws2 && ws1 === ws3 && ws0 !== ws1 && ws0.tiles === ws2.tiles && ws0.entities === ws2.entities,
-    'WorldSnapshotPool must strictly reuse its 2 ping-pong RenderSceneSnapshot banks with zero wrapper allocations',
+    es0 === es1 && es0.tiles === es1.tiles && es0.entities === es1.entities,
+    'EcsCartridgeRuntime must strictly reuse its RenderSceneSnapshot bank in place with zero wrapper allocations',
   );
   check(
-    ws0.tiles.length > 0 && ws0.tiles[0] === ws2.tiles[0] && ws0.entities.length > 0 && ws0.entities[0] === ws2.entities[0],
-    'WorldSnapshotPool must reuse pooled TileDesc & EntityDesc slots in place',
+    es0.tiles.length > 0 && es0.tiles[0] === es1.tiles[0] && es0.entities.length > 0 && es0.entities[0] === es1.entities[0],
+    'EcsCartridgeRuntime must reuse pooled TileDesc & EntityDesc slots in place',
   );
 
   const rs0 = rtA.snapshot(params);
@@ -1440,14 +1402,14 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
 
   const maybeGc = (globalThis as unknown as { gc?: () => void }).gc;
   maybeGc?.();
-  const heapBeforeWk = process.memoryUsage().heapUsed;
-  const wkT0 = performance.now();
+  const heapBeforeEcs = process.memoryUsage().heapUsed;
+  const ecsT0 = performance.now();
   for (let i = 0; i < 240; i++) {
-    world.snapshot(params);
+    ecsRt.snapshot(params);
   }
-  const wkMs = performance.now() - wkT0;
+  const ecsMs = performance.now() - ecsT0;
   maybeGc?.();
-  const wkHeapDeltaKb = (process.memoryUsage().heapUsed - heapBeforeWk) / 1024;
+  const ecsHeapDeltaKb = (process.memoryUsage().heapUsed - heapBeforeEcs) / 1024;
 
   const heapBeforeRt = process.memoryUsage().heapUsed;
   const rtT0 = performance.now();
@@ -1462,7 +1424,7 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
     `[SIM OK] M4.2/M4.3 Chunked Worlds & Multi-Layer HD-2D -> Tilemap(1024x256, allocated=${grid.getAllocatedChunkCount()}/1024), SpatialHash(2048 ent: rebuild=${spRunA.tRebuildMs.toFixed(2)}ms, 32 queries=${spRunA.tQueryMs.toFixed(2)}ms), 1024x1024 Atlas (300x32px dyn, 10k pass batch)`,
   );
   console.log(
-    `[SIM BENCH] 240f Snapshot Zero-GC -> WorldKernel=${wkMs.toFixed(2)}ms (heapDelta=${wkHeapDeltaKb.toFixed(1)}KB), ChunkedRuntime(4096x1024)=${rtMs.toFixed(2)}ms (heapDelta=${rtHeapDeltaKb.toFixed(1)}KB)`,
+    `[SIM BENCH] 240f Snapshot Zero-GC -> EcsCartridgeRuntime=${ecsMs.toFixed(2)}ms (heapDelta=${ecsHeapDeltaKb.toFixed(1)}KB), ChunkedRuntime(4096x1024)=${rtMs.toFixed(2)}ms (heapDelta=${rtHeapDeltaKb.toFixed(1)}KB)`,
   );
 }
 

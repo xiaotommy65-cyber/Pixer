@@ -40,9 +40,7 @@ import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner
 import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGovernor.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
 import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
-import { CameraDirector } from '../../src/core/sim/CameraDirector.ts';
 import type { CartridgeJsonV1 } from '../../src/core/sim/CartridgeSchema.ts';
-import { CutsceneSequencer } from '../../src/core/sim/CutsceneSequencer.ts';
 import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
 import { EventActionVm, MAX_VM_OPS_PER_TICK, type VmCollisionPair } from '../../src/core/sim/EventActionVm.ts';
 import {
@@ -64,7 +62,6 @@ import {
   COLLISION_SOLID,
   TilemapGrid,
 } from '../../src/core/sim/TilemapGrid.ts';
-import { WorldKernel } from '../../src/core/sim/WorldKernel.ts';
 import { check, emptyInput } from './SimTestHarness.ts';
 
 export function testCoreSubsystems(): void {
@@ -190,58 +187,7 @@ export function testCoreSubsystems(): void {
 }
 
 export function testEngine2CameraAndCutscene(): void {
-  const cam = new CameraDirector();
-  cam.reset(100, 90, 1.0, { minX: 0, minY: 0, maxX: 600, maxY: 300 });
-  const baseFields = cam.toSnapshotFields();
-  check(baseFields.cameraZoom === 1.0, 'CameraDirector default zoom should be 1.0');
-
-  cam.setTargetZoom(1.45);
-  cam.setLetterbox(0.14);
-  cam.panTo(400, 140, 1.45, 0.5);
-  for (let i = 0; i < 45; i++) {
-    cam.step(STEP_DT, 100, 90, 80, 0);
-  }
-  const panned = cam.toSnapshotFields();
-  check(panned.cameraZoom > 1.3, `CameraDirector should smoothly zoom toward 1.45 (got ${panned.cameraZoom})`);
-  check(panned.cameraLetterbox > 0.1, `CameraDirector should animate letterbox bars (got ${panned.cameraLetterbox})`);
-  check(cam.mode === 'pan', 'CameraDirector should report pan mode while panning');
-
-  let chosenId = '';
-  const seq = new CutsceneSequencer();
-  seq.setCallbacks({
-    onChoice: (id) => {
-      chosenId = id;
-    },
-  });
-  seq.play([
-    { type: 'letterbox', ratio: 0.12, duration: 0.1 },
-    { type: 'camera_pan', x: 320, y: 120, zoom: 1.35, duration: 0.1 },
-    {
-      type: 'dialog',
-      speaker: '長老',
-      speakerRole: '測試',
-      portrait: 'npc_elder',
-      text: '測試選項對話',
-      choices: [
-        { id: 'c_one', label: '選項一', enabled: true },
-        { id: 'c_two', label: '選項二', enabled: true },
-      ],
-    },
-    { type: 'restore_camera', zoom: 1.0, duration: 0.1 },
-  ]);
-  for (let i = 0; i < 20; i++) {
-    seq.step(STEP_DT, cam);
-  }
-  const view = seq.getViewSnapshot();
-  check(view?.awaitingInput === true && view.choices?.length === 2, 'CutsceneSequencer should pause for branching dialog');
-  seq.moveChoice(1);
-  check(seq.getViewSnapshot()?.selectedChoiceIdx === 1, 'CutsceneSequencer moveChoice should advance cursor');
-  seq.advanceDialog(cam);
-  check(chosenId === 'c_two', `CutsceneSequencer should dispatch selected choice (got ${chosenId})`);
-  for (let i = 0; i < 20; i++) seq.step(STEP_DT, cam);
-  check(!seq.isActive(), 'CutsceneSequencer should finish cleanly after restore_camera');
-
-  // 7. DisplayThermalGovernor: mobile balanced 2x baseline, thermal step-down, idle 30fps, background freeze
+  // DisplayThermalGovernor: mobile balanced 2x baseline, thermal step-down, idle 30fps, background freeze
   const gov = new DisplayThermalGovernor('balanced', true);
   check(
     gov.getScaleFactor() === 2 && gov.getTargetPixelSize().width === 640 && gov.getTargetPixelSize().height === 360,
@@ -282,7 +228,7 @@ export function testEngine2CameraAndCutscene(): void {
   check(save.getPerformanceProfile('balanced') === 'eco', 'SaveService persists performance profile changes');
   save.savePerformanceProfile('balanced');
 
-  console.log('[SIM OK] Engine 2.0 (CameraDirector, CutsceneSequencer, DisplayThermalGovernor & SaveService)');
+  console.log('[SIM OK] Engine 2.0 (DisplayThermalGovernor & SaveService)');
 }
 
 export function testM2EnginePrimitives(): void {
@@ -408,17 +354,6 @@ export function testM2EnginePrimitives(): void {
   check(
     heroAfterDesc !== undefined && platTile !== undefined && Math.abs(heroAfterDesc.y + 16 - platTile.y) <= 0.01,
     'Hero must stay locked onto fast-descending moving platform (vy=240, dy=4px > 2px)',
-  );
-
-  const wk = new WorldKernel({ cartridgeId: 'sandbox-toybox', worldWidth: 1024, worldHeight: 240, viewport: 'wide' });
-  wk.hero.x = 300;
-  wk.step(STEP_DT, { ...emptyInput(), right: true }, rtParams);
-  const wkCamX0 = wk.snapshot(rtParams, 0).cameraX;
-  const wkCamXMid = wk.snapshot(rtParams, 0.5).cameraX;
-  const wk1 = wk.snapshot(rtParams, 1);
-  check(
-    wk1.cameraX > wkCamX0 && Math.abs(wkCamXMid - (wkCamX0 + wk1.cameraX) * 0.5) < 1e-6,
-    'WorldKernel cameraX must interpolate cleanly by render alpha',
   );
 
   console.log('[SIM OK] M2 primitives (SoaEntityPool 2048, TilemapGrid 4-bit auto-tiling, EventActionVm 512-cap, accumulator alpha)');
