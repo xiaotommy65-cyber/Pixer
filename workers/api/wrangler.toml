@@ -1,0 +1,21 @@
+name = "pixer-edge-api"
+main = "src/index.ts"
+compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+PUBLIC_CDN_BASE_URL = "https://cdn.pixer.app"
+ALLOWED_ORIGINS = "https://xiaotommy65-cyber.github.io,http://localhost:3000"
+SUPABASE_URL = "https://YOUR_PROJECT_REF.supabase.co"
+
+[[r2_buckets]]
+binding = "PIXER_ASSETS"
+bucket_name = "pixer-assets"
+preview_bucket_name = "pixer-assets-preview"
+
+# Configure secrets via `wrangler secret put <NAME>`:
+# - SUPABASE_SERVICE_ROLE_KEY   (server-only Supabase key for verified requests)
+# - SUPABASE_ANON_KEY           (used to verify user JWT via /auth/v1/user)
+# - AI_PROVIDER_API_KEY         (optional LLM key for /api/ai/* proxy)
+# - AI_PROVIDER_BASE_URL        (optional LLM upstream URL)
+# - MCP_ACCESS_TOKEN            (optional bearer token for /api/mcp remote agents)

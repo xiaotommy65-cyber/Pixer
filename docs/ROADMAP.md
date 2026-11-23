@@ -30,9 +30,11 @@ Every game and workstation built on Pixer runs **60Hz simulation & rendering loc
 - Delivered pure data-driven **M2 Visual World Rules Inspector** (`EcsWorldRulesInspectorPanel.ts`): visual editing for `portals`, `interactions`, `aiProfiles`, `heroConfig`, and `hud[]` with full `EcsStudioSession` Undo/Redo parity and live BFS soft-lock oracle banner.
 - Offloaded `.zip` / `.aseprite` / `.ldtk` / `.tmj` archive decompression & parsing into `src/workers/interop.worker.ts` via `InteropWorkerClient.ts` (with automatic main-thread fallback).
 
-### Phase 2 — Cloudflare R2 CDN + Supabase Cloud Storage & Sharing `[NEXT]`
-- Host external audio packs (`.opus`/`.mp3`) and shareable cartridge bundles on **Cloudflare R2** (SHA-256 content-addressed immutable caching, \$0 egress).
-- Stand up **Supabase PostgreSQL + Auth + RLS** (`projects`, `project_revisions`, `user_saves`) with short share URLs (`/play/:slug`) and cross-device SRAM cloud sync.
+### Phase 2 — Cloudflare R2 CDN + Supabase Cloud Storage & Edge API `[DONE]`
+- Delivered **Supabase PostgreSQL + Auth + RLS** migration (`supabase/migrations/20261122000000_pixer_cloud_schema.sql`: `profiles`, `projects`, `project_revisions`, `user_saves` + strict RLS policies & triggers).
+- Delivered **Cloudflare Workers Edge API + R2 Asset Layer** (`workers/api/`: `/api/health`, `/api/assets/:key+` immutable 1-year cache + path-traversal guard, `PUT /api/assets/upload` SHA-256 content-addressed R2 upload, `GET/PUT /api/projects/:slug` with ETag `If-Match` 412 optimistic locking & `304 Not Modified`, `GET/PUT /api/saves/:slug` timestamp SRAM merge, `POST /api/ai/*` LLM proxy, and `POST /api/mcp` Remote Streamable HTTP MCP).
+- Delivered DOM-free **`src/core/cloud/CloudSyncClient.ts`**, `?play=<slug>` direct-launch bootstrap in `src/main.ts`, `docs/CLOUD_SETUP.md`, and full end-to-end tests in `scripts/sim/CloudOffload.test.ts`.
 
-### Phase 3 — Edge AI Proxy & Remote Streamable HTTP MCP `[PLANNED]`
-- Deploy **Cloudflare Workers (Hono + Zod)** for `/api/ai/*` (connecting `RemoteAiProvider.ts` with secret isolation, rate limiting, and caching), `/api/mcp` (Remote Streamable HTTP MCP), and presigned R2 asset uploads.
+### Phase 3 — Production Provisioning, Auth UI & Multiplayer Observability `[NEXT]`
+- Provision Cloudflare R2 bucket (`pixer-assets`), deploy `workers/api` via `wrangler deploy`, apply Supabase SQL migration, and configure `VITE_CLOUD_API_BASE` + `VITE_CDN_BASE_URL` in CI.
+- Add optional sign-in / one-click "Publish & Copy `?play=<slug>`" UI button in `EcsWorkbenchView` and bind curated external `.opus` audio packs to R2 CDN.
