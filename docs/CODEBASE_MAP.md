@@ -60,7 +60,8 @@ flowchart LR
 | **PA-01 / PA-02 資料卡匣與全品類子引擎（格鬥/卡牌/推箱）** | `src/core/sim/DataCartridgeRuntime.ts` → `DataRuntimePlatformer.ts` / `DataRuntimeSnapshot.ts` / `DataRuntimeShmup.ts` / `CardDeckEngine.ts` / `FighterFrameEngine.ts` / `GenreControllers.ts` / `CartridgeSchema.ts` | `scripts/sim/CartridgeActionTests.ts`, `Engine10Core.test.ts` |
 | **外部音訊層（無 AI 合成）** | `src/core/audio/ExternalAudioBank.ts`（相容別名 `ToySynth.ts`）→ `src/core/runtime/EngineHost.ts` | `scripts/sim/CloudOffload.test.ts`, `ArchitectureTests.ts` |
 | **雲端疏導（R2 CDN + Supabase + Edge API）** | `src/core/cloud/CloudSyncClient.ts` → `workers/api/src/{index,supabaseStore,types}.ts` → `supabase/migrations/20261122000000_pixer_cloud_schema.sql` | `scripts/sim/CloudOffload.test.ts` |
-| **空間可達性預言機 & 腳本化試玩驗證** | `src/core/ai/EcsSpatialOracle.ts` → `src/core/ai/EcsPlaytestVerifier.ts` | `scripts/sim/EcsCore.test.ts`, `DualPerspective3D.test.ts` |
+| **空間可達性預言機、AI 分鏡審美預言機 & 腳本化試玩** | `src/core/ai/EcsSpatialOracle.ts` → `src/core/ai/EcsCinematicOracle.ts` → `src/core/ai/EcsPlaytestVerifier.ts` | `scripts/sim/EcsCore.test.ts`, `Engine10Core.test.ts` |
+| **電影級導演系統（Auteur 分鏡 DSL / Toric 雙人構圖 / 3 階段彈簧實切回）** | `src/core/ecs/EcsCinematicDirector.ts` → `src/core/ai/EcsCinematicOracle.ts` → `EcsWorldMapController.ts` → `EcsSnapshotProjector.ts` | `scripts/sim/Engine10Core.test.ts`, `WorldMap.test.ts` |
 
 ---
 
@@ -74,15 +75,15 @@ flowchart LR
   - `WebGl2Backend.ts` (881L) + `WebGl2Shaders.ts` (1,035L) — GLSL ES 3.00 parity backend.
   - `Canvas2DBackend.ts` (517L) — Guaranteed software fallback.
   - `GpuTypes.ts` (194L) — Viewport presets (`1280×720`), `AtlasPoolStats`, PBR structs.
-- **`src/core/ecs/` (15 prod files, 9,472L)** *(100% DOM-free; zero `*.test.ts` inside `src/`)*
+- **`src/core/ecs/` (16 prod files, 10,595L)** *(100% DOM-free; zero `*.test.ts` inside `src/`)*
   - Core primitives: `EntityManager.ts` (163L), `ComponentStore.ts` (556L), `EcsCoreWorld.ts` (208L), `EcsWorld.ts` (465L).
-  - Schema & authoring: `EcsProjectSchema.ts` (642L), `EcsTilemapTypes.ts` (579L), `EcsStudioSession.ts` (1,205L), `EcsCustomSpriteCompiler.ts` (567L).
-  - Runtime, projection & scripting: `EcsCartridgeRuntime.ts` (1,161L, integrates `CameraRigDirector` & `GameFlowController`), `EcsSnapshotProjector.ts` (760L, Zero-GC snapshot/light/HUD/FP-wall projector), `EcsWorldMapController.ts` (1,415L, integrates Zero-GC `GridPathfinder` A* + `Visibility2D` LOS/FOV), `EcsActionPhysicsSystems.ts` (799L), `SandboxScriptVm.ts` (478L), `EcsEventGraph.ts` (471L), `index.ts` (11L).
+  - Schema & authoring: `EcsProjectSchema.ts` (668L), `EcsTilemapTypes.ts` (579L), `EcsStudioSession.ts` (1,242L), `EcsCustomSpriteCompiler.ts` (567L).
+  - Runtime, projection, director & scripting: `EcsCinematicDirector.ts` (1,003L, Auteur Actor-Relative DSL + Toric Two-Shot Solver + 3-Phase Spring Handback + 21:9 Cinema HUD), `EcsCartridgeRuntime.ts` (1,177L, integrates `CameraRigDirector` & `GameFlowController`), `EcsSnapshotProjector.ts` (787L, Zero-GC snapshot/light/HUD/FP-wall projector), `EcsWorldMapController.ts` (1,511L, integrates Zero-GC `GridPathfinder` A* + `Visibility2D` LOS/FOV + `EcsCinematicDirector`), `EcsActionPhysicsSystems.ts` (799L), `SandboxScriptVm.ts` (478L), `EcsEventGraph.ts` (471L), `index.ts` (13L).
   - Unit tests live in `scripts/sim/EcsCore.test.ts` (1,328L), enforced by `ArchitectureTests.ts`.
 - **`src/core/runtime/` (17 files, 5,243L)** *(100% DOM-free, 100% Wired)*
   - `EngineHost.ts` (589L, **sole UI facade**), `CartridgeRunner.ts` (480L), `CartridgeRegistry.ts` (153L), `CameraRigDirector.ts` (566L, 6DoF camera director wired into `EcsCartridgeRuntime`), `GameFlowController.ts` (222L, 6-act flow controller wired into `EcsCartridgeRuntime`), `SceneGpuBridge.ts` (889L), `SceneFirstPersonPass.ts` (243L, 2.5D DDA pass), `SceneTrue3DPass.ts` (320L, True 3D HD-2D pass), `SceneOrthogonalHelper.ts` (64L), `SceneHudOverlayPass.ts` (113L), `DisplayThermalGovernor.ts` (196L), `SaveService.ts` (348L), `CartridgePngCodec.ts` (268L), `AppLogger.ts` (339L), `LogPersistence.ts` (325L), `EventBus.ts` (86L), `SeededRng.ts` (37L).
-- **`src/core/ai/` (10 files, 3,495L)** *(100% DOM-free)*
-  - Authoring & MCP: `AgentBridge.ts` (460L), `PixerMcpProtocol.ts` (485L), `EcsSpatialOracle.ts` (1,292L), `EcsPlaytestVerifier.ts` (376L), `ObservationSerializer.ts` (153L).
+- **`src/core/ai/` (11 files, 3,907L)** *(100% DOM-free)*
+  - Authoring, Oracles & MCP: `AgentBridge.ts` (460L), `PixerMcpProtocol.ts` (507L), `EcsSpatialOracle.ts` (1,292L), `EcsCinematicOracle.ts` (390L, FilmFlow Headless Scout + 5-Axis Cinematography Critic & ASCII Viewfinder Storyboard), `EcsPlaytestVerifier.ts` (376L), `ObservationSerializer.ts` (153L).
   - Providers: `HybridAiDirector.ts` (182L), `LocalAiProvider.ts` (260L), `RemoteAiProvider.ts` (191L), `AiTypes.ts` (76L), `AiProvider.ts` (20L).
 - **`src/core/interop/` (6 files, 3,150L)** *(100% DOM-free; executed in Web Worker)*
   - `InteropBundleLoader.ts` (573L), `AsepriteParser.ts` (669L), `LdtkImporter.ts` (766L), `TiledImporter.ts` (641L), `InteropTypes.ts` (495L), `index.ts` (6L).

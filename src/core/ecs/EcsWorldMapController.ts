@@ -17,6 +17,7 @@ import type {
   SimEvent,
   TileDesc,
 } from '../types/WorldTypes.ts';
+import { EcsCinematicDirector, type EcsCutsceneShotDef } from './EcsCinematicDirector.ts';
 import type { EcsProjectV2 } from './EcsProjectSchema.ts';
 import {
   getCastleTileDef,
@@ -55,6 +56,7 @@ export class EcsWorldMapController {
   private project: EcsProjectV2;
   private activeRoomId = '';
   private activeRoom: EcsMapRoomDef | null = null;
+  public readonly director = new EcsCinematicDirector();
 
   // Pre-allocated tile snapshot pool & 2D wall shadow occlusion grid (Zero-GC per frame)
   private readonly tilePool: TileDesc[] = [];
@@ -313,6 +315,7 @@ export class EcsWorldMapController {
   public reset(world: EcsWorld, vpW: number, vpH: number, roomIdOverride?: string): void {
     this.clearedEntityIds.clear();
     this.aiTimers.clear();
+    this.director.reset(true);
     this.heroHpCarry = -1;
     this.heroMaxHpCarry = 10;
     this.facingX = 0;
@@ -343,6 +346,15 @@ export class EcsWorldMapController {
         ? roomIdOverride
         : wm.startRoomId;
     this.loadRoomIntoWorld(world, startId, vpW, vpH, undefined, undefined, false);
+  }
+
+  public playCutsceneById(
+    cutsceneId: string,
+    onShotStart?: (shot: EcsCutsceneShotDef) => void,
+  ): boolean {
+    const cs = this.project.cutscenes?.find((c) => c.id === cutsceneId);
+    if (!cs) return false;
+    return this.director.startCutscene(cs, this.cameraX, this.cameraY, this.director.cameraZoom, onShotStart);
   }
 
   public switchRoomForEditor(world: EcsWorld, roomId: string, vpW: number, vpH: number): boolean {
@@ -485,10 +497,26 @@ export class EcsWorldMapController {
     } else {
       this.clampCamera(vpW, vpH);
     }
+    this.director.cameraX = this.cameraX;
+    this.director.cameraY = this.cameraY;
 
     this.roomBannerText = room.name;
     this.roomBannerTimer = 2.6;
     this.rebuildTiles(world.globals);
+
+    if (this.project.cutscenes) {
+      for (let i = 0; i < this.project.cutscenes.length; i++) {
+        const cs = this.project.cutscenes[i];
+        if (
+          cs.trigger === 'on_room_enter' &&
+          cs.roomId === room.id &&
+          !this.director.hasCompletedCutscene(cs.id)
+        ) {
+          this.director.startCutscene(cs, this.cameraX, this.cameraY, this.director.cameraZoom);
+          break;
+        }
+      }
+    }
   }
 
   private acquireTile(idx: number): TileDesc {
@@ -777,13 +805,31 @@ export class EcsWorldMapController {
     const tagStore = core.getStore(c.Tag);
 
     let heroHandle = 0;
+    let bossCx: number | null = null;
+    let bossCy: number | null = null;
     for (let i = 0; i < tagStore.size(); i++) {
       const td = tagStore.getDenseDataAt(i);
-      if (td.tag === 'hero' || td.tag === 'player') {
-        heroHandle = tagStore.getDenseEntityAt(i);
-        break;
+      const eh = tagStore.getDenseEntityAt(i);
+      if (!heroHandle && (td.tag === 'hero' || td.tag === 'player')) {
+        heroHandle = eh;
+      }
+      const aiP = this.findAiProfile(td.tag);
+      if (aiP?.isBoss) {
+        const bTr = core.getComponent(eh, c.Transform2D);
+        if (bTr) {
+          bossCx = bTr.x + bTr.w * 0.5;
+          bossCy = bTr.y + bTr.h * 0.5;
+        }
       }
     }
+
+    if (this.director.isCutscenePlaying() && input.skillY) {
+      this.director.skipCutscene();
+    }
+
+    const roomWorldW = room.cols * wm.tileSize;
+    const roomWorldH = room.rows * wm.tileSize;
+    const baseBlur = this.project.atmosphere.tiltShiftBlur ?? 0.34;
 
     if (heroHandle) {
       const hTr = core.getComponent(heroHandle, c.Transform2D);
@@ -794,119 +840,173 @@ export class EcsWorldMapController {
       const hc = wm.heroConfig;
 
       if (hTr) {
-        // 1. 8-Directional Movement + Dash
-        let mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-        let my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
-        const moving = mx !== 0 || my !== 0;
-        if (moving) {
-          const inv = 1 / Math.hypot(mx, my);
-          mx *= inv;
-          my *= inv;
-          this.facingX = mx;
-          this.facingY = my;
-          if (hMat && mx !== 0) hMat.flipX = mx < 0;
-          this.walkAnimAccum += dt * 7.5;
-          if (!hAnim && hMat && hc?.walkSpriteA && hc?.walkSpriteB) {
-            hMat.spriteId = (Math.floor(this.walkAnimAccum) & 1) === 0 ? hc.walkSpriteA : hc.walkSpriteB;
+        if (this.director.isBlockingGameplayInput()) {
+          const heroCx = hTr.x + hTr.w * 0.5;
+          const heroCy = hTr.y + hTr.h * 0.5;
+          if (hAnim?.runtime) {
+            hAnim.runtime.setParam('speed', 0);
+            hAnim.runtime.setParam('dashing', 0);
+            hAnim.runtime.setParam('attacking', 0);
           }
-          this.footstepTimer -= dt;
-          if (this.footstepTimer <= 0 && this.dashTimer <= 0) {
-            this.footstepTimer = 0.24;
-            cb.onFootstep?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.88);
+          this.director.step(
+            dt,
+            world,
+            heroCx,
+            heroCy,
+            this.facingX,
+            this.facingY,
+            false,
+            bossCx,
+            bossCy,
+            vpW,
+            vpH,
+            roomWorldW,
+            roomWorldH,
+            baseBlur,
+          );
+          if (!this.editorCamOverride) {
+            this.cameraX = this.director.cameraX;
+            this.cameraY = this.director.cameraY;
+            this.clampCamera(vpW, vpH);
           }
         } else {
-          this.footstepTimer = Math.min(this.footstepTimer, 0.08);
-        }
+          // 1. 8-Directional Movement + Dash
+          let mx = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+          let my = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+          const moving = mx !== 0 || my !== 0;
+          if (moving) {
+            const inv = 1 / Math.hypot(mx, my);
+            mx *= inv;
+            my *= inv;
+            this.facingX = mx;
+            this.facingY = my;
+            if (hMat && mx !== 0) hMat.flipX = mx < 0;
+            this.walkAnimAccum += dt * 7.5;
+            if (!hAnim && hMat && hc?.walkSpriteA && hc?.walkSpriteB) {
+              hMat.spriteId = (Math.floor(this.walkAnimAccum) & 1) === 0 ? hc.walkSpriteA : hc.walkSpriteB;
+            }
+            this.footstepTimer -= dt;
+            if (this.footstepTimer <= 0 && this.dashTimer <= 0) {
+              this.footstepTimer = 0.24;
+              cb.onFootstep?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.88);
+            }
+          } else {
+            this.footstepTimer = Math.min(this.footstepTimer, 0.08);
+          }
 
-        const jumpJust = input.jump && !this.prevJump;
-        if (jumpJust && this.dashCooldown <= 0) {
-          this.dashTimer = 0.16;
-          this.dashCooldown = 0.52;
-          this.dashDirX = moving ? mx : this.facingX;
-          this.dashDirY = moving ? my : this.facingY;
-          this.heroInvulnTimer = Math.max(this.heroInvulnTimer, 0.22);
-          eventsOut.push('jump');
-          cb.onDash?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.84, this.dashDirX, this.dashDirY, heroHandle);
-        }
+          const jumpJust = input.jump && !this.prevJump;
+          if (jumpJust && this.dashCooldown <= 0) {
+            this.dashTimer = 0.16;
+            this.dashCooldown = 0.52;
+            this.dashDirX = moving ? mx : this.facingX;
+            this.dashDirY = moving ? my : this.facingY;
+            this.heroInvulnTimer = Math.max(this.heroInvulnTimer, 0.22);
+            eventsOut.push('jump');
+            cb.onDash?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.84, this.dashDirX, this.dashDirY, heroHandle);
+          }
 
-        const baseSpeed = hMotor?.moveSpeed ?? 138;
-        const dashMult = hc?.dashSpeedMultiplier ?? 2.55;
-        const speed = this.dashTimer > 0 ? baseSpeed * dashMult : baseSpeed;
-        const vx = this.dashTimer > 0 ? this.dashDirX * speed : mx * speed;
-        const vy = this.dashTimer > 0 ? this.dashDirY * speed : my * speed;
+          const baseSpeed = hMotor?.moveSpeed ?? 138;
+          const dashMult = hc?.dashSpeedMultiplier ?? 2.55;
+          const speed = this.dashTimer > 0 ? baseSpeed * dashMult : baseSpeed;
+          const vx = this.dashTimer > 0 ? this.dashDirX * speed : mx * speed;
+          const vy = this.dashTimer > 0 ? this.dashDirY * speed : my * speed;
 
-        this.moveWithTileCollision(hTr.x, hTr.y, hTr.w, hTr.h, vx * dt, vy * dt, world, this.scratchPos);
-        hTr.x = this.scratchPos[0];
-        hTr.y = this.scratchPos[1];
+          this.moveWithTileCollision(hTr.x, hTr.y, hTr.w, hTr.h, vx * dt, vy * dt, world, this.scratchPos);
+          hTr.x = this.scratchPos[0];
+          hTr.y = this.scratchPos[1];
 
-        const heroCx = hTr.x + hTr.w * 0.5;
-        const heroCy = hTr.y + hTr.h * 0.5;
+          const heroCx = hTr.x + hTr.w * 0.5;
+          const heroCy = hTr.y + hTr.h * 0.5;
 
-        // 2. Melee Slash
-        const actionJust = input.action && !this.prevAction;
-        if (actionJust && this.slashCooldown <= 0) {
-          this.slashCooldown = 0.24;
-          this.slashActiveTimer = 0.15;
-          this.slashX = heroCx + this.facingX * 22;
-          this.slashY = heroCy + this.facingY * 22;
-          eventsOut.push('snap');
-          cb.onMeleeSwing?.(this.slashX, this.slashY, this.facingX, this.facingY, hc?.slashColor ?? '#fef08a', heroHandle);
-          this.performMeleeHitCheck(world, hHp, eventsOut, cb);
-        } else if (this.slashActiveTimer > 0) {
-          this.slashX = heroCx + this.facingX * 22;
-          this.slashY = heroCy + this.facingY * 22;
-        }
+          // 2. Melee Slash
+          const actionJust = input.action && !this.prevAction;
+          if (actionJust && this.slashCooldown <= 0) {
+            this.slashCooldown = 0.24;
+            this.slashActiveTimer = 0.15;
+            this.slashX = heroCx + this.facingX * 22;
+            this.slashY = heroCy + this.facingY * 22;
+            eventsOut.push('snap');
+            cb.onMeleeSwing?.(this.slashX, this.slashY, this.facingX, this.facingY, hc?.slashColor ?? '#fef08a', heroHandle);
+            this.performMeleeHitCheck(world, hHp, eventsOut, cb);
+          } else if (this.slashActiveTimer > 0) {
+            this.slashX = heroCx + this.facingX * 22;
+            this.slashY = heroCy + this.facingY * 22;
+          }
 
-        // Sync Animator state machine params AFTER melee slash so frame-0 attack pose renders immediately (even in hitstop)
-        if (hAnim?.runtime) {
-          hAnim.runtime.setParam('speed', Math.hypot(vx, vy));
-          hAnim.runtime.setParam('dashing', this.dashTimer > 0 ? 1 : 0);
-          hAnim.runtime.setParam('attacking', this.slashActiveTimer > 0 ? 1 : 0);
-          hAnim.runtime.setParam('hurt', (hHp?.hitFlash ?? 0) > 0.05 ? 1 : 0);
-        }
+          // Sync Animator state machine params AFTER melee slash so frame-0 attack pose renders immediately (even in hitstop)
+          if (hAnim?.runtime) {
+            hAnim.runtime.setParam('speed', Math.hypot(vx, vy));
+            hAnim.runtime.setParam('dashing', this.dashTimer > 0 ? 1 : 0);
+            hAnim.runtime.setParam('attacking', this.slashActiveTimer > 0 ? 1 : 0);
+            hAnim.runtime.setParam('hurt', (hHp?.hitFlash ?? 0) > 0.05 ? 1 : 0);
+          }
 
-        // 3. Floor Hazard Check
-        const heroCol = Math.floor(heroCx / wm.tileSize);
-        const heroRow = Math.floor((hTr.y + hTr.h * 0.72) / wm.tileSize);
-        if (this.heroInvulnTimer <= 0 && isRoomCellHazard(room, heroCol, heroRow, wm.tileDefs)) {
-          this.damageHero(hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
-        }
+          // 3. Floor Hazard Check
+          const heroCol = Math.floor(heroCx / wm.tileSize);
+          const heroRow = Math.floor((hTr.y + hTr.h * 0.72) / wm.tileSize);
+          if (this.heroInvulnTimer <= 0 && isRoomCellHazard(room, heroCol, heroRow, wm.tileDefs)) {
+            this.damageHero(hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
+          }
 
-        // 4. Data-Driven Prop Interactions
-        this.stepInteractions(world, heroCx, heroCy, hHp, eventsOut, cb);
+          // 4. Data-Driven Prop Interactions
+          this.stepInteractions(world, heroCx, heroCy, hHp, eventsOut, cb);
 
-        // 5. Data-Driven Enemy & Boss AI + Hostile Projectiles
-        this.stepAiEntities(dt, world, heroCx, heroCy, heroHandle, hHp, eventsOut, cb);
+          // 5. Data-Driven Enemy & Boss AI + Hostile Projectiles
+          this.stepAiEntities(dt, world, heroCx, heroCy, heroHandle, hHp, eventsOut, cb);
 
-        // 6. Clamped Follow Camera
-        if (this.editorCamOverride) {
-          this.cameraX = this.editorCamX;
-          this.cameraY = this.editorCamY;
-          this.clampCamera(vpW, vpH);
-        } else {
-          const targetCamX = heroCx - vpW * 0.5;
-          const targetCamY = heroCy - vpH * 0.5;
-          const lerp = Math.min(1, dt * 8.5);
-          this.cameraX += (targetCamX - this.cameraX) * lerp;
-          this.cameraY += (targetCamY - this.cameraY) * lerp;
-          this.clampCamera(vpW, vpH);
-        }
+          // 6. Clamped Follow Camera & Phase-3 Seamless Director Handback
+          const inHandback = this.director.getPhase() === 'handback';
+          this.director.step(
+            dt,
+            world,
+            heroCx,
+            heroCy,
+            this.facingX,
+            this.facingY,
+            moving,
+            bossCx,
+            bossCy,
+            vpW,
+            vpH,
+            roomWorldW,
+            roomWorldH,
+            baseBlur,
+          );
+          if (this.editorCamOverride) {
+            this.cameraX = this.editorCamX;
+            this.cameraY = this.editorCamY;
+            this.clampCamera(vpW, vpH);
+          } else if (inHandback) {
+            this.cameraX = this.director.cameraX;
+            this.cameraY = this.director.cameraY;
+            this.clampCamera(vpW, vpH);
+          } else {
+            const targetCamX = heroCx - vpW * 0.5;
+            const targetCamY = heroCy - vpH * 0.5;
+            const lerp = Math.min(1, dt * 8.5);
+            this.cameraX += (targetCamX - this.cameraX) * lerp;
+            this.cameraY += (targetCamY - this.cameraY) * lerp;
+            this.clampCamera(vpW, vpH);
+            this.director.cameraX = this.cameraX;
+            this.director.cameraY = this.cameraY;
+          }
 
-        // 7. Room Portal Traversal
-        if (this.portalCooldown <= 0) {
-          const portal = this.findTriggeredPortal(heroCx, heroCy, wm.tileSize);
-          if (portal) {
-            const unlocked = !portal.requiresGlobal || (world.globals.get(portal.requiresGlobal) ?? 0) >= 1;
-            if (unlocked) {
-              this.portalCooldown = 0.55;
-              if (hHp) this.heroHpCarry = hHp.hp;
-              eventsOut.push('key');
-              this.loadRoomIntoWorld(world, portal.toRoomId, vpW, vpH, portal.targetX, portal.targetY, true);
-              cb.onRoomBanner(this.activeRoom?.name ?? portal.name);
-            } else {
-              this.portalCooldown = 0.9;
-              cb.onPopup(portal.lockedHint ?? 'LOCKED', heroCx, heroCy - 18, '#fbbf24');
-              eventsOut.push('hurt');
+          // 7. Room Portal Traversal
+          if (this.portalCooldown <= 0) {
+            const portal = this.findTriggeredPortal(heroCx, heroCy, wm.tileSize);
+            if (portal) {
+              const unlocked = !portal.requiresGlobal || (world.globals.get(portal.requiresGlobal) ?? 0) >= 1;
+              if (unlocked) {
+                this.portalCooldown = 0.55;
+                if (hHp) this.heroHpCarry = hHp.hp;
+                eventsOut.push('key');
+                this.loadRoomIntoWorld(world, portal.toRoomId, vpW, vpH, portal.targetX, portal.targetY, true);
+                cb.onRoomBanner(this.activeRoom?.name ?? portal.name);
+              } else {
+                this.portalCooldown = 0.9;
+                cb.onPopup(portal.lockedHint ?? 'LOCKED', heroCx, heroCy - 18, '#fbbf24');
+                eventsOut.push('hurt');
+              }
             }
           }
         }
@@ -952,6 +1052,21 @@ export class EcsWorldMapController {
     }
   }
 
+  private triggerCutscenesForGlobal(globalKey: string): void {
+    if (!this.project.cutscenes) return;
+    for (let i = 0; i < this.project.cutscenes.length; i++) {
+      const cs = this.project.cutscenes[i];
+      if (
+        cs.trigger === 'on_global_set' &&
+        cs.triggerGlobal === globalKey &&
+        !this.director.hasCompletedCutscene(cs.id)
+      ) {
+        this.director.startCutscene(cs, this.cameraX, this.cameraY, this.director.cameraZoom);
+        return;
+      }
+    }
+  }
+
   private executeInteractionRule(
     rule: EcsMapInteractionRule,
     world: EcsWorld,
@@ -982,6 +1097,7 @@ export class EcsWorldMapController {
     if (rule.setGlobal) {
       world.setGlobal(rule.setGlobal, rule.setGlobalValue ?? 1);
       tilesNeedRebuild = true;
+      this.triggerCutscenesForGlobal(rule.setGlobal);
     }
     let thresholdReached = false;
     let addedValue = 0;
@@ -996,6 +1112,7 @@ export class EcsWorldMapController {
         world.setGlobal(rule.thresholdUnlockGlobal, 1);
         tilesNeedRebuild = true;
         thresholdReached = true;
+        this.triggerCutscenesForGlobal(rule.thresholdUnlockGlobal);
       }
     }
     if (tilesNeedRebuild) {
@@ -1069,6 +1186,11 @@ export class EcsWorldMapController {
         etr.y = this.scratchPos[1];
 
         const killed = hp.hp <= 0;
+        this.director.triggerCombatImpact(
+          killed ? (aiProfile.isBoss ? 'finisher' : 'heavy') : 'light',
+          ex,
+          ey,
+        );
         cb.onHitImpact?.(ex, ey, dirX, dirY, killed, Boolean(aiProfile.isBoss), eh);
 
         if (aiProfile.isBoss) {
@@ -1079,11 +1201,21 @@ export class EcsWorldMapController {
             this.bossPhase === 1
           ) {
             this.bossPhase = 2;
+            this.director.triggerCombatImpact('boss_phase', ex, ey);
             if (aiProfile.phase2Popup) {
               cb.onPopup(aiProfile.phase2Popup, ex, ey - 28, '#fb7185');
             }
             cb.onBossPhase?.(ex, ey);
             eventsOut.push('explode');
+            if (this.project.cutscenes) {
+              for (let cIdx = 0; cIdx < this.project.cutscenes.length; cIdx++) {
+                const cs = this.project.cutscenes[cIdx];
+                if (cs.trigger === 'on_boss_phase' && !this.director.hasCompletedCutscene(cs.id)) {
+                  this.director.startCutscene(cs, this.cameraX, this.cameraY, this.director.cameraZoom);
+                  break;
+                }
+              }
+            }
           }
         }
 

@@ -1,6 +1,7 @@
 export * from './EntityManager.ts';
 export * from './ComponentStore.ts';
 export * from './EcsCoreWorld.ts';
+export * from './EcsCinematicDirector.ts';
 export * from './EcsProjectSchema.ts';
 export * from './EcsCustomSpriteCompiler.ts';
 export * from './EcsWorld.ts';
@@ -9,3 +10,4 @@ export * from './EcsEventGraph.ts';
 export * from './EcsActionPhysicsSystems.ts';
 export * from './EcsCartridgeRuntime.ts';
 export * from './EcsStudioSession.ts';
+

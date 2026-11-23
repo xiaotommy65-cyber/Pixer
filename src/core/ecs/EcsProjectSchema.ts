@@ -2,7 +2,24 @@ import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import type { ViewportPreset } from '../gpu/GpuTypes.ts';
 import type { AnimationStateMachineDef } from '../sim/AnimationStateMachine.ts';
 import type { CartridgeId, SimEvent } from '../types/WorldTypes.ts';
+import {
+  validateCutsceneDef,
+  type EcsCameraMotionKind,
+  type EcsCutsceneDef,
+  type EcsCutsceneShotDef,
+  type EcsScreenAnchor,
+  type EcsShotSize,
+} from './EcsCinematicDirector.ts';
 import type { EcsWorldMapDef } from './EcsTilemapTypes.ts';
+
+export {
+  validateCutsceneDef,
+  type EcsCameraMotionKind,
+  type EcsCutsceneDef,
+  type EcsCutsceneShotDef,
+  type EcsScreenAnchor,
+  type EcsShotSize,
+};
 
 export type EcsCompareOp = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte';
 
@@ -539,6 +556,8 @@ export interface EcsProjectV2 {
   scripts: Record<string, EcsScriptDef>;
   /** Optional saved Visual Script Event Graph node positions per scriptId (Pixer 9.0 Batch 9.5). */
   graphLayouts?: Record<string, Record<string, { x: number; y: number }>>;
+  /** Optional Actor-Relative & Toric Space multi-shot cutscenes / PV sequences (Phase 5). */
+  cutscenes?: EcsCutsceneDef[];
   globals: Record<string, number>;
   hud: EcsHudGaugeDef[];
   rhythmTrack?: {
@@ -631,6 +650,15 @@ export function validateEcsProjectV2(raw: unknown): EcsValidationResult {
     } else {
       for (const [key, def] of Object.entries(p.customSprites)) {
         errors.push(...validateCustomSpriteDef(def, `customSprites.${key}`));
+      }
+    }
+  }
+  if (p.cutscenes !== undefined) {
+    if (!Array.isArray(p.cutscenes)) {
+      errors.push('cutscenes must be an array');
+    } else {
+      for (let i = 0; i < p.cutscenes.length; i++) {
+        errors.push(...validateCutsceneDef(p.cutscenes[i], `cutscenes[${i}]`));
       }
     }
   }

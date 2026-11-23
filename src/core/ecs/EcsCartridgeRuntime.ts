@@ -914,6 +914,22 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
     return this.worldMapCtrl;
   }
 
+  public getCinematicDirector() {
+    return this.worldMapCtrl.director;
+  }
+
+  public playCutscene(cutsceneId: string): boolean {
+    return this.worldMapCtrl.playCutsceneById(cutsceneId, (shot) => {
+      if (shot.shakeTrauma && shot.shakeTrauma > 0) {
+        this.juice.addTrauma(shot.shakeTrauma);
+        this.cameraRig.addShakeTrauma(shot.shakeTrauma);
+      }
+      if (shot.bgmTheme) {
+        this.snap.bgmTheme = shot.bgmTheme;
+      }
+    });
+  }
+
   public retryStage(): void {
     this.reset();
   }

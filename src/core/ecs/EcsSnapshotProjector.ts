@@ -131,17 +131,27 @@ export class EcsSnapshotProjector {
 
     if (snap.hd2dDepth) {
       const isHd2d = projMode === 'hd2d_iso' || projMode === 'hd2d_3d';
+      const hasWm = st.worldMapCtrl.hasWorldMap();
+      const dir = st.worldMapCtrl.director;
+      const dirActive = hasWm && (dir.isCutscenePlaying() || Math.abs(dir.cameraZoom - 1) > 0.005);
       snap.hd2dDepth.enabled = isHd2d;
       snap.hd2dDepth.mode3d = projMode === 'hd2d_3d';
       snap.hd2dDepth.sortByDepthY = isHd2d;
       snap.hd2dDepth.perspectiveSkew = projMode === 'hd2d_iso' ? (projCfg?.perspectiveSkew ?? 0.055) : 0;
-      snap.hd2dDepth.pitchDeg = projCfg?.pitchDeg ?? 42;
+      snap.hd2dDepth.pitchDeg = Math.max(
+        20,
+        Math.min(72, (projCfg?.pitchDeg ?? 42) + (dirActive ? dir.pitchDeltaDeg : 0)),
+      );
       snap.hd2dDepth.fovDeg = projCfg?.fovDeg ?? 38;
       snap.hd2dDepth.wallHeightScale = projCfg?.wallHeightScale ?? 1.25;
       snap.hd2dDepth.billboardTiltDeg = projCfg?.billboardTiltDeg ?? 12;
       snap.hd2dDepth.obliqueShadowAlpha = projCfg?.obliqueShadowAlpha ?? 0.42;
-      snap.hd2dDepth.tiltShiftBlur = st.project.atmosphere.tiltShiftBlur ?? 0;
-      snap.hd2dDepth.tiltShiftFocusY = st.project.atmosphere.tiltShiftFocusY ?? 0.52;
+      snap.hd2dDepth.tiltShiftBlur = dirActive
+        ? dir.tiltShiftBlur
+        : (st.project.atmosphere.tiltShiftBlur ?? 0);
+      snap.hd2dDepth.tiltShiftFocusY = dirActive
+        ? dir.tiltShiftFocusY
+        : (st.project.atmosphere.tiltShiftFocusY ?? 0.52);
     }
 
     // 1a. Project Material (PBR-Lite Sprite) entities from sparse-set store with Spatial3D elevation & realm masking
@@ -740,17 +750,33 @@ export class EcsSnapshotProjector {
       } else {
         snap.occlusion = undefined;
       }
+
+      hCount = st.worldMapCtrl.director.appendCinemaOverlayHud(
+        this.outHud,
+        (idx) => this.acquireHud(idx),
+        hCount,
+        vp.width,
+        vp.height,
+        st.project.meta.accentHex,
+      );
     } else {
       snap.occlusion = undefined;
     }
 
-    // Apply JuiceSystem camera shake/recoil & screen flash
+    // Apply JuiceSystem camera shake/recoil, director zoom, spotlight darkness & screen flash
+    const hasWm = st.worldMapCtrl.hasWorldMap();
     if (!st.worldMapCtrl.isEditorCameraOverride()) {
-      const baseCamX = st.worldMapCtrl.hasWorldMap() ? st.worldMapCtrl.cameraX : 0;
-      const baseCamY = st.worldMapCtrl.hasWorldMap() ? st.worldMapCtrl.cameraY : 0;
+      const baseCamX = hasWm ? st.worldMapCtrl.cameraX : 0;
+      const baseCamY = hasWm ? st.worldMapCtrl.cameraY : 0;
       snap.cameraX = baseCamX + st.juice.shakeX;
       snap.cameraY = baseCamY + st.juice.shakeY;
     }
+    snap.cameraZoom = hasWm ? st.worldMapCtrl.director.cameraZoom : 1;
+    snap.ambientDarkness = Math.min(
+      0.92,
+      (st.project.atmosphere.ambientDarkness ?? 0.25) +
+        (hasWm ? st.worldMapCtrl.director.spotlightDarkness : 0),
+    );
     snap.screenFlashAlpha = st.juice.flashAlpha;
     snap.screenFlashColor = st.juice.flashColor;
 

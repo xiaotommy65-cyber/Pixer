@@ -184,6 +184,8 @@ test('Engine Core Purity Gate: core runtime & workbench contain ZERO hardcoded D
     'src/core/ecs/EcsWorldMapController.ts',
     'src/core/ecs/EcsCartridgeRuntime.ts',
     'src/core/ecs/EcsSnapshotProjector.ts',
+    'src/core/ecs/EcsCinematicDirector.ts',
+    'src/core/ai/EcsCinematicOracle.ts',
   ];
   const coreForbiddenTokens = [
     'MALAKOR',
