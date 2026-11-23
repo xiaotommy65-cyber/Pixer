@@ -1,4 +1,6 @@
 import { resolveLogicalViewport } from '../gpu/GpuTypes.ts';
+import { CameraRigDirector } from '../runtime/CameraRigDirector.ts';
+import { GameFlowController, resolveSceneCameraShot } from '../runtime/GameFlowController.ts';
 import {
   JuiceSystem,
   stepSquashSpring,
@@ -52,6 +54,8 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
   public readonly world = new EcsWorld();
   public readonly vm = new SandboxScriptVm();
   public readonly juice = new JuiceSystem();
+  public readonly cameraRig = new CameraRigDirector('PLAY_STANDARD');
+  public readonly gameFlow = new GameFlowController('playing');
   private readonly actionPhysics = new EcsActionPhysicsSystems(MAX_ECS_ENTITIES);
   private readonly worldMapCtrl: EcsWorldMapController;
   private readonly projector: EcsSnapshotProjector;
@@ -126,6 +130,13 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
       onStatusChange: (st) => {
         this.status = st;
         this.eventsOut.push(st === 'won' ? 'win' : 'hurt');
+        if (st === 'won' || st === 'lost') {
+          this.gameFlow.goTo('result', 0.45);
+          this.cameraRig.setShot(resolveSceneCameraShot('result'), 5.2);
+        } else {
+          this.gameFlow.goTo('playing', 0.25);
+          this.cameraRig.setShot(resolveSceneCameraShot('playing'), 6.2);
+        }
       },
       onJudgePopup: (text, x, y, color) => {
         this.spawnPopup(text, x, y, color);
@@ -138,6 +149,13 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
       },
       onStatusChange: (st) => {
         this.status = st;
+        if (st === 'won' || st === 'lost') {
+          this.gameFlow.goTo('result', 0.45);
+          this.cameraRig.setShot(resolveSceneCameraShot('result'), 5.2);
+        } else {
+          this.gameFlow.goTo('playing', 0.25);
+          this.cameraRig.setShot(resolveSceneCameraShot('playing'), 6.2);
+        }
       },
       onPopup: (text, x, y, color) => {
         this.spawnPopup(text, x, y, color);
@@ -164,6 +182,10 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
       onHitImpact: (x, y, dirX, dirY, killed, isBoss, targetHandle) => {
         const jScale = this.project.atmosphere.juiceScale ?? 1.0;
         this.triggerEntitySquash(targetHandle, 1.32, 0.72);
+        this.cameraRig.triggerBeatKick((killed ? (isBoss ? 1.15 : 0.65) : 0.25) * jScale);
+        if (killed) {
+          this.cameraRig.addShakeTrauma((isBoss ? 0.65 : 0.28) * jScale);
+        }
         if (jScale > 0.01) {
           const preset = killed ? (isBoss ? 'explosion' : 'heavy_kill') : 'light_hit';
           this.juice.applyPreset(preset, { dirX, dirY, intensity: jScale });
@@ -179,6 +201,7 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
       onHeroHurt: (x, y, heroHandle) => {
         const jScale = this.project.atmosphere.juiceScale ?? 1.0;
         this.triggerEntitySquash(heroHandle, 1.30, 0.74);
+        this.cameraRig.addShakeTrauma(0.42 * jScale);
         if (jScale > 0.01) {
           this.juice.applyPreset('player_hurt', { intensity: jScale });
           this.juice.spawnBurst(x, y, HURT_COLORS, 10, jScale, {
@@ -235,6 +258,9 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
       },
       onBossPhase: (x, y) => {
         const jScale = this.project.atmosphere.juiceScale ?? 1.0;
+        this.cameraRig.setShot('PLAY_OVERDRIVE', 8.0);
+        this.cameraRig.triggerBeatKick(0.95 * jScale);
+        this.cameraRig.addShakeTrauma(0.55 * jScale);
         if (jScale > 0.01) {
           this.juice.applyPreset('boss_phase', { intensity: jScale });
           this.juice.spawnBurst(x, y, BOSS_PHASE_COLORS, 24, jScale, {
@@ -854,6 +880,8 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
     this.ambientSpawnAccum = 0;
     this.lightSparkAccum = 0;
     this.juice.reset();
+    this.gameFlow.goTo('playing', 0);
+    this.cameraRig.snapToShot('PLAY_STANDARD');
     for (let i = 0; i < MAX_ECS_ENTITIES; i++) {
       this.squashActive[i] = 0;
       const sq = this.squashPool[i];
@@ -880,6 +908,10 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
     this.world.setGlobal('activeDimension', this.activeDimensionMask);
     this.vm.loadScripts(this.project.scripts);
     this.sysRenderSyncStats();
+  }
+
+  public getWorldMapController(): EcsWorldMapController {
+    return this.worldMapCtrl;
   }
 
   public retryStage(): void {
@@ -1040,6 +1072,12 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
     this.eventsOut.length = 0;
     const juiceScale = this.project.atmosphere.juiceScale ?? 1.0;
     const simDt = this.juice.advanceRealTime(dt, juiceScale);
+    const vp = this.snap.viewport!;
+    const transitionedToPlay = this.gameFlow.step(dt);
+    if (transitionedToPlay) {
+      this.cameraRig.setShot(resolveSceneCameraShot('playing'), 6.2);
+    }
+    this.cameraRig.step(dt, vp.width / Math.max(1, vp.height));
     this.stepEntitySquashes(dt);
     this.stepAmbientParticles(dt);
 

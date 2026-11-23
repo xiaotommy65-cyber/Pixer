@@ -16,6 +16,7 @@ import {
   type StageProgressInfo,
   type TileDesc,
 } from '../types/WorldTypes.ts';
+import type { CardDeckEngine } from './CardDeckEngine.ts';
 import type { CartridgeArchetypeDef, CartridgeJsonV1 } from './CartridgeSchema.ts';
 import {
   EF_CRUMBLE_TILE,
@@ -28,6 +29,7 @@ import {
   type ShmupRuntimeContext,
 } from './DataRuntimeShmup.ts';
 import type { DualPerspectiveRuntime } from './DualPerspectiveRuntime.ts';
+import type { FighterFrameEngine } from './FighterFrameEngine.ts';
 import {
   acquireHudSlot,
   buildGenreHudPrimitives,
@@ -199,6 +201,8 @@ export interface DataSnapshotProjectorContext extends ShmupRuntimeContext, Genre
   readonly def: CartridgeJsonV1;
   readonly pool: SoaEntityPool;
   readonly juice: JuiceSystem;
+  readonly cardEngine: CardDeckEngine | null;
+  readonly fighterEngine: FighterFrameEngine | null;
   readonly visualRig: ProceduralVisualRigRuntime;
   readonly dualPerspective: DualPerspectiveRuntime;
   readonly hd2dConfig: Hd2dDepthConfig;
@@ -481,7 +485,9 @@ export function projectDataCartridgeSnapshot(
           const moving =
             ctrl === 'topdown'
               ? Math.hypot(ctx.pool.vx[s], ctx.pool.vy[s]) > 8
-              : Math.abs(ctx.pool.vx[s]) > 8 || !ctx.aabbRes.onGround;
+              : ctrl === 'card'
+                ? false
+                : Math.abs(ctx.pool.vx[s]) > 8 || !ctx.aabbRes.onGround;
           sprite = moving && Math.floor(ctx.walkAnim) % 2 === 1 ? ctx.def.player.spriteB : ctx.def.player.sprite;
         }
       }
@@ -505,7 +511,7 @@ export function projectDataCartridgeSnapshot(
       dst.flipX = (f & EF_FLIP_X) !== 0;
       dst.additive = undefined;
       dst.emissive = undefined;
-      dst.tint = undefined;
+      dst.tint = ctrl === 'fighter' && ctx.genre.p1.state === 'block' ? '#5ec2f7' : undefined;
       dst.alpha = undefined;
       dst.paletteRow = ctx.pool.paletteRow[s] || undefined;
       dst.elevationZ = undefined;
@@ -567,6 +573,8 @@ export function projectDataCartridgeSnapshot(
         tint = cyc === 0 ? '#ff708d' : cyc === 1 ? '#5ec2f7' : cyc === 2 ? '#e0aaff' : '#ffd447';
       } else if (isShmup && (f & EF_BOSS) !== 0 && ctx.pool.aiState[s] === 2) {
         tint = Math.floor(t * 8) % 2 === 0 ? '#ff708d' : '#e0aaff';
+      } else if (ctx.def.player.controller === 'fighter' && s === ctx.genre.p2Slot && ctx.genre.p2.state === 'block') {
+        tint = '#5ec2f7';
       }
 
       const crumbleShakeX = (f & EF_CRUMBLE_TILE) !== 0 && ctx.pool.aiState[s] === 1 ? Math.sin(t * 58) * 1.4 : 0;
@@ -808,8 +816,68 @@ export function projectDataCartridgeSnapshot(
   }
   snap.customArtBlueprints = ctx.def.artBlueprints;
   const hideCtrl = ctx.def.player.controller;
-  snap.hideClassicHud = hideCtrl === 'topdown' || gh === 'grid';
-  snap.hudPrimitives = buildDataCartridgeHudPrimitives(ctx, bank, alpha);
+  snap.hideClassicHud =
+    Boolean(ctx.cardEngine || ctx.fighterEngine) ||
+    hideCtrl === 'fighter' ||
+    hideCtrl === 'card' ||
+    hideCtrl === 'topdown' ||
+    gh === 'fighter' ||
+    gh === 'card' ||
+    gh === 'grid';
+
+  if (ctx.cardEngine) {
+    outEntities.length = 0;
+    const hudOut = bank.hudPrimitives;
+    hudOut.length = 0;
+    ctx.cardEngine.emitSceneAndHud(outEntities, hudOut, bank.viewport.width, bank.viewport.height);
+    let ftIdx = hudOut.length;
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      const ft = ctx.floatingTexts[i];
+      if (!ft.active) continue;
+      const tSlot = acquireHudSlot(bank.hudSlots, ftIdx++);
+      tSlot.kind = 'text';
+      tSlot.x = ft.x;
+      tSlot.y = ft.y;
+      tSlot.text = ft.text;
+      tSlot.scale = 1;
+      tSlot.align = 'center';
+      tSlot.color = ft.color;
+      tSlot.shadowColor = '#120d1e';
+      tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
+      tSlot.worldSpace = false;
+      hudOut.push(tSlot);
+    }
+    snap.hudPrimitives = hudOut;
+  } else if (ctx.fighterEngine) {
+    outEntities.length = 0;
+    const hudOut = bank.hudPrimitives;
+    hudOut.length = 0;
+    const fighterDbg = bank.debugRects;
+    fighterDbg.length = 0;
+    ctx.fighterEngine.emitSceneAndHud(outEntities, hudOut, fighterDbg, bank.viewport.width);
+    let ftIdx = hudOut.length;
+    for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
+      const ft = ctx.floatingTexts[i];
+      if (!ft.active) continue;
+      const tSlot = acquireHudSlot(bank.hudSlots, ftIdx++);
+      tSlot.kind = 'text';
+      tSlot.x = ft.x;
+      tSlot.y = ft.y;
+      tSlot.text = ft.text;
+      tSlot.scale = 1;
+      tSlot.align = 'center';
+      tSlot.color = ft.color;
+      tSlot.shadowColor = '#120d1e';
+      tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
+      tSlot.worldSpace = true;
+      hudOut.push(tSlot);
+    }
+    snap.debugRects = fighterDbg.length > 0 ? fighterDbg : undefined;
+    snap.hudPrimitives = hudOut;
+  } else {
+    snap.hudPrimitives = buildDataCartridgeHudPrimitives(ctx, bank, bossHp, bossMaxHp, alpha);
+  }
+
   snap.statusBanner = ctx.statusBanner;
   snap.stage = bank.stageInfo;
   snap.bgmTheme = st.bgmTheme;
@@ -820,11 +888,21 @@ export function projectDataCartridgeSnapshot(
 function buildDataCartridgeHudPrimitives(
   ctx: DataSnapshotProjectorContext,
   bank: RuntimeSnapshotBank,
+  bossHp: number,
+  bossMaxHp: number,
   alpha: number,
 ): HudPrimitiveDesc[] | undefined {
   const ctrl = ctx.def.player.controller;
   const dualOn = ctx.dualPerspective.isEnabled();
-  const genreHud = ctx.def.meta.genreHud ?? (ctrl === 'topdown' && !dualOn ? 'grid' : undefined);
+  const genreHud =
+    ctx.def.meta.genreHud ??
+    (ctrl === 'fighter'
+      ? 'fighter'
+      : ctrl === 'card'
+        ? 'card'
+        : ctrl === 'topdown' && !dualOn
+          ? 'grid'
+          : undefined);
   const needsAimLine =
     ctx.grappleEnabled &&
     ctx.grappleState === 'idle' &&
@@ -847,6 +925,7 @@ function buildDataCartridgeHudPrimitives(
   out.length = 0;
   let count = 0;
   const vw = bank.viewport.width;
+  const vh = bank.viewport.height;
 
   if (needsAimLine) {
     const hx = ctx.pool.renderX(ctx.playerSlot, alpha) + ctx.pool.w[ctx.playerSlot] * 0.5;
@@ -885,8 +964,8 @@ function buildDataCartridgeHudPrimitives(
     bar.bgColor = '#120e24';
     bar.alpha = 0.9;
     out.push(bar);
-  } else if (genreHud === 'grid') {
-    count = buildGenreHudPrimitives(ctx, out, bank.hudSlots, count);
+  } else if (genreHud === 'fighter' || genreHud === 'card' || genreHud === 'grid') {
+    count = buildGenreHudPrimitives(ctx, genreHud, out, bank.hudSlots, count, vw, vh, bossHp, bossMaxHp);
   }
 
   if (dualOn) {

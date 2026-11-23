@@ -1,7 +1,9 @@
 import { BUILTIN_SPRITE_GRIDS, type SpriteId } from '../../assets/AtlasSpritesData.ts';
 import type { BgCloudDesc, BgmTheme, SimEvent } from '../types/WorldTypes.ts';
+import type { CardDeckEngineConfig } from './CardDeckEngine.ts';
 import type { CartridgeDualPerspectiveConfig } from './DualPerspectiveRuntime.ts';
 import type { VmAction, VmRule, VmTrigger } from './EventActionVm.ts';
+import type { FighterEngineConfig } from './FighterFrameEngine.ts';
 import type { OrthogonalArtBlueprint } from './OrthogonalArt.ts';
 import type { CartridgeAtmosphereDef, CartridgeVisualRigDef } from './ProceduralVisualRig.ts';
 import { CHUNK_AREA, CHUNK_SIZE, MAX_TILEMAP_COLS, MAX_TILEMAP_ROWS, TILE_SIZE } from './TilemapGrid.ts';
@@ -317,6 +319,8 @@ export interface CartridgeJsonV1 {
   sprites?: Record<string, readonly string[]>;
   artBlueprints?: Record<string, OrthogonalArtBlueprint>;
   cardDeck?: readonly CartridgeCardDef[];
+  cardEngine?: CardDeckEngineConfig;
+  fighterEngine?: FighterEngineConfig;
   perspective?: CartridgePerspectiveConfig;
   player: {
     controller: CartridgeControllerKind;

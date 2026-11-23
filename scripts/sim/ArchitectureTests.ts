@@ -260,8 +260,6 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'src/ui/StudioOrthogonalPanels.ts',
     'src/ui/WorkshopTemplates.ts',
     'src/core/gpu/Stage3DPipeline.ts',
-    'src/core/sim/CardDeckEngine.ts',
-    'src/core/sim/FighterFrameEngine.ts',
     'src/core/rhythm',
     'src/assets/AudioPatterns.ts',
     'src/game/LegacyCartridgePack.ts',

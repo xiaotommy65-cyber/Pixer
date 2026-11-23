@@ -19,6 +19,7 @@ import {
   type SimEvent,
   type TileDesc,
 } from '../types/WorldTypes.ts';
+import { CardDeckEngine, type CardEngineStepHooks } from './CardDeckEngine.ts';
 import {
   validateCartridgeJson,
   type CartridgeArchetypeDef,
@@ -66,11 +67,15 @@ import {
   type VmCollisionPair,
   type VmHostBridge,
 } from './EventActionVm.ts';
+import { FighterFrameEngine, type FighterStepHooks } from './FighterFrameEngine.ts';
 import {
   createRuntimeGenreState,
+  EF_FIGHTER_P2,
   EF_LOGIC_SWITCH,
   EF_PUSHABLE_CRATE,
   initGenreStageState,
+  stepCardController,
+  stepFighterController,
   stepTopdownController,
   type GenreRuntimeContext,
   type RuntimeGenreState,
@@ -156,7 +161,7 @@ function compileTagsToFlags(tags: readonly CartridgeTag[]): number {
       case 'crystal_reset': f |= EF_CRYSTAL_RESET | EF_EMISSIVE; break;
       case 'crumble_tile': f |= EF_SOLID | EF_CRUMBLE_TILE; break;
       case 'updraft': f |= EF_EMISSIVE; break;
-      case 'fighter_p2': f |= EF_ENEMY | EF_STOMPABLE; break;
+      case 'fighter_p2': f |= EF_ENEMY | EF_STOMPABLE | EF_FIGHTER_P2; break;
       case 'card_slot': f |= EF_EMISSIVE; break;
       case 'logic_switch': f |= EF_EMISSIVE | EF_LOGIC_SWITCH; break;
     }
@@ -166,7 +171,7 @@ function compileTagsToFlags(tags: readonly CartridgeTag[]): number {
 
 /**
  * Unified Zero-GC data-driven cartridge runtime executing validated CartridgeJsonV1 files.
- * Unifies platformer and arcade shooter simulations through SoaEntityPool, TilemapGrid, and EventActionVm.
+ * Unifies platformer, arcade shooter, card, fighter, and topdown simulations through SoaEntityPool, TilemapGrid, and EventActionVm.
  */
 export class DataCartridgeRuntime
   implements
@@ -279,8 +284,10 @@ export class DataCartridgeRuntime
   public readonly aabbBox = { x: 0, y: 0, vx: 0, vy: 0 };
   public readonly aabbRes: TileAabbStepResult = { onGround: false, hitWall: false, hitCeiling: false, hitHazard: false, landVy: 0 };
 
-  // Shmup, Visual Rig & Dual-Perspective Engines
+  // Shmup, Visual Rig, Dual-Perspective & Orthogonal Genre Engines
   public readonly shmup: RuntimeShmupState;
+  public readonly cardEngine: CardDeckEngine | null = null;
+  public readonly fighterEngine: FighterFrameEngine | null = null;
   public readonly visualRig = new ProceduralVisualRigRuntime();
   public readonly dualPerspective = new DualPerspectiveRuntime();
   public readonly dualPerspectiveStepOut: DualPerspectiveStepResult = { toggled: false, slashed: false, hits: 0 };
@@ -289,6 +296,7 @@ export class DataCartridgeRuntime
 
   // Pre-allocated snapshot, spatial query, floating pixel text & VM buffers (Zero-GC)
   public readonly eventsOut: SimEvent[] = [];
+  private readonly orthogonalStepHooks: CardEngineStepHooks & FighterStepHooks;
   public readonly querySlots = new Int32Array(MAX_ENTITIES);
   private readonly entityIdCache: string[] = new Array<string>(MAX_ENTITIES);
   private readonly entityIdArchIdx = new Int16Array(MAX_ENTITIES).fill(-2);
@@ -397,6 +405,10 @@ export class DataCartridgeRuntime
       } else if (anchor === 'other' && otherSlot >= 0) {
         wx += this.pool.x[otherSlot] + this.pool.w[otherSlot] * 0.5;
         wy += this.pool.y[otherSlot] - 6;
+      } else if (anchor === 'other' && this.genre.p2Slot >= 0) {
+        const p2 = this.genre.p2Slot;
+        wx += this.pool.x[p2] + this.pool.w[p2] * 0.5;
+        wy += this.pool.y[p2] - 6;
       }
       this.spawnFloatingText(text, wx, wy, color ?? '#fffaf0');
     },
@@ -414,6 +426,18 @@ export class DataCartridgeRuntime
       throw new Error(`Invalid Cartridge JSON: ${validated.errors.join('; ')}`);
     }
     this.def = validated.data;
+    this.orthogonalStepHooks = {
+      vm: this.vm,
+      juice: this.juice,
+      spawnFloatingText: (text, wx, wy, color) => this.spawnFloatingText(text, wx, wy, color),
+      eventsOut: this.eventsOut,
+    };
+    if (this.def.cardEngine) {
+      this.cardEngine = new CardDeckEngine(this.def.cardEngine);
+    }
+    if (this.def.fighterEngine) {
+      this.fighterEngine = new FighterFrameEngine(this.def.fighterEngine);
+    }
     const gc = this.def.player.grappleConfig;
     this.grappleEnabled = this.def.player.controller === 'platformer' && Boolean(gc?.enabled);
     this.grappleMaxRange = clamp(gc?.maxRange ?? 165, 24, 512);
@@ -1001,9 +1025,13 @@ export class DataCartridgeRuntime
 
   public setDebugHitboxes(enabled: boolean): void {
     this.debugHitboxes = enabled;
+    if (this.fighterEngine) {
+      this.fighterEngine.debugBoxesVisible = enabled;
+    }
   }
 
   public getComboCount(): number {
+    if (this.fighterEngine) return this.fighterEngine.p1.comboCount;
     return this.juice.comboCount;
   }
 
@@ -1019,6 +1047,20 @@ export class DataCartridgeRuntime
 
   public retryCurrentStage(): void {
     this.hearts = this.maxHearts;
+    if (this.cardEngine) {
+      this.cardEngine.resetRun();
+      this.status = 'playing';
+      this.score = 0;
+      this.statusBanner = this.cardEngine.lastActionBanner;
+      return;
+    }
+    if (this.fighterEngine) {
+      this.fighterEngine.resetRound();
+      this.status = 'playing';
+      this.score = 0;
+      this.statusBanner = this.fighterEngine.lastBanner;
+      return;
+    }
     if (this.def.player.controller === 'shmup') {
       this.shmup.invulnTimer = 1.35;
       this.shmup.chargeSec = 0;
@@ -1117,6 +1159,47 @@ export class DataCartridgeRuntime
     }
 
     const ctrl = this.def.player.controller;
+    if (this.cardEngine) {
+      if (this.status !== 'playing' && this.input.justPressed('shoulderL')) {
+        this.retryCurrentStage();
+        this.eventsOut.push('snap');
+        return this.eventsOut;
+      }
+      if (simDt > 0) {
+        this.elapsedSec += simDt;
+        this.tweens.step(simDt, this.onTweenUpdate);
+      }
+      this.cardEngine.step(this.input, dt, this.stageViewport.width, this.stageViewport.height, this.orthogonalStepHooks);
+      this.score = this.cardEngine.score;
+      this.hearts = Math.max(0, Math.ceil((this.cardEngine.heroHp / Math.max(1, this.cardEngine.heroMaxHp)) * this.maxHearts));
+      this.status = this.cardEngine.phase === 'won' ? 'won' : this.cardEngine.phase === 'lost' ? 'lost' : 'playing';
+      this.statusBanner = this.cardEngine.lastActionBanner;
+      this.vm.stepTick(this.vmHost, this.vmCollisions, 0);
+      return this.eventsOut;
+    }
+
+    if (this.fighterEngine) {
+      if (this.status !== 'playing' && this.input.justPressed('shoulderL')) {
+        this.retryCurrentStage();
+        this.eventsOut.push('snap');
+        return this.eventsOut;
+      }
+      if (simDt > 0) {
+        this.elapsedSec += simDt;
+        this.tweens.step(simDt, this.onTweenUpdate);
+      }
+      this.fighterEngine.step(this.input, dt, this.orthogonalStepHooks);
+      this.score = this.fighterEngine.score;
+      this.hearts = Math.max(0, Math.ceil((this.fighterEngine.p1.hp / Math.max(1, this.fighterEngine.p1.maxHp)) * this.maxHearts));
+      this.status = this.fighterEngine.status;
+      this.cameraX = this.fighterEngine.cameraX;
+      this.cameraY = this.fighterEngine.cameraY;
+      this.cameraZoom = this.fighterEngine.cameraZoom;
+      this.statusBanner = this.fighterEngine.lastBanner;
+      this.vm.stepTick(this.vmHost, this.vmCollisions, 0);
+      return this.eventsOut;
+    }
+
     if (ctrl === 'shmup') {
       if (simDt > 0 && this.shmup.phase === 'sortie') this.elapsedSec += simDt;
       if (simDt > 0) this.tweens.step(simDt, this.onTweenUpdate);
@@ -1138,15 +1221,25 @@ export class DataCartridgeRuntime
     const targetZoom = this.scoutMode ? (this.def.player.scoutZoom ?? 0.78) : 1.0;
     this.cameraZoom += (targetZoom - this.cameraZoom) * Math.min(1, dt * 8);
 
-    if (this.status === 'playing' && this.playerSlot >= 0 && simDt > 0) {
-      this.elapsedSec += simDt;
-      this.tweens.step(simDt, this.onTweenUpdate);
-      if (this.dualPerspective.isEnabled()) {
-        stepDataDualPerspectiveStage(this, simDt, params);
-      } else if (ctrl === 'topdown') {
-        stepTopdownController(this, simDt, params, this.eventsOut);
-      } else {
-        stepDataPlatformer(this, simDt, params);
+    if (this.status === 'playing' && this.playerSlot >= 0) {
+      if (ctrl === 'card') {
+        if (simDt > 0) {
+          this.elapsedSec += simDt;
+          this.tweens.step(simDt, this.onTweenUpdate);
+        }
+        stepCardController(this, dt, params, this.eventsOut);
+      } else if (simDt > 0) {
+        this.elapsedSec += simDt;
+        this.tweens.step(simDt, this.onTweenUpdate);
+        if (this.dualPerspective.isEnabled()) {
+          stepDataDualPerspectiveStage(this, simDt, params);
+        } else if (ctrl === 'fighter') {
+          stepFighterController(this, simDt, params, this.eventsOut);
+        } else if (ctrl === 'topdown') {
+          stepTopdownController(this, simDt, params, this.eventsOut);
+        } else {
+          stepDataPlatformer(this, simDt, params);
+        }
       }
     }
 
