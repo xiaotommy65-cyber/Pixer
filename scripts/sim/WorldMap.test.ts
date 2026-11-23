@@ -209,7 +209,15 @@ test('Engine Core Purity Gate: core runtime & workbench contain ZERO hardcoded D
   }
 
   // Workbench UI may list template/sprite picker names, but must NEVER hardcode room IDs or game-rule globals
-  const workbenchSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsWorkbenchView.ts'), 'utf8');
+  const workbenchFiles = [
+    'src/ui/EcsWorkbenchView.ts',
+    'src/ui/EcsWorkbenchShellBuilder.ts',
+    'src/ui/EcsWorkbenchEntityInspector.ts',
+    'src/ui/EcsWorkbenchSceneInspector.ts',
+    'src/ui/EcsWorkbenchHierarchyPanels.ts',
+    'src/ui/EcsWorkbenchMapCanvasController.ts',
+    'src/ui/EcsWorkbenchLiveMutator.ts',
+  ];
   const workbenchForbiddenTokens = [
     'throne_sanctum',
     'has_gate_key',
@@ -219,12 +227,15 @@ test('Engine Core Purity Gate: core runtime & workbench contain ZERO hardcoded D
     'ember_orb',
     '快速切換魔王城房間',
   ];
-  for (const token of workbenchForbiddenTokens) {
-    assert.equal(
-      workbenchSrc.includes(token),
-      false,
-      `Workbench UI must NOT hardcode game-specific logic token "${token}"`,
-    );
+  for (const rel of workbenchFiles) {
+    const src = readFileSync(resolve(process.cwd(), rel), 'utf8');
+    for (const token of workbenchForbiddenTokens) {
+      assert.equal(
+        src.includes(token),
+        false,
+        `Workbench UI "${rel}" must NOT hardcode game-specific logic token "${token}"`,
+      );
+    }
   }
 
   const panelSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsMapDesignerPanel.ts'), 'utf8');

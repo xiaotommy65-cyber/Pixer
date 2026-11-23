@@ -200,6 +200,8 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'ShmupOverlayView.ts',
     'ExternalImportModalView.ts',
     'EcsWorldRulesInspectorPanel.ts',
+    'EcsWorkbenchMapCanvasController.ts',
+    'ConsoleSpatialController.ts',
     'InteropWorkerClient.ts',
   ];
   for (const viewFile of newUiViews) {
@@ -209,7 +211,13 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       `Lobby/Workbench/Overlay module ${viewFile} must expose public destroy() for clean teardown`,
     );
   }
-  for (const overlayFile of ['ShmupOverlayView.ts', 'ExternalImportModalView.ts', 'EcsWorldRulesInspectorPanel.ts']) {
+  for (const overlayFile of [
+    'ShmupOverlayView.ts',
+    'ExternalImportModalView.ts',
+    'EcsWorldRulesInspectorPanel.ts',
+    'EcsWorkbenchMapCanvasController.ts',
+    'ConsoleSpatialController.ts',
+  ]) {
     const ovSrc = fs.readFileSync(path.join(rootDir, 'src/ui', overlayFile), 'utf8');
     check(
       ovSrc.includes('new AbortController()') && ovSrc.includes('this.ac.abort()'),
