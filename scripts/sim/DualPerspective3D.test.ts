@@ -4,7 +4,7 @@ import { TextureAtlas } from '../../src/assets/TextureAtlas.ts';
 import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
-import { GpuEngine } from '../../src/core/gpu/GpuEngine.ts';
+import { GpuEngine, hexToRgb01 } from '../../src/core/gpu/GpuEngine.ts';
 import type {
   GpuOcclusionState,
   IGpuBackend,
@@ -308,3 +308,38 @@ test('Transactional set_projection Undo/Redo, live patchLiveProjection, and MCP 
   assert.equal(semPayload.projection.pitchDeg, 48);
   assert.equal(semPayload.projection.wallHeightScale, 1.4);
 });
+
+test('GPU & SceneGpuBridge edge cases: strict hex parsing, NaN light/camera rejection & maxLife=0 particle safety', () => {
+  // 1. Strict hex color cache: #000000 stays black, #f00 expands, invalid hex falls back to white
+  assert.deepEqual(hexToRgb01('#000000'), [0, 0, 0]);
+  assert.deepEqual(hexToRgb01('#f00'), [1, 0, 0]);
+  assert.deepEqual(hexToRgb01('#12zzzz'), [1, 1, 1]);
+
+  const atlas = new TextureAtlas();
+  const glMock = attachMockGpu('webgl2', atlas);
+  glMock.gpu.beginFrame('#000000', '#112233');
+  glMock.gpu.pushDynamicLight(Number.NaN, 10, 64, '#ffaa00', 0.8);
+  glMock.gpu.pushDynamicLight(10, 20, Number.NaN, '#ffaa00', 0.8);
+  glMock.gpu.setCamera3D(Number.NaN, 50, Number.NaN, Number.NaN, Number.NaN);
+  glMock.gpu.drawBox3DWall('wall_stone', null, 0, 0, 32, 32, 0, -4, 0);
+  glMock.gpu.drawLight3D(10, 20, 0, 0, '#ffaa00', 0.5);
+  const qStats = glMock.gpu.getQuad3DStats();
+  assert.equal(qStats.opaqueCount, 0, 'Negative wallH box must be skipped');
+  assert.equal(glMock.gpu.flush(0).lightCount, 0, 'NaN/zero-radius lights must be ignored');
+
+  // 2. SceneGpuBridge handles NaN viewport/camera/zoom and maxLife=0 particle without emitting NaN
+  const bridge = new SceneGpuBridge();
+  const rt = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
+  rt.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  const snap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  snap.viewport = { width: Number.NaN, height: Number.NaN };
+  snap.cameraX = Number.NaN;
+  snap.cameraY = Number.NaN;
+  snap.cameraZoom = -2;
+  snap.particles = [{ x: 10, y: 10, vx: 0, vy: 0, size: 6, rot: 0, vRot: 0, color: '#ffffff', life: 0, maxLife: 0 }];
+  snap.bossMaxHp = 100;
+  snap.bossHp = 150;
+  const stats = bridge.render(glMock.gpu, snap, null);
+  assert.ok(Number.isFinite(stats.spriteCount) && stats.spriteCount > 0);
+});
+

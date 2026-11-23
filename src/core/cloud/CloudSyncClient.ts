@@ -138,6 +138,15 @@ export class CloudSyncClient {
     }
   }
 
+  private async parseJsonRecordSafe(resp: Response): Promise<Record<string, unknown> | null> {
+    try {
+      const parsed = (await resp.json()) as unknown;
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+
   public async publishProject(
     slug: string,
     project: EcsProjectV2,
@@ -176,7 +185,7 @@ export class CloudSyncClient {
           ...(opts.audioManifestR2Key !== undefined ? { audioManifestR2Key: opts.audioManifestR2Key } : {}),
         }),
       });
-      const json = (await resp.json()) as Record<string, unknown>;
+      const json = (await this.parseJsonRecordSafe(resp)) ?? {};
       if (resp.status === 412) {
         return {
           ok: false,
@@ -206,6 +215,11 @@ export class CloudSyncClient {
   ): Promise<UploadAssetResult> {
     if (!this.isConfigured()) return { ok: false, error: 'Cloud API not configured' };
     if (!this.authToken) return { ok: false, error: 'Authentication token required to upload assets' };
+    if (bytes.byteLength === 0) return { ok: false, error: 'Asset payload is empty' };
+    const cleanName = filename.trim();
+    if (!cleanName || cleanName.includes('/') || cleanName.includes('\\') || cleanName.includes('..')) {
+      return { ok: false, error: 'Invalid asset filename' };
+    }
 
     try {
       const copy = new Uint8Array(bytes.byteLength);
@@ -214,12 +228,12 @@ export class CloudSyncClient {
         method: 'PUT',
         headers: {
           Authorization: `Bearer ${this.authToken}`,
-          'X-Asset-Filename': filename,
+          'X-Asset-Filename': cleanName,
           'Content-Type': 'application/octet-stream',
         },
         body: copy,
       });
-      const json = (await resp.json()) as Record<string, unknown>;
+      const json = (await this.parseJsonRecordSafe(resp)) ?? {};
       if (!resp.ok) {
         return { ok: false, error: typeof json.error === 'string' ? json.error : `HTTP ${resp.status}` };
       }
@@ -254,7 +268,7 @@ export class CloudSyncClient {
         },
         body: JSON.stringify({ sram: localSram, updatedAt: localUpdatedAtIso }),
       });
-      const json = (await resp.json()) as Record<string, unknown>;
+      const json = (await this.parseJsonRecordSafe(resp)) ?? {};
       if (!resp.ok) {
         return { ok: false, error: typeof json.error === 'string' ? json.error : `HTTP ${resp.status}` };
       }

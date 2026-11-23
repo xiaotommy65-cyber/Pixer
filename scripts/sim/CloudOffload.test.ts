@@ -355,3 +355,57 @@ test('Edge Remote Streamable HTTP MCP (/api/mcp) enforces Bearer auth, private s
   };
   assert.equal(privRpc.result?.structuredContent?.project?.meta?.code, 'PA-14');
 });
+
+test('Cloud Edge API & Client edge cases: weak ETags, UTF-8 byte limit, SRAM future clock-skew clamp & non-JSON 502 error resilience', async () => {
+  const env = createMockCloudEnv();
+  const alice = makeEdgeClient(env);
+  alice.setAuthToken('valid-alice-jwt');
+
+  // 1. Empty asset or path-like filename is rejected locally without hitting Edge API
+  const emptyUpload = await alice.uploadExternalAsset(new Uint8Array(0), 'empty.opus');
+  assert.equal(emptyUpload.ok, false);
+  const badPathUpload = await alice.uploadExternalAsset(new Uint8Array([1, 2]), '../evil.opus');
+  assert.equal(badPathUpload.ok, false);
+
+  // 2. Weak / multi-tag If-None-Match returns 304 Not Modified
+  const pub = await alice.publishProject('edge-etag-demo', EMERALD_RUINS_PROJECT, { visibility: 'public' });
+  assert.equal(pub.ok, true);
+  const weak304 = await handleEdgeRequest(
+    new Request('https://api.pixer.test/api/projects/edge-etag-demo', {
+      headers: { 'If-None-Match': `"other", W/"${pub.etag}"` },
+    }),
+    env,
+  );
+  assert.equal(weak304.status, 304);
+
+  // 3. UTF-8 multi-byte SRAM payload > 256 KiB is rejected even when JS string.length < 256K
+  const cjkBlock = 'あ'.repeat(90_000); // 90K UTF-16 code units = 270 KB UTF-8 (> 256 KiB)
+  const oversizedSramResp = await handleEdgeRequest(
+    new Request('https://api.pixer.test/api/saves/cloudberry-hop', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer valid-alice-jwt',
+      },
+      body: JSON.stringify({ sram: { note: cjkBlock } }),
+    }),
+    env,
+  );
+  assert.equal(oversizedSramResp.status, 413);
+
+  // 4. Future-skewed SRAM timestamp (2099) is clamped to server time so subsequent saves still work
+  const futurePush = await alice.syncCartridgeSram('cloudberry-hop', { stage: 2 }, '2099-01-01T00:00:00.000Z');
+  assert.equal(futurePush.ok, true);
+  assert.ok(futurePush.updatedAt && Date.parse(futurePush.updatedAt) <= Date.now() + 310_000);
+
+  // 5. Non-JSON HTML 502 proxy response produces clean HTTP error instead of SyntaxError
+  const html502Client = new CloudSyncClient({
+    apiBaseUrl: 'https://api.pixer.test',
+    fetchFn: async () => new Response('<html>502 Bad Gateway</html>', { status: 502 }),
+  });
+  html502Client.setAuthToken('valid-alice-jwt');
+  const failPub = await html502Client.publishProject('edge-etag-demo', EMERALD_RUINS_PROJECT);
+  assert.equal(failPub.ok, false);
+  assert.equal(failPub.error, 'HTTP 502');
+});
+

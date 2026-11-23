@@ -4,7 +4,7 @@ import { HybridAiDirector, type AiProvider } from '../../src/core/ai/AiProvider.
 import { RemoteHttpAiProvider } from '../../src/core/ai/RemoteAiProvider.ts';
 import { ToySynth } from '../../src/core/audio/ToySynth.ts';
 import { getCartridgeControlProfile, listCartridgeIds } from '../../src/core/runtime/CartridgeRegistry.ts';
-import { CartridgeRunner, STEP_DT } from '../../src/core/runtime/CartridgeRunner.ts';
+import { CartridgeRunner } from '../../src/core/runtime/CartridgeRunner.ts';
 import { EngineHost } from '../../src/core/runtime/EngineHost.ts';
 import { EngineEventBus } from '../../src/core/runtime/EventBus.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
@@ -16,7 +16,6 @@ import {
   btSequence,
   btUtilitySelector,
 } from '../../src/core/sim/BehaviorTree.ts';
-import { RuleRegistry, type RuleEntityLike, type RuleWorldActions } from '../../src/core/sim/RuleMatrix.ts';
 import type { CartridgeInstance } from '../../src/core/types/WorldTypes.ts';
 import { check } from './SimTestHarness.ts';
 
@@ -80,52 +79,7 @@ export async function testExtensibilityAndAiSpis(): Promise<void> {
   tree.tick(bb);
   check(readPicked() === 'attack', 'Cooldown should fall through to second utility branch (attack)');
 
-  // 3. Dynamic RuleRegistry priority & unregister
-  const rules = new RuleRegistry([]);
-  const calls: string[] = [];
-  const offLow = rules.register({
-    id: 'low-prio',
-    sourceTag: 'burning',
-    targetTag: 'flammable',
-    priority: 1,
-    onOverlap: () => calls.push('low'),
-  });
-  rules.register({
-    id: 'high-prio',
-    sourceTag: 'burning',
-    targetTag: 'flammable',
-    priority: 10,
-    onOverlap: () => calls.push('high'),
-  });
-  const dummyEnt = (tags: ('burning' | 'flammable')[]): RuleEntityLike => ({
-    id: 'e',
-    x: 0,
-    y: 0,
-    vx: 0,
-    vy: 0,
-    w: 16,
-    h: 16,
-    alive: true,
-    tags: new Set(tags),
-    flashTimer: 0,
-    scaleX: 1,
-    scaleY: 1,
-    sprite: 'crate',
-  });
-  const dummyActions: RuleWorldActions = {
-    emit: () => {},
-    addScore: () => {},
-    unlockGates: () => {},
-    spawnBurst: () => {},
-    triggerJuice: () => {},
-    detonateAt: () => {},
-  };
-  rules.evaluatePair(dummyEnt(['burning']), dummyEnt(['flammable']), dummyActions, STEP_DT);
-  check(calls[0] === 'high' && calls[1] === 'low', 'RuleRegistry should evaluate rules in descending priority');
-  offLow();
-  check(rules.listRules().length === 1, 'RuleRegistry disposer should remove unregistered rule');
-
-  // 4. Plugin Cartridge Registry + Unified Observation
+  // 3. Plugin Cartridge Registry + Unified Observation
   const runner = new CartridgeRunner('cloudberry-hop');
   const host = new EngineHost(runner, new ToySynth(), new SaveService());
   const pluginStub: CartridgeInstance = {

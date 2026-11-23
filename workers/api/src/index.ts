@@ -99,6 +99,32 @@ function isSafeR2Key(key: string): boolean {
   return SAFE_R2_KEY_RE.test(key);
 }
 
+/** Normalizes single or comma-separated ETag headers (stripping optional weak W/ prefix and quotes). */
+function etagMatches(headerValue: string | null, currentEtag: string): boolean {
+  if (!headerValue) return false;
+  const target = currentEtag.replace(/^W\//i, '').replace(/"/g, '').trim();
+  if (!target) return false;
+  const parts = headerValue.split(',');
+  for (let i = 0; i < parts.length; i++) {
+    const token = parts[i].trim();
+    if (token === '*') return true;
+    const norm = token.replace(/^W\//i, '').replace(/"/g, '').trim();
+    if (norm === target) return true;
+  }
+  return false;
+}
+
+function exceedsContentLength(request: Request, maxBytes: number): boolean {
+  const raw = request.headers.get('Content-Length');
+  if (!raw) return false;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > maxBytes;
+}
+
+function utf8ByteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
+}
+
 /** Constant-time string comparison for bearer secrets to avoid timing side channels. */
 function timingSafeEqualStr(a: string, b: string): boolean {
   const enc = new TextEncoder();
@@ -178,9 +204,9 @@ async function routeEdgeRequest(
     if (!obj) {
       return jsonResponse({ error: 'Asset not found' }, 404, cors);
     }
-    const ifNoneMatch = request.headers.get('If-None-Match');
-    if (ifNoneMatch && ifNoneMatch.replace(/"/g, '') === obj.etag.replace(/"/g, '')) {
-      return new Response(null, { status: 304, headers: { ...cors, ETag: `"${obj.etag.replace(/"/g, '')}"` } });
+    const cleanEtag = obj.etag.replace(/"/g, '');
+    if (etagMatches(request.headers.get('If-None-Match'), cleanEtag)) {
+      return new Response(null, { status: 304, headers: { ...cors, ETag: `"${cleanEtag}"` } });
     }
     const data = await obj.arrayBuffer();
     return new Response(data, {
@@ -189,7 +215,7 @@ async function routeEdgeRequest(
         ...cors,
         'Content-Type': obj.httpMetadata?.contentType ?? 'application/octet-stream',
         'Cache-Control': obj.httpMetadata?.cacheControl ?? 'public, max-age=31536000, immutable',
-        ETag: `"${obj.etag.replace(/"/g, '')}"`,
+        ETag: `"${cleanEtag}"`,
       },
     });
   }
@@ -215,6 +241,9 @@ async function routeEdgeRequest(
       );
     }
 
+    if (exceedsContentLength(request, rule.maxBytes)) {
+      return jsonResponse({ error: `Asset byte size exceeds ${rule.maxBytes} byte limit` }, 413, cors);
+    }
     const bytes = new Uint8Array(await request.arrayBuffer());
     if (bytes.byteLength === 0 || bytes.byteLength > rule.maxBytes) {
       return jsonResponse(
@@ -273,9 +302,9 @@ async function routeEdgeRequest(
         }
       }
 
-      const ifNoneMatch = request.headers.get('If-None-Match');
-      if (ifNoneMatch && ifNoneMatch.replace(/"/g, '') === rec.etag.replace(/"/g, '')) {
-        return new Response(null, { status: 304, headers: { ...cors, ETag: `"${rec.etag}"` } });
+      const cleanEtag = rec.etag.replace(/"/g, '');
+      if (etagMatches(request.headers.get('If-None-Match'), cleanEtag)) {
+        return new Response(null, { status: 304, headers: { ...cors, ETag: `"${cleanEtag}"` } });
       }
 
       const blob = await env.PIXER_ASSETS.get(rec.latest_r2_key);
@@ -313,7 +342,7 @@ async function routeEdgeRequest(
         200,
         cors,
         {
-          ETag: `"${rec.etag}"`,
+          ETag: `"${cleanEtag}"`,
           'Cache-Control': rec.visibility === 'public' ? 'public, max-age=60, stale-while-revalidate=300' : 'private, no-cache',
         },
       );
@@ -325,10 +354,13 @@ async function routeEdgeRequest(
       if (!user) {
         return jsonResponse({ error: 'Unauthorized: valid Supabase Bearer token required' }, 401, cors);
       }
+      if (exceedsContentLength(request, MAX_PROJECT_BYTES)) {
+        return jsonResponse({ error: `Project payload exceeds ${MAX_PROJECT_BYTES} byte limit` }, 413, cors);
+      }
 
       const rawText = await request.text();
-      const rawBytes = new TextEncoder().encode(rawText);
-      if (rawBytes.byteLength === 0 || rawBytes.byteLength > MAX_PROJECT_BYTES) {
+      const rawByteLen = utf8ByteLength(rawText);
+      if (rawByteLen === 0 || rawByteLen > MAX_PROJECT_BYTES) {
         return jsonResponse({ error: `Project payload exceeds ${MAX_PROJECT_BYTES} byte limit` }, 413, cors);
       }
 
@@ -368,8 +400,8 @@ async function routeEdgeRequest(
         if (existing.owner_id !== user.userId) {
           return jsonResponse({ error: 'Forbidden: you do not own this project slug' }, 403, cors);
         }
-        const ifMatch = request.headers.get('If-Match')?.replace(/"/g, '').trim();
-        if (ifMatch && ifMatch !== existing.etag) {
+        const ifMatchHeader = request.headers.get('If-Match');
+        if (ifMatchHeader && !etagMatches(ifMatchHeader, existing.etag)) {
           return jsonResponse(
             { error: 'Conflict: project was modified remotely', currentEtag: existing.etag },
             412,
@@ -455,8 +487,12 @@ async function routeEdgeRequest(
     }
 
     if (request.method === 'PUT') {
+      if (exceedsContentLength(request, MAX_SRAM_BYTES)) {
+        return jsonResponse({ error: `SRAM payload exceeds ${MAX_SRAM_BYTES} byte limit` }, 413, cors);
+      }
       const rawText = await request.text();
-      if (rawText.length === 0 || rawText.length > MAX_SRAM_BYTES) {
+      const rawByteLen = utf8ByteLength(rawText);
+      if (rawByteLen === 0 || rawByteLen > MAX_SRAM_BYTES) {
         return jsonResponse({ error: `SRAM payload exceeds ${MAX_SRAM_BYTES} byte limit` }, 413, cors);
       }
       let payload: { sram?: unknown; updatedAt?: string };
@@ -468,13 +504,15 @@ async function routeEdgeRequest(
       if (payload.sram === undefined || payload.sram === null) {
         return jsonResponse({ error: 'Missing sram field' }, 400, cors);
       }
-      const incomingTs =
-        typeof payload.updatedAt === 'string' && !Number.isNaN(Date.parse(payload.updatedAt))
-          ? payload.updatedAt
-          : new Date().toISOString();
+      const nowMs = Date.now();
+      const parsedMs = typeof payload.updatedAt === 'string' ? Date.parse(payload.updatedAt) : Number.NaN;
+      // Clamp future-skewed timestamps (> +5 min) so one misconfigured clock cannot freeze multi-device sync
+      const clampedMs = Number.isFinite(parsedMs) ? Math.min(parsedMs, nowMs + 300_000) : nowMs;
+      const incomingTs = new Date(clampedMs).toISOString();
 
       const existing = await store.getUserSave(user.userId, slug);
-      if (existing && Date.parse(existing.updated_at) > Date.parse(incomingTs)) {
+      const existingMs = existing ? Date.parse(existing.updated_at) : Number.NaN;
+      if (existing && Number.isFinite(existingMs) && existingMs > clampedMs) {
         // Cloud save is strictly newer: return authoritative cloud record instead of clobbering
         return jsonResponse(
           {
@@ -516,24 +554,42 @@ async function routeEdgeRequest(
         cors,
       );
     }
+    const MAX_AI_BYTES = 64 * 1024;
+    if (exceedsContentLength(request, MAX_AI_BYTES)) {
+      return jsonResponse({ error: 'AI request payload exceeds 64 KB limit' }, 413, cors);
+    }
     const bodyText = await request.text();
-    if (bodyText.length > 64 * 1024) {
+    if (utf8ByteLength(bodyText) > MAX_AI_BYTES) {
       return jsonResponse({ error: 'AI request payload exceeds 64 KB limit' }, 413, cors);
     }
     const upstream = `${env.AI_PROVIDER_BASE_URL.replace(/\/+$/, '')}${pathname.slice('/api/ai'.length)}`;
-    const proxied = await fetch(upstream, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${env.AI_PROVIDER_API_KEY}`,
-      },
-      body: bodyText,
-    });
-    const outText = await proxied.text();
-    return new Response(outText, {
-      status: proxied.status,
-      headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' },
-    });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25_000);
+    try {
+      const proxied = await fetch(upstream, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${env.AI_PROVIDER_API_KEY}`,
+        },
+        body: bodyText,
+        signal: ctrl.signal,
+      });
+      const outText = await proxied.text();
+      return new Response(outText, {
+        status: proxied.status,
+        headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8' },
+      });
+    } catch (err) {
+      const isTimeout = err instanceof Error && err.name === 'AbortError';
+      return jsonResponse(
+        { error: isTimeout ? 'Upstream AI provider timed out' : 'Upstream AI provider unreachable' },
+        isTimeout ? 504 : 502,
+        cors,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // 7. Remote Streamable HTTP MCP Endpoint: POST /api/mcp
@@ -542,8 +598,11 @@ async function routeEdgeRequest(
     if (!env.MCP_ACCESS_TOKEN || !token || !timingSafeEqualStr(token, env.MCP_ACCESS_TOKEN)) {
       return jsonResponse({ error: 'Unauthorized MCP access' }, 401, cors);
     }
+    if (exceedsContentLength(request, MAX_PROJECT_BYTES)) {
+      return jsonResponse({ error: 'MCP payload exceeds limit' }, 413, cors);
+    }
     const rawText = await request.text();
-    if (rawText.length > MAX_PROJECT_BYTES) {
+    if (utf8ByteLength(rawText) > MAX_PROJECT_BYTES) {
       return jsonResponse({ error: 'MCP payload exceeds limit' }, 413, cors);
     }
     let rpcPayload: unknown;
