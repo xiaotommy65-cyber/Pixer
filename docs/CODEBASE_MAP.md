@@ -1,7 +1,7 @@
 # Pixer Codebase Navigation Map (Zero-Grep Routing Guide)
 
 > **Purpose**: Read this file FIRST (together with `AGENTS.md`) to locate exact files, symbols, and cross-module call chains in **1 lookup** instead of broad directory scans.
-> **Snapshot**: 202 code files · ~94,613 LOC · Primary Entry: `src/main.ts` · Worker Entry: `src/workers/interop.worker.ts` · Edge API Entry: `workers/api/src/index.ts`.
+> **Snapshot**: 199 code files · ~89,377 LOC · Primary Entry: `src/main.ts` · Worker Entry: `src/workers/interop.worker.ts` · Edge API Entry: `workers/api/src/index.ts`.
 
 ---
 
@@ -57,7 +57,7 @@ flowchart LR
 | **外部匯入（Aseprite / LDtk / Tiled / ZIP）** | `src/ui/ExternalImportModalView.ts` → `InteropWorkerClient.ts` → `src/workers/interop.worker.ts` → `src/core/interop/{InteropBundleLoader,AsepriteParser,LdtkImporter,TiledImporter}.ts` | `scripts/sim/Interop.test.ts` |
 | **掌機殼、輸入、震動、實體手把** | `src/ui/ConsoleView.ts` → `ConsoleSpatialController.ts` / `ConsoleShellRouter.ts` / `VirtualGamepadInput.ts` / `GamepadHardwareBridge.ts` → `src/core/input/*` & `src/core/hal/*` | `scripts/sim/HalAndInputTests.ts` |
 | **內建卡匣內容（PA-14/15/01/02/11/12）** | `src/game/BuiltinCartridges.ts` → `src/game/{obsidianCitadel,emeraldRuins,rhythmBastion,astralRift}/*` | `scripts/sim/CartridgeActionTests.ts`, `WorldMap.test.ts` |
-| **PA-01 / PA-02 傳統資料卡匣運行時** | `src/core/sim/DataCartridgeRuntime.ts` → `DataRuntimeShmup.ts` / `GenreControllers.ts` / `CartridgeSchema.ts` | `scripts/sim/CartridgeActionTests.ts` |
+| **PA-01 / PA-02 傳統資料卡匣運行時** | `src/core/sim/DataCartridgeRuntime.ts` → `DataRuntimePlatformer.ts` / `DataRuntimeSnapshot.ts` / `DataRuntimeShmup.ts` / `GenreControllers.ts` / `CartridgeSchema.ts` | `scripts/sim/CartridgeActionTests.ts` |
 | **外部音訊層（無 AI 合成）** | `src/core/audio/ExternalAudioBank.ts`（相容別名 `ToySynth.ts`）→ `src/core/runtime/EngineHost.ts` | `scripts/sim/CloudOffload.test.ts`, `ArchitectureTests.ts` |
 | **雲端疏導（R2 CDN + Supabase + Edge API）** | `src/core/cloud/CloudSyncClient.ts` → `workers/api/src/{index,supabaseStore,types}.ts` → `supabase/migrations/20261122000000_pixer_cloud_schema.sql` | `scripts/sim/CloudOffload.test.ts` |
 | **空間可達性預言機 & 腳本化試玩驗證** | `src/core/ai/EcsSpatialOracle.ts` → `src/core/ai/EcsPlaytestVerifier.ts` | `scripts/sim/EcsCore.test.ts`, `DualPerspective3D.test.ts` |
@@ -67,9 +67,9 @@ flowchart LR
 ## 3. Layer-by-Layer Module Inventory
 
 ### A. Pure Engine Core (`src/core/` — Zero UI / Zero `src/game/` / Zero Capacitor)
-- **`src/core/gpu/` (9 files, 6,887L)** *(Canvas/WebGPU/WebGL2 DOM allowed)*
-  - `GpuEngine.ts` (1,107L) — Multi-backend coordinator, 24-float PBR 2D instancing, shadow grid, atlas sync.
-  - `GpuQuad3DBatch.ts` (714L) + `GpuColorCache.ts` (22L) — Zero-GC 3D Quad batching/geometry emitters & bounded packed hex RGB cache.
+- **`src/core/gpu/` (9 files, 6,960L)** *(Canvas/WebGPU/WebGL2 DOM allowed)*
+  - `GpuEngine.ts` (1,117L) — Multi-backend coordinator, 24-float PBR 2D instancing, shadow grid, atlas sync.
+  - `GpuQuad3DBatch.ts` (750L) + `GpuColorCache.ts` (49L) — Zero-GC 3D Quad batching/geometry emitters & bounded packed hex RGB cache.
   - `WebGpuBackend.ts` (1,357L) + `WebGpuShaders.ts` (1,060L) — Primary WGSL pipeline + 3-Pass Karis Bloom.
   - `WebGl2Backend.ts` (881L) + `WebGl2Shaders.ts` (1,035L) — GLSL ES 3.00 parity backend.
   - `Canvas2DBackend.ts` (517L) — Guaranteed software fallback.
@@ -79,16 +79,16 @@ flowchart LR
   - Schema & authoring: `EcsProjectSchema.ts` (642L), `EcsTilemapTypes.ts` (579L), `EcsStudioSession.ts` (1,205L), `EcsCustomSpriteCompiler.ts` (567L).
   - Runtime, projection & scripting: `EcsCartridgeRuntime.ts` (1,122L), `EcsSnapshotProjector.ts` (760L, Zero-GC snapshot/light/HUD/FP-wall projector), `EcsWorldMapController.ts` (1,235L), `EcsActionPhysicsSystems.ts` (799L), `SandboxScriptVm.ts` (478L), `EcsEventGraph.ts` (471L), `index.ts` (11L).
   - Unit tests live in `scripts/sim/EcsCore.test.ts` (1,328L), enforced by `ArchitectureTests.ts`.
-- **`src/core/runtime/` (17 files, 5,234L)** *(100% DOM-free)*
-  - Active prod: `EngineHost.ts` (594L, **sole UI facade**), `CartridgeRunner.ts` (480L), `CartridgeRegistry.ts` (153L), `SceneGpuBridge.ts` (884L), `SceneFirstPersonPass.ts` (240L, 2.5D DDA pass), `SceneTrue3DPass.ts` (320L, True 3D HD-2D pass), `SceneOrthogonalHelper.ts` (64L), `SceneHudOverlayPass.ts` (112L), `DisplayThermalGovernor.ts` (196L), `SaveService.ts` (348L), `CartridgePngCodec.ts` (268L), `AppLogger.ts` (339L), `LogPersistence.ts` (325L), `EventBus.ts` (86L), `SeededRng.ts` (37L).
+- **`src/core/runtime/` (17 files, 5,243L)** *(100% DOM-free)*
+  - Active prod: `EngineHost.ts` (589L, **sole UI facade**), `CartridgeRunner.ts` (480L), `CartridgeRegistry.ts` (153L), `SceneGpuBridge.ts` (889L), `SceneFirstPersonPass.ts` (243L, 2.5D DDA pass), `SceneTrue3DPass.ts` (320L, True 3D HD-2D pass), `SceneOrthogonalHelper.ts` (64L), `SceneHudOverlayPass.ts` (113L), `DisplayThermalGovernor.ts` (196L), `SaveService.ts` (348L), `CartridgePngCodec.ts` (268L), `AppLogger.ts` (339L), `LogPersistence.ts` (325L), `EventBus.ts` (86L), `SeededRng.ts` (37L).
   - *Tested-only (unwired in `main.ts`)*: `CameraRigDirector.ts` (566L), `GameFlowController.ts` (222L).
 - **`src/core/ai/` (10 files, 3,495L)** *(100% DOM-free)*
   - Authoring & MCP: `AgentBridge.ts` (460L), `PixerMcpProtocol.ts` (485L), `EcsSpatialOracle.ts` (1,292L), `EcsPlaytestVerifier.ts` (376L), `ObservationSerializer.ts` (153L).
   - Providers: `HybridAiDirector.ts` (182L), `LocalAiProvider.ts` (260L), `RemoteAiProvider.ts` (191L), `AiTypes.ts` (76L), `AiProvider.ts` (20L).
 - **`src/core/interop/` (6 files, 3,150L)** *(100% DOM-free; executed in Web Worker)*
   - `InteropBundleLoader.ts` (573L), `AsepriteParser.ts` (669L), `LdtkImporter.ts` (766L), `TiledImporter.ts` (641L), `InteropTypes.ts` (495L), `index.ts` (6L).
-- **`src/core/cloud/` (2 files, 288L)** *(100% DOM-free)*
-  - `CloudSyncClient.ts` (277L) + `index.ts` (11L) — Shared project fetch/publish (ETag), R2 upload, SRAM merge.
+- **`src/core/cloud/` (2 files, 306L)** *(100% DOM-free)*
+  - `CloudSyncClient.ts` (295L) + `index.ts` (11L) — Shared project fetch/publish (ETag), R2 upload, SRAM merge.
 - **`src/core/audio/` (2 files, 458L)** *(Web Audio/HTMLAudio only; zero procedural oscillators)*
   - `ExternalAudioBank.ts` (447L), `ToySynth.ts` (11L legacy alias).
 - **`src/core/math/` (6 files, 2,091L)** *(100% DOM-free, Zero-GC)*
@@ -97,9 +97,9 @@ flowchart LR
   - Input DSP: `InputPipeline.ts`, `InputMap.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `WebGamepadSampler.ts`.
   - HAL: `SystemHal.ts`, `HapticEngine.ts`.
 - **`src/core/types/` (5 files, 754L)**: `WorldTypes.ts` barrel → `SceneTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `CartridgeTypes.ts`.
-- **`src/core/sim/` (19 files, 13,411L)** & **`src/core/editor/` (3 files, 1,561L)** *(Legacy Data Runtime + Shared Primitives)*
-  - Actively used by `PA-01` & `PA-02`: `DataCartridgeRuntime.ts` (3,165L), `DataRuntimeShmup.ts` (1,112L), `GenreControllers.ts` (1,489L), `CartridgeSchema.ts` (957L), `TilemapGrid.ts`, `SoaEntityPool.ts`, `EventActionVm.ts`, `JuiceSystem.ts`, `DualPerspectiveRuntime.ts`, `PerspectiveProjector.ts`, `ProceduralStageCompiler.ts`, `ProceduralVisualRig.ts`, `OrthogonalArt.ts`, `AnimationStateMachine.ts`, `BehaviorTree.ts`, `TweenSystem.ts`, `CardDeckEngine.ts` (976L), `FighterFrameEngine.ts` (791L), `GridPathfinder.ts` (522L).
-  - *Legacy AgentBridge-only*: `StudioSession.ts` (231L), `StudioCommands.ts` (1,013L), `StudioPlaytestDiag.ts` (317L).
+- **`src/core/sim/` (19 files, 11,458L)** & **`src/core/editor/` (3 files, 1,248L)** *(Data Runtime + Shared Primitives)*
+  - Actively used by `PA-01` & `PA-02`: `DataCartridgeRuntime.ts` (1,283L coordinator), `DataRuntimePlatformer.ts` (1,026L platformer/grapple/dual-perspective), `DataRuntimeSnapshot.ts` (918L Zero-GC ping-pong snapshot & HUD projector), `DataRuntimeShmup.ts` (1,111L), `GenreControllers.ts` (516L topdown/grid puzzle & HUD pool), `CartridgeSchema.ts` (952L), `TilemapGrid.ts`, `SoaEntityPool.ts`, `EventActionVm.ts`, `JuiceSystem.ts`, `DualPerspectiveRuntime.ts`, `PerspectiveProjector.ts`, `ProceduralStageCompiler.ts`, `ProceduralVisualRig.ts`, `OrthogonalArt.ts`, `AnimationStateMachine.ts`, `BehaviorTree.ts`, `TweenSystem.ts`, `GridPathfinder.ts` (522L).
+  - *Legacy AgentBridge-only*: `StudioSession.ts` (231L), `StudioCommands.ts` (712L), `StudioPlaytestDiag.ts` (305L).
 
 ### B. Assets, Games & Edge Cloud
 - **`src/assets/` (15 files, 4,952L)**: `TextureAtlas.ts` (740L), `AtlasSpritesData.ts`, `WorkshopRecipes.ts`, `sprites/*` (`CastleSprites`, `HdMaterialSprites`, `PaletteData`, `CoreSprites`, `ChronicleSprites`, `ParkourSprites`, `DungeonSprites`, `AutoTileSprites`, `ShmupSprites`, `MomoSprites`, `PixelFontData`, `BossSprites`).
