@@ -141,7 +141,12 @@ export class CloudSyncClient {
   public async publishProject(
     slug: string,
     project: EcsProjectV2,
-    opts: { visibility?: 'private' | 'unlisted' | 'public'; expectedEtag?: string; note?: string } = {},
+    opts: {
+      visibility?: 'private' | 'unlisted' | 'public';
+      expectedEtag?: string;
+      note?: string;
+      audioManifestR2Key?: string | null;
+    } = {},
   ): Promise<PublishProjectResult> {
     if (!this.isConfigured()) return { ok: false, error: 'Cloud API not configured' };
     if (!isValidShareSlug(slug)) return { ok: false, error: 'Invalid project slug' };
@@ -168,6 +173,7 @@ export class CloudSyncClient {
           project,
           visibility: opts.visibility ?? 'unlisted',
           note: opts.note ?? '',
+          ...(opts.audioManifestR2Key !== undefined ? { audioManifestR2Key: opts.audioManifestR2Key } : {}),
         }),
       });
       const json = (await resp.json()) as Record<string, unknown>;

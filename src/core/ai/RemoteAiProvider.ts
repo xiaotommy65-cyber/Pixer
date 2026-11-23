@@ -14,6 +14,8 @@ export interface RemoteHttpAiConfig {
   id?: string;
   baseUrl: string; // e.g. '/api/ai' server proxy (never put API secrets in client!)
   timeoutMs?: number;
+  /** Optional bearer token provider (e.g. Supabase session JWT) required by Edge AI proxy. */
+  getAuthToken?: () => string | null;
 }
 
 /**
@@ -25,11 +27,13 @@ export class RemoteHttpAiProvider implements AiProvider {
   public readonly mode: AiProviderMode = 'remote-http';
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly getAuthToken?: () => string | null;
 
   constructor(cfg: RemoteHttpAiConfig) {
     this.id = cfg.id ?? 'remote-http-proxy';
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, '');
     this.timeoutMs = cfg.timeoutMs ?? 8000;
+    this.getAuthToken = cfg.getAuthToken;
   }
 
   private async postJson<TReq, TRes>(path: string, body: TReq, externalSignal?: AbortSignal): Promise<TRes> {
@@ -67,13 +71,19 @@ export class RemoteHttpAiProvider implements AiProvider {
     externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
 
     const isRetryableStatus = (status: number) => status === 429 || status === 502 || status === 503 || status === 504;
+    const bearer = this.getAuthToken?.()?.trim();
+    const reqHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+    };
 
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const resp = await fetch(endpoint, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            headers: reqHeaders,
             body: serializedBody,
             cache: 'no-store',
             signal: ctrl.signal,

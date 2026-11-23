@@ -546,14 +546,14 @@ export function createStudioTemplate(
     };
   }
 
-  // Default: 'parkour_flagship' (PA-06 grade visual rig + grapple + wave-dash + Curl embers + planar water)
+  // Default: 'parkour_flagship' (Verlet scarf + 2-Bone IK + grapple + wave-dash + Curl embers + planar water)
   return {
     version: 1,
     meta: {
       id: overrides?.id ?? 'studio-parkour-flagship',
       code: overrides?.code ?? 'ST-06',
       title: overrides?.title ?? '緋空工坊：正交飛鉤試煉',
-      subtitle: 'PA-06 級 Verlet 圍巾 + 2-Bone IK + 360° 飛鉤 + Curl 流場餘燼',
+      subtitle: '旗艦級 Verlet 圍巾 + 2-Bone IK + 360° 飛鉤 + Curl 流場餘燼',
       genre: 'platformer',
       genreHud: 'parkour',
       viewport: 'wide',

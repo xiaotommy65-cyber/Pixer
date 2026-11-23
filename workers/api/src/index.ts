@@ -99,6 +99,19 @@ function isSafeR2Key(key: string): boolean {
   return SAFE_R2_KEY_RE.test(key);
 }
 
+/** Constant-time string comparison for bearer secrets to avoid timing side channels. */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  const len = Math.max(ab.length, bb.length);
+  let diff = ab.length ^ bb.length;
+  for (let i = 0; i < len; i++) {
+    diff |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return diff === 0;
+}
+
 /**
  * Pure Web Standards Cloudflare Worker Edge API Handler (Option A: R2 CDN + Supabase PostgreSQL/Auth).
  * Testable directly in Node.js 22 without wrangler runtime dependencies.
@@ -110,8 +123,22 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
     return new Response(null, { status: 204, headers: cors });
   }
 
+  try {
+    return await routeEdgeRequest(request, env, cors);
+  } catch {
+    return jsonResponse({ error: 'Internal edge API error' }, 500, cors);
+  }
+}
+
+async function routeEdgeRequest(
+  request: Request,
+  env: WorkerEnv,
+  cors: Record<string, string>,
+): Promise<Response> {
   const url = new URL(request.url);
   const pathname = url.pathname.replace(/\/+$/, '') || '/';
+  // NOTE: In production Cloudflare deployments, pair this per-isolate soft guard with a
+  // Cloudflare Rate Limiting rule / Workers Rate Limit binding for multi-POP enforcement.
   const clientIp = request.headers.get('CF-Connecting-IP') ?? request.headers.get('X-Forwarded-For') ?? 'local';
   if (!checkRateLimit(`${clientIp}:${pathname.split('/').slice(0, 3).join('/')}`)) {
     return jsonResponse({ error: 'Rate limit exceeded' }, 429, cors, { 'Retry-After': '60' });
@@ -138,7 +165,12 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
 
   // 2. Immutable Content-Addressed R2 CDN Asset Serving: GET /api/assets/<key>
   if (request.method === 'GET' && pathname.startsWith('/api/assets/')) {
-    const key = decodeURIComponent(pathname.slice('/api/assets/'.length));
+    let key: string;
+    try {
+      key = decodeURIComponent(pathname.slice('/api/assets/'.length));
+    } catch {
+      return jsonResponse({ error: 'Malformed percent-encoding in asset key' }, 400, cors);
+    }
     if (!isSafeR2Key(key)) {
       return jsonResponse({ error: 'Invalid or unsafe asset key' }, 400, cors);
     }
@@ -250,7 +282,24 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
       if (!blob) {
         return jsonResponse({ error: 'Project payload missing from R2 storage' }, 502, cors);
       }
-      const projectJson = JSON.parse(await blob.text()) as EcsProjectV2;
+      let projectJson: EcsProjectV2;
+      try {
+        projectJson = JSON.parse(await blob.text()) as EcsProjectV2;
+      } catch {
+        return jsonResponse({ error: 'Corrupted project JSON in R2 storage' }, 502, cors);
+      }
+      let audioManifest: unknown = undefined;
+      if (rec.audio_manifest_r2_key && isSafeR2Key(rec.audio_manifest_r2_key)) {
+        const audioBlob = await env.PIXER_ASSETS.get(rec.audio_manifest_r2_key);
+        if (audioBlob) {
+          try {
+            audioManifest = JSON.parse(await audioBlob.text()) as unknown;
+          } catch {
+            // Degrade silently to no external audio manifest if corrupt
+            audioManifest = undefined;
+          }
+        }
+      }
       return jsonResponse(
         {
           slug: rec.slug,
@@ -259,6 +308,7 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
           etag: rec.etag,
           updatedAt: rec.updated_at,
           project: projectJson,
+          ...(audioManifest !== undefined ? { audioManifest } : {}),
         },
         200,
         cors,
@@ -282,11 +332,29 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
         return jsonResponse({ error: `Project payload exceeds ${MAX_PROJECT_BYTES} byte limit` }, 413, cors);
       }
 
-      let body: { project?: unknown; visibility?: 'private' | 'unlisted' | 'public'; note?: string };
+      let body: {
+        project?: unknown;
+        visibility?: 'private' | 'unlisted' | 'public';
+        note?: string;
+        audioManifestR2Key?: string | null;
+      };
       try {
-        body = JSON.parse(rawText) as { project?: unknown; visibility?: 'private' | 'unlisted' | 'public'; note?: string };
+        body = JSON.parse(rawText) as {
+          project?: unknown;
+          visibility?: 'private' | 'unlisted' | 'public';
+          note?: string;
+          audioManifestR2Key?: string | null;
+        };
       } catch {
         return jsonResponse({ error: 'Invalid JSON body' }, 400, cors);
+      }
+
+      if (
+        typeof body.audioManifestR2Key === 'string' &&
+        body.audioManifestR2Key.length > 0 &&
+        !isSafeR2Key(body.audioManifestR2Key)
+      ) {
+        return jsonResponse({ error: 'Invalid audioManifestR2Key' }, 400, cors);
       }
 
       const validation = validateEcsProjectV2(body.project);
@@ -330,6 +398,13 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
           ? body.visibility
           : existing?.visibility ?? 'unlisted';
 
+      const audioManifestR2Key =
+        body.audioManifestR2Key === null
+          ? null
+          : typeof body.audioManifestR2Key === 'string' && body.audioManifestR2Key.length > 0
+            ? body.audioManifestR2Key
+            : existing?.audio_manifest_r2_key ?? null;
+
       const saved = await store.upsertProjectWithRevision({
         slug,
         ownerId: user.userId,
@@ -337,6 +412,7 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
         schemaVersion: proj.schemaVersion,
         visibility,
         r2Key,
+        audioManifestR2Key,
         etag: hash.slice(0, 24),
         sha256: hash,
         byteSize: projectBytes.byteLength,
@@ -349,6 +425,7 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
           slug: saved.slug,
           etag: saved.etag,
           r2Key: saved.latest_r2_key,
+          audioManifestR2Key: saved.audio_manifest_r2_key ?? null,
           shareQuery: `?play=${saved.slug}`,
           updatedAt: saved.updated_at,
         },
@@ -427,6 +504,11 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
 
   // 6. Edge AI Proxy Boundary (matches RemoteHttpAiProvider `/api/ai/{stage,dialog,advise}`)
   if (request.method === 'POST' && /^\/api\/ai\/(stage|dialog|advise)$/.test(pathname)) {
+    const token = extractBearerToken(request);
+    const user = token ? await store.verifyUserToken(token) : null;
+    if (!user) {
+      return jsonResponse({ error: 'Unauthorized: valid Supabase Bearer token required for Edge AI proxy' }, 401, cors);
+    }
     if (!env.AI_PROVIDER_API_KEY || !env.AI_PROVIDER_BASE_URL) {
       return jsonResponse(
         { error: 'Remote AI proxy not configured on this Edge deployment (client will fall back locally)' },
@@ -457,7 +539,7 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
   // 7. Remote Streamable HTTP MCP Endpoint: POST /api/mcp
   if (request.method === 'POST' && pathname === '/api/mcp') {
     const token = extractBearerToken(request);
-    if (!env.MCP_ACCESS_TOKEN || token !== env.MCP_ACCESS_TOKEN) {
+    if (!env.MCP_ACCESS_TOKEN || !token || !timingSafeEqualStr(token, env.MCP_ACCESS_TOKEN)) {
       return jsonResponse({ error: 'Unauthorized MCP access' }, 401, cors);
     }
     const rawText = await request.text();
@@ -474,12 +556,16 @@ export async function handleEdgeRequest(request: Request, env: WorkerEnv): Promi
     let initialProj: EcsProjectV2 = OBSIDIAN_CITADEL_PROJECT;
     if (slug && SLUG_RE.test(slug)) {
       const rec = await store.getProjectBySlug(slug);
-      if (rec) {
+      if (rec && rec.visibility !== 'private' && isSafeR2Key(rec.latest_r2_key)) {
         const obj = await env.PIXER_ASSETS.get(rec.latest_r2_key);
         if (obj) {
-          const parsed = JSON.parse(await obj.text()) as unknown;
-          if (validateEcsProjectV2(parsed).ok) {
-            initialProj = parsed as EcsProjectV2;
+          try {
+            const parsed = JSON.parse(await obj.text()) as unknown;
+            if (validateEcsProjectV2(parsed).ok) {
+              initialProj = parsed as EcsProjectV2;
+            }
+          } catch {
+            return jsonResponse({ error: 'Corrupted project JSON in R2 storage' }, 502, cors);
           }
         }
       }

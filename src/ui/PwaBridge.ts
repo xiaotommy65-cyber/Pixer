@@ -71,8 +71,17 @@ export function initPwaBridge(headerTools: HTMLElement, onInstallClick?: () => v
   const modalCard = el('div', 'pwa-ios-card');
   const modalTitle = el('h3', undefined, '📲 安裝 Pixel Atelier 到主畫面');
   const modalBody = el('p');
-  modalBody.innerHTML =
-    '1. 點選 Safari 下方工具列的 <strong>「分享」</strong> 圖示。<br/>2. 向下滑動並選擇 <strong>「加入主畫面」</strong>。<br/>3. 即可如原生掌機般全螢幕離線開啟！';
+  modalBody.append(
+    '1. 點選 Safari 下方工具列的 ',
+    el('strong', undefined, '「分享」'),
+    ' 圖示。',
+    document.createElement('br'),
+    '2. 向下滑動並選擇 ',
+    el('strong', undefined, '「加入主畫面」'),
+    '。',
+    document.createElement('br'),
+    '3. 即可如原生掌機般全螢幕離線開啟！',
+  );
   const closeBtn = btn('toy-btn is-primary', '我知道了', undefined, () => {
     iosModal.classList.add('panel-hidden');
   });

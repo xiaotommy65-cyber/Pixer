@@ -1,4 +1,4 @@
-import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ToySynth.ts';
+import type { TactilePhase, TactileSwitchProfile } from '../core/audio/ExternalAudioBank.ts';
 import {
   AntiSnapbackFilter,
   classifyDpadOctant,

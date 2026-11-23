@@ -3,7 +3,7 @@
 ## 1. Engine-First Identity (Pixel-Craft PBR GPU Engine)
 - **Core Mandate**: Pixer is a Zero-GC, vanilla TypeScript **HD-2D Pixel PBR-Lite Engine** (`WebGPU` WGSL / `WebGL2` GLSL ES 3.00 / `Canvas2DBackend` fallback, `1280×720` viewport ceiling, 24-float PBR instancing, 8-page `1024×1024` `Texture2DArray` Atlas Pool, True Generational `EcsCoreWorld` + 5-phase 14-system pipeline + Sandboxed Script VM, pure data-driven Multi-Room HD-2D Tilemap & Top-Down Adventure runtime, External Standard Format Importers for Aseprite/LDtk/Tiled, 6DoF `CameraRigDirector`, `GameFlowController`, and external-asset-only `ExternalAudioBank`).
 - **Unified Shells**: Single primary **True ECS Workstation** (`EcsWorkbenchView` + `EcsMapDesignerPanel` + `EventGraphEditorView` + `ExternalImportModalView` + `SpriteAtelierView` modal) + tactile Switch **Arcade Showcase** (`ConsoleView`: `PA-14`, `PA-15`, `PA-01`, `PA-02`, `PA-11`, `PA-12`).
-- Read `docs/ROADMAP.md` for architecture milestones and `docs/HANDOFF.md` + `docs/NEXT_CHAT_PROMPT.md` for session handoff.
+- Read `docs/CODEBASE_MAP.md` (zero-grep task-to-file routing & dependency graph), `docs/ROADMAP.md`, and `docs/HANDOFF.md` before searching the codebase.
 
 ## 2. Repository & File Guide Map (Read this first instead of broad grep)
 
@@ -24,7 +24,7 @@
 
 ### `src/assets/` & `src/game/` — Procedural Pixel Atlas & Focused Cartridges (100% DOM-free)
 - `src/assets/` — `TextureAtlas.ts` (8-page `1024×1024` Atlas Pool + MaxRectsBin + PNG Slicer), `AtlasSpritesData.ts`, `src/assets/sprites/*` (`CastleSprites`, `HdMaterialSprites`, `AutoTileSprites`, `PixelFontData`), `WorkshopRecipes.ts`.
-- `src/game/` — `BuiltinCartridges.ts`: `PA-14` (`obsidianCitadel/`), `PA-15` (`emeraldRuins/`), `PA-01` (`cloudberry/`), `PA-02` (`sugarStarlight/`), `PA-11` (`rhythmBastion/`), `PA-12` (`astralRift/`).
+- `src/game/` — `BuiltinCartridges.ts` (inline `PA-01` & `PA-02` + ECS registry): `PA-14` (`obsidianCitadel/`), `PA-15` (`emeraldRuins/`), `PA-11` (`rhythmBastion/`), `PA-12` (`astralRift/`).
 
 ### `src/ui/`, `src/workers/`, `workers/api/`, `supabase/` & `src/styles/` — Workstation, Edge Cloud & Handheld Showcase
 - Workstation: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (lazy `previewGpu`), `EcsMapDesignerPanel.ts`, `EcsWorldRulesInspectorPanel.ts` (M2 rules/portals/AI/HUD + BFS oracle), `EcsWorkbenchAtlasPanel.ts`, `EcsWorkbenchPrefabInspector.ts`, `EventGraphEditorView.ts`, `ExternalImportModalView.ts`, `InteropWorkerClient.ts`, `src/workers/interop.worker.ts`, `SpriteAtelierView.ts`.
