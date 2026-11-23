@@ -13,6 +13,7 @@ import { buildConsoleBodyDom } from './ConsoleBodyBuilder.ts';
 import { ConsoleHudPresenter } from './ConsoleHudPresenter.ts';
 import { buildJoyconsAndAuxRail } from './ConsoleJoyconBuilder.ts';
 import { ConsoleShellRouter, type ShellPhase } from './ConsoleShellRouter.ts';
+import { ConsoleSpatialController } from './ConsoleSpatialController.ts';
 import { DeskWorldView } from './DeskWorldView.ts';
 import { ShmupOverlayView } from './ShmupOverlayView.ts';
 import { VirtualGamepadInput } from './VirtualGamepadInput.ts';
@@ -40,7 +41,8 @@ export interface ConsoleViewOptions {
 
 /**
  * Switch-style handheld OS shell: Joy-Con (L) | screen body | Joy-Con (R),
- * composing DeskWorldView, VirtualGamepadInput, CartridgeSlotController, ConsoleHudPresenter, and ConsoleShellRouter.
+ * composing DeskWorldView, ConsoleSpatialController, VirtualGamepadInput,
+ * CartridgeSlotController, ConsoleHudPresenter, and ConsoleShellRouter.
  */
 export class ConsoleView {
   public readonly element: HTMLElement;
@@ -60,13 +62,13 @@ export class ConsoleView {
   private readonly glassSheenEl: HTMLElement;
   private readonly deskWorld: DeskWorldView;
   private readonly diorama: WindowDioramaView;
+  private readonly spatial: ConsoleSpatialController;
   private readonly onPerspectiveChange?: (perspective: DioramaPerspective) => void;
   private readonly ac = new AbortController();
   private canvasAc: AbortController | null = null;
   private readonly activeTimers = new Set<number>();
   private readonly recoilTimers = new WeakMap<HTMLElement, number>();
   private readonly busUnsubs: (() => void)[] = [];
-  private readonly trackResizeObserver: ResizeObserver | null = null;
 
   private readonly gamepad: VirtualGamepadInput;
   private readonly slots: CartridgeSlotController;
@@ -77,11 +79,8 @@ export class ConsoleView {
   private hwGamepadLabel: string | null = null;
   private debugHitboxesOn = false;
   private perspective: DioramaPerspective = 'focus';
-  private lastParallaxMs = 0;
-  private spatialTrackWidth = 0;
-  private activeDeskPage: 0 | 1 | 2 = 1;
-  private isDeskScrolling = false;
-  private deskScrollTimer: number | null = null;
+  private currentShellPhase: ShellPhase = 'BOOT_BLINK';
+  private currentBootStage: BootPickupStage = 'standby';
 
   constructor(host: EngineHost, atlas: TextureAtlas, onExitLandscape: (() => void) | undefined, opts: ConsoleViewOptions) {
     this.host = host;
@@ -174,12 +173,12 @@ export class ConsoleView {
       onOpenEditor: (originEl) => opts.onOpenEditor(originEl),
       onSelectCartridge: (id) => this.router.launchCartridge(id, false),
       onRequestCapture: () => this.requestCapture(),
-      onScrollToPage: (pageIdx) => this.scrollToDeskPage(pageIdx, true),
+      onScrollToPage: (pageIdx) => this.spatial.scrollToPage(pageIdx, true),
     });
 
     this.diorama = new WindowDioramaView(host, atlas, {
       onRequestWindowFocus: () => {
-        if (this.router.getShellPhase() === 'HOME_LOBBY' && this.router.getBootStage() === 'awake') {
+        if (this.currentShellPhase === 'HOME_LOBBY' && this.currentBootStage === 'awake') {
           this.setPerspective('window');
         }
       },
@@ -197,18 +196,13 @@ export class ConsoleView {
       this.diorama.surfaceBtn,
     );
 
-    const syncTrackWidth = () => {
-      const w = this.spatialTrackEl.clientWidth;
-      if (w > 0 && w !== this.spatialTrackWidth) {
-        this.spatialTrackWidth = w;
-        this.scrollToDeskPage(this.activeDeskPage, false);
-      }
-    };
-    if (typeof ResizeObserver !== 'undefined') {
-      this.trackResizeObserver = new ResizeObserver(syncTrackWidth);
-      this.trackResizeObserver.observe(this.spatialTrackEl);
-    }
-    window.addEventListener('resize', syncTrackWidth, { passive: true, signal: this.ac.signal });
+    this.spatial = new ConsoleSpatialController({
+      stageEl: this.element,
+      spatialTrackEl: this.spatialTrackEl,
+      parallaxTargets: [this.diorama.backdropEl, this.deskWorld.deskBgEl, this.glassSheenEl, this.consoleEl],
+      canApplyParallax: () => this.currentShellPhase === 'HOME_LOBBY' && this.currentBootStage === 'awake',
+      onActivePageChange: (idx) => this.deskWorld.setActivePage(idx),
+    });
 
     this.hud = new ConsoleHudPresenter(
       host,
@@ -289,19 +283,21 @@ export class ConsoleView {
       onToast: (msg) => this.showCaptureToast(msg),
       onFilterChange: opts.onFilterChange,
       onBootStageChange: (stage) => {
+        this.currentBootStage = stage;
         this.element.dataset.bootStage = stage;
-        this.diorama.setShellState(this.router?.getShellPhase?.() ?? 'BOOT_BLINK', stage);
+        this.diorama.setShellState(this.currentShellPhase, stage);
       },
       onShellPhaseChange: (phase) => {
+        this.currentShellPhase = phase;
         this.element.dataset.shellPhase = phase;
-        this.diorama.setShellState(phase, this.router?.getBootStage?.() ?? 'awake');
+        this.diorama.setShellState(phase, this.currentBootStage);
         this.bodyEl.classList.toggle('is-lobby-clean', phase !== 'IN_GAME');
         this.screenFrame.scrollLeft = 0;
         this.screenFrame.scrollTop = 0;
         if (phase === 'IN_GAME' || phase === 'BOOT_BLINK') {
           if (this.perspective !== 'focus') this.setPerspective('focus');
-          this.scrollToDeskPage(1, false);
-          this.setParallax(0, 0);
+          this.spatial.scrollToPage(1, false);
+          this.spatial.setParallax(0, 0);
         }
       },
       hasInsertedCartridge: () => Boolean(this.slots.getInserted()),
@@ -320,77 +316,6 @@ export class ConsoleView {
         }
       },
       { signal: this.ac.signal },
-    );
-
-    this.spatialTrackEl.addEventListener(
-      'scroll',
-      () => {
-        this.isDeskScrolling = true;
-        if (this.deskScrollTimer !== null) {
-          window.clearTimeout(this.deskScrollTimer);
-        }
-        this.deskScrollTimer = this.scheduleTimer(() => {
-          this.deskScrollTimer = null;
-          this.isDeskScrolling = false;
-        }, 180);
-
-        const w = this.spatialTrackWidth || this.spatialTrackEl.clientWidth;
-        if (w <= 0) return;
-        const idx = Math.max(0, Math.min(2, Math.round(this.spatialTrackEl.scrollLeft / w))) as 0 | 1 | 2;
-        if (idx !== this.activeDeskPage) {
-          this.activeDeskPage = idx;
-          this.deskWorld.setActivePage(idx);
-          if (idx !== 1) this.setParallax(0, 0);
-        }
-      },
-      { passive: true, signal: this.ac.signal },
-    );
-
-    this.element.addEventListener(
-      'pointermove',
-      (e) => {
-        if (e.pointerType !== 'mouse') return;
-        if (
-          this.router.getShellPhase() !== 'HOME_LOBBY' ||
-          this.router.getBootStage() !== 'awake' ||
-          this.isDeskScrolling ||
-          this.activeDeskPage !== 1
-        ) {
-          return;
-        }
-        const now = performance.now();
-        if (now - this.lastParallaxMs < 24) return;
-        this.lastParallaxMs = now;
-        const rect = this.element.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return;
-        const nx = Math.max(-1, Math.min(1, ((e.clientX - rect.left) / rect.width - 0.5) * 2));
-        const ny = Math.max(-1, Math.min(1, ((e.clientY - rect.top) / rect.height - 0.5) * 2));
-        this.setParallax(nx, ny);
-      },
-      { passive: true, signal: this.ac.signal },
-    );
-    this.element.addEventListener('pointerleave', () => this.setParallax(0, 0), { signal: this.ac.signal });
-
-    window.addEventListener(
-      'deviceorientation',
-      (ev) => {
-        if (
-          this.router.getShellPhase() !== 'HOME_LOBBY' ||
-          this.router.getBootStage() !== 'awake' ||
-          this.isDeskScrolling ||
-          this.activeDeskPage !== 1
-        ) {
-          return;
-        }
-        if (ev.gamma === null || ev.beta === null) return;
-        const now = performance.now();
-        if (now - this.lastParallaxMs < 48) return;
-        this.lastParallaxMs = now;
-        const nx = Math.max(-1, Math.min(1, ev.gamma / 30));
-        const ny = Math.max(-1, Math.min(1, (ev.beta - 35) / 30));
-        this.setParallax(nx, ny);
-      },
-      { passive: true, signal: this.ac.signal },
     );
 
     this.applyGripMode(this.host.hal.getGripMode());
@@ -412,37 +337,9 @@ export class ConsoleView {
     );
   }
 
-  private setParallax(nx: number, ny: number): void {
-    const px = nx.toFixed(3);
-    const py = ny.toFixed(3);
-    this.diorama.backdropEl.style.setProperty('--px', px);
-    this.diorama.backdropEl.style.setProperty('--py', py);
-    this.deskWorld.deskBgEl.style.setProperty('--px', px);
-    this.deskWorld.deskBgEl.style.setProperty('--py', py);
-    this.glassSheenEl.style.setProperty('--px', px);
-    this.glassSheenEl.style.setProperty('--py', py);
-    this.consoleEl.style.setProperty('--px', px);
-    this.consoleEl.style.setProperty('--py', py);
-  }
-
-  private scrollToDeskPage(pageIdx: 0 | 1 | 2, smooth: boolean): void {
-    const w = this.spatialTrackWidth || this.spatialTrackEl.clientWidth;
-    if (w > 0) {
-      this.spatialTrackEl.scrollTo({
-        left: w * pageIdx,
-        behavior: smooth ? 'smooth' : 'auto',
-      });
-    }
-    this.activeDeskPage = pageIdx;
-    this.deskWorld.setActivePage(pageIdx);
-  }
-
   public startBootSequence(): void {
     this.router.startBootSequence();
-    requestAnimationFrame(() => {
-      this.spatialTrackWidth = this.spatialTrackEl.clientWidth;
-      this.scrollToDeskPage(1, false);
-    });
+    this.spatial.scheduleCenterAlignment();
   }
   public getBootStage(): BootPickupStage {
     return this.router.getBootStage();
@@ -633,7 +530,7 @@ export class ConsoleView {
 
   public destroy(): void {
     this.hud.destroy();
-    this.trackResizeObserver?.disconnect();
+    this.spatial.destroy();
     for (const off of this.busUnsubs) off();
     this.busUnsubs.length = 0;
     this.diorama.destroy();
