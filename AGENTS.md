@@ -19,19 +19,21 @@
 - `src/core/runtime/` — Orchestration, 6DoF camera, flow & persistence (`EngineHost.ts` **sole UI facade**, `CameraRigDirector.ts`, `GameFlowController.ts`, `CartridgeRunner.ts`, `CartridgeRegistry.ts`, `CartridgePngCodec.ts`, `SceneGpuBridge.ts`, `DisplayThermalGovernor.ts`, `SaveService.ts`, `AppLogger.ts`, `LogPersistence.ts`, `EventBus.ts`, `SeededRng.ts`).
 - `src/core/sim/` & `src/core/editor/` — Shared 2D primitives (`WorldKernel`, `DataCartridgeRuntime`, `TilemapGrid`, `SoaEntityPool`, `EventActionVm`, `JuiceSystem`, `CameraDirector`, `CutsceneSequencer`) & DOM-free `StudioSession`/`StudioCommands`.
 - `src/core/audio/` — `ExternalAudioBank.ts` (CDN/external `.opus`/`.mp3` manifest playback + bounded LRU `AudioBuffer` cache + silent fallback; zero procedural AI synth) & compatibility alias `ToySynth.ts`.
+- `src/core/cloud/` — `CloudSyncClient.ts` (100% DOM-free Cloudflare R2/Workers + Supabase client: `?play=<slug>` fetch, ETag `If-Match` publishing, R2 asset upload, SRAM timestamp merge).
 - `src/core/input/`, `src/core/hal/`, `src/core/ai/`, `src/core/math/`, `src/core/types/` — Input DSP, HAL, AI-Native Stack (`AgentBridge`, `PixerMcpProtocol`, `EcsSpatialOracle`, `EcsPlaytestVerifier`, `RemoteAiProvider`), Oklab/Bayer `ColorMath`, `NoiseMath`, `Perspective3DMath`, `SpringDynamics`, `SpatialHash`, `Visibility2D`, and shared types.
 
 ### `src/assets/` & `src/game/` — Procedural Pixel Atlas & Focused Cartridges (100% DOM-free)
 - `src/assets/` — `TextureAtlas.ts` (8-page `1024×1024` Atlas Pool + MaxRectsBin + PNG Slicer), `AtlasSpritesData.ts`, `src/assets/sprites/*` (`CastleSprites`, `HdMaterialSprites`, `AutoTileSprites`, `PixelFontData`), `WorkshopRecipes.ts`.
 - `src/game/` — `BuiltinCartridges.ts`: `PA-14` (`obsidianCitadel/`), `PA-15` (`emeraldRuins/`), `PA-01` (`cloudberry/`), `PA-02` (`sugarStarlight/`), `PA-11` (`rhythmBastion/`), `PA-12` (`astralRift/`).
 
-### `src/ui/`, `src/workers/` & `src/styles/` — Single Workstation, Web Worker Offload & Handheld Showcase
+### `src/ui/`, `src/workers/`, `workers/api/`, `supabase/` & `src/styles/` — Workstation, Edge Cloud & Handheld Showcase
 - Workstation: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (lazy `previewGpu`), `EcsMapDesignerPanel.ts`, `EcsWorldRulesInspectorPanel.ts` (M2 rules/portals/AI/HUD + BFS oracle), `EcsWorkbenchAtlasPanel.ts`, `EcsWorkbenchPrefabInspector.ts`, `EventGraphEditorView.ts`, `ExternalImportModalView.ts`, `InteropWorkerClient.ts`, `src/workers/interop.worker.ts`, `SpriteAtelierView.ts`.
+- Edge Cloud (Option A): `workers/api/` (Cloudflare Workers R2 immutable CDN, ETag projects, SRAM sync, `/api/ai/*`, `/api/mcp`), `supabase/migrations/` (PostgreSQL 4-table schema + strict RLS), `docs/CLOUD_SETUP.md`.
 - Arcade Shell: `ConsoleView.ts`, `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`, `BootBlinkOverlay.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts`, `HomeLobbyView.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `MomoMascot.ts`, `CardArt.ts`, `BrowserAssetLoader.ts`.
 - HUDs/Native/Styles: `ShmupOverlayView.ts`, `SystemSettingsDrawerView.ts`, `VirtualGamepadInput.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `PixelIcons.ts`, `dom.ts`; `src/styles/{studio7,atelier,switch,lobby}.css`.
 
 ### `scripts/` — Verification & MCP Server
-- `scripts/headless-sim.ts` (`npm run sim`), `scripts/pixer-mcp.ts` (`npm run mcp`, UTF-8 byte-accurate framing), `scripts/sim/*` (`ArchitectureTests.ts`, `WorldMap.test.ts`, `Engine10Core.test.ts`, `Interop.test.ts`, `DualPerspective3D.test.ts`, `Hd2dFeel.test.ts`, `Pixer7Tests.ts`, `CoreSubsystemTests.ts`, `CartridgeActionTests.ts`, `HalAndInputTests.ts`, `ExtensibilityAiTests.ts`).
+- `scripts/headless-sim.ts` (`npm run sim`), `scripts/pixer-mcp.ts` (`npm run mcp`, UTF-8 byte-accurate framing), `scripts/sim/*` (`ArchitectureTests.ts`, `WorldMap.test.ts`, `Engine10Core.test.ts`, `Interop.test.ts`, `DualPerspective3D.test.ts`, `Hd2dFeel.test.ts`, `CloudOffload.test.ts`, `Pixer7Tests.ts`, `CoreSubsystemTests.ts`, `CartridgeActionTests.ts`, `HalAndInputTests.ts`, `ExtensibilityAiTests.ts`).
 
 ## 3. Non-Negotiable Engine-First Constraints (Enforced by `ArchitectureTests.ts` & `WorldMap.test.ts`)
 - **Native GPU Pixel PBR & Zero AI Synth Audio Mandate**: All stages MUST render via `GpuEngine` (WebGPU/WebGL2/Canvas2D fallback); **NEVER** reintroduce parallel Canvas 2D shadow renderers (`Stage3DPipeline.ts`), photorealistic wallpapers, or procedural AI oscillator synths (`ExternalAudioBank` external-asset-only).

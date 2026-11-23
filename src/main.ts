@@ -21,6 +21,7 @@ import {
   type PixerPlatformMode,
 } from './core/ai/AgentBridge.ts';
 import { ExternalAudioBank } from './core/audio/ExternalAudioBank.ts';
+import { CloudSyncClient, resolveShareSlugFromSearch } from './core/cloud/index.ts';
 import { EcsCartridgeRuntime } from './core/ecs/EcsCartridgeRuntime.ts';
 import { syncProjectCustomSpritesToAtlas } from './core/ecs/EcsCustomSpriteCompiler.ts';
 import type { EcsProjectV2 } from './core/ecs/EcsProjectSchema.ts';
@@ -733,17 +734,49 @@ export function createApp(): AppHandle | null {
   consoleView.startBootSequence();
   const urlParams = new URLSearchParams(window.location.search);
   const bootMode = urlParams.get('mode');
-  if (bootMode === 'arcade') {
+  const shareSlug = resolveShareSlugFromSearch(window.location.search);
+  const rawCloudBase = import.meta.env.VITE_CLOUD_API_BASE;
+  const cloudApiBase = typeof rawCloudBase === 'string' ? rawCloudBase.trim() : '';
+
+  if (bootMode === 'arcade' || shareSlug) {
     setPlatformMode('arcade', 'arcade');
   } else {
     setPlatformMode('studio', 'studio');
   }
+
+  if (shareSlug && cloudApiBase) {
+    const cloudClient = new CloudSyncClient({ apiBaseUrl: cloudApiBase });
+    void cloudClient
+      .fetchSharedProject(shareSlug)
+      .then((res) => {
+        if (destroyed) return;
+        if (!res.ok) {
+          appLogger.warn('network', 'cloud.playSlug', `雲端作品「${shareSlug}」載入失敗：${res.error}`);
+          return;
+        }
+        if (res.notModified) return;
+        if (res.data.audioManifest) {
+          synth.loadManifest(res.data.audioManifest);
+        }
+        ecsSession.dispatch({ type: 'load_project', project: res.data.project });
+        launchEcsProjectInArcade(res.data.project);
+        appLogger.success('network', 'cloud.playSlug', `已載入雲端分享作品「${res.data.title}」`, {
+          slug: res.data.slug,
+          etag: res.data.etag,
+        });
+      })
+      .catch((err) => {
+        appLogger.warn('network', 'cloud.playSlug', `雲端作品「${shareSlug}」載入異常`, err);
+      });
+  }
+
   nativeBridge.hideSplash();
   appLogger.success('lifecycle', 'app.boot', 'Pixer 原教旨引擎工作站啟動完成', {
     shellTheme: activeShell,
     perfProfile,
     platformMode,
     nativePlatform: nativeBridge.platform,
+    cloudEnabled: Boolean(cloudApiBase),
   });
 
   let fpsSmooth = 60;
