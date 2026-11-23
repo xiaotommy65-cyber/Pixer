@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "pixer-ecs": {
+      "command": "node",
+      "args": ["--experimental-strip-types", "scripts/pixer-mcp.ts"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "disabled": true
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"],
+      "disabled": true
+    }
+  }
+}

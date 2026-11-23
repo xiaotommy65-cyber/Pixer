@@ -329,7 +329,14 @@ test('Phase 5 Cinematic Director & Aesthetic Oracle: Auteur DSL, Toric Two-Shot,
   });
   assert.equal(upsertRes.isError, false, JSON.stringify(upsertRes.structuredContent));
 
-  // 2. Run the FilmFlow Headless Scout + 5-Axis Mathematical Cinematography Critic Oracle via MCP
+  // 2. Verify MCP tools/list discovery and run the FilmFlow Headless Scout + 5-Axis Mathematical Cinematography Critic Oracle via MCP
+  const listRes = mcp.handleRequest({ jsonrpc: '2.0', id: 99, method: 'tools/list' });
+  const listedTools = (listRes?.result as { tools?: Array<{ name: string }> } | undefined)?.tools ?? [];
+  assert.ok(
+    listedTools.some((t) => t.name === 'critique_cutscene_aesthetics'),
+    'tools/list must advertise critique_cutscene_aesthetics for Antigravity/MCP clients',
+  );
+
   const critiqueRes = mcp.invokeTool('critique_cutscene_aesthetics', {
     cutsceneId: 'throne_showdown_pv',
   });

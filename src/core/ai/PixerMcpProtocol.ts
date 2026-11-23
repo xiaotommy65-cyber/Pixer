@@ -186,6 +186,18 @@ export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
     },
   },
   {
+    name: 'critique_cutscene_aesthetics',
+    description:
+      'Runs the FilmFlow-inspired 60Hz headless scout & 5-axis mathematical cinematography critic oracle on a cutsceneId (evaluating wall occlusion, Rule-of-Thirds/Toric framing, 180-deg axis continuity, Murch dramaturgy, and 3-phase spring handback) and returns an ASCII storyboard.',
+    inputSchema: {
+      type: 'object',
+      required: ['cutsceneId'],
+      properties: {
+        cutsceneId: { type: 'string', description: 'ID of the cutscene in project.cutscenes to evaluate.' },
+      },
+    },
+  },
+  {
     name: 'export_project_json',
     description: 'Exports the full validated EcsProjectV2 JSON document and current revision number.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },

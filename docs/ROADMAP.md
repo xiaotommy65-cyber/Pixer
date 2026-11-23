@@ -35,6 +35,17 @@ Every game and workstation built on Pixer runs **60Hz simulation & rendering loc
 - Delivered **Cloudflare Workers Edge API + R2 Asset Layer** (`workers/api/`: `/api/health`, `/api/assets/:key+` immutable 1-year cache + path-traversal guard, `PUT /api/assets/upload` SHA-256 content-addressed R2 upload, `GET/PUT /api/projects/:slug` with ETag `If-Match` 412 optimistic locking & `304 Not Modified`, `GET/PUT /api/saves/:slug` timestamp SRAM merge, `POST /api/ai/*` LLM proxy, and `POST /api/mcp` Remote Streamable HTTP MCP).
 - Delivered DOM-free **`src/core/cloud/CloudSyncClient.ts`**, `?play=<slug>` direct-launch bootstrap in `src/main.ts`, `docs/CLOUD_SETUP.md`, and full end-to-end tests in `scripts/sim/CloudOffload.test.ts`.
 
-### Phase 3 — Production Provisioning, Auth UI & Multiplayer Observability `[NEXT]`
-- Provision Cloudflare R2 bucket (`pixer-assets`), deploy `workers/api` via `wrangler deploy`, apply Supabase SQL migration, and configure `VITE_CLOUD_API_BASE` + `VITE_CDN_BASE_URL` in CI.
-- Add optional sign-in / one-click "Publish & Copy `?play=<slug>`" UI button in `EcsWorkbenchView` and bind curated external `.opus` audio packs to R2 CDN.
+### Phase 3a–3e — Architecture Modularization & Toolchain Alignment `[DONE]`
+- Fine-grained decomposition of `ConsoleView`, `WindowDioramaView`, `EcsWorkbenchView` (3,234 → 868 LOC), `EcsSnapshotProjector`, `SpriteAtelierPixelOps`, `SceneGpuBridge` 3D passes, and `DataCartridgeRuntime` (`DataRuntimePlatformer` + `DataRuntimeSnapshot`); retired 9 dead `WorldKernel*` files (-2,678 LOC) and pinned Bun `1.4.5`.
+
+### Phase 4 — Genre Arsenal Restoration & True ECS Runtime Wiring `[DONE]`
+- Restored `CardDeckEngine` & `FighterFrameEngine` multi-genre sub-engines and wired Zero-GC `GridPathfinder` A*, `Visibility2D` LOS/FOV, 6DoF `CameraRigDirector`, and `GameFlowController` directly into `EcsWorldMapController` & `EcsCartridgeRuntime`.
+
+### Phase 5 — Cinematic Director, Aesthetic Critic Oracle & Local IDE Readiness `[DONE]`
+- Delivered `EcsCinematicDirector` (Auteur 14-field DSL, Toric Two-Shot solver, 3-phase critically damped spring handback, 21:9 letterbox/subtitle HUD) + `EcsCinematicOracle` (60Hz FilmFlow headless scout, 5-axis mathematical critic, ASCII storyboard) exposed via `critique_cutscene_aesthetics` MCP tool.
+- Configured `.agents/` workspace rules (`engine-sim`, `gpu-shaders`, `algorithm-shader-protocol`, `ui-workstation`, `cloud-edge`), workspace `.agents/mcp_config.json`, and workspace skills for full local Antigravity App / IDE / CLI workflows.
+
+### Phase 6 — Workstation UI Exposure, Browser GPU Verification & Cloud Provisioning `[NEXT]`
+- Expose Cutscene Timeline/Oracle preview, `CameraRigDirector` shot presets, and `computeRoomFovMask` fog-of-war toggle in `EcsWorkbenchView` panels, and author flagship cutscenes in `PA-14` / `PA-15`.
+- Add Playwright / Chromium WebGPU/WebGL2 visual & shader-compile smoke tests using local GPU / `chrome-devtools` MCP.
+- Provision Cloudflare R2 (`pixer-assets`), deploy `workers/api`, apply Supabase SQL migration, configure `VITE_CLOUD_API_BASE` + `VITE_CDN_BASE_URL`, and add one-click "Publish & Copy `?play=<slug>`" UI in `EcsWorkbenchView`.
