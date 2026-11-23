@@ -44,27 +44,21 @@ import {
   TilemapGrid,
 } from '../../src/core/sim/TilemapGrid.ts';
 import { WorldKernel } from '../../src/core/sim/WorldKernel.ts';
-import { AstralChroniclesGame } from '../../src/game/astralChronicles/AstralChroniclesGame.ts';
-import { parseDungeonModuleJson } from '../../src/game/emberkeep/TurnGridSave.ts';
-import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
-import { buildWorkshopTemplate, type WorkshopGenreTemplateId } from '../../src/ui/WorkshopTemplates.ts';
+import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
+import { OBSIDIAN_CITADEL_PROJECT } from '../../src/game/obsidianCitadel/ObsidianCitadelProject.ts';
 import { check, collectTsFiles, emptyInput } from './SimTestHarness.ts';
 
 export function testHd2dDepthPipeline(): void {
-  const params = new CartridgeRunner('astral-chronicles').getParams();
+  const params = new CartridgeRunner('obsidian-citadel').getParams();
 
-  const ac = new AstralChroniclesGame(0);
-  const acSnap = ac.snapshot(params);
-  check(acSnap.hd2dDepth?.enabled === true, 'PA-05 should enable hd2dDepth rendering');
-  check(acSnap.hd2dDepth?.sortByDepthY === true, 'PA-05 should enable Y-depth painter sorting');
-  check(
-    acSnap.tiles.some((t) => t.sprite === 'meadow_floor') && !acSnap.tiles.some((t) => t.sprite === 'grass'),
-    'PA-05 Chapter 1 top-down meadow must use seamless meadow_floor tile instead of side-profile grass',
-  );
-  const extrudedWalls = acSnap.tiles.filter((t) => (t.extrudeH ?? 0) > 0);
-  check(extrudedWalls.length >= 4, `PA-05 should emit extruded 2.5D south wall faces (got ${extrudedWalls.length})`);
-  const shadowedActors = acSnap.entities.filter((e) => e.castShadow === true);
-  check(shadowedActors.length >= 5, `PA-05 should emit ground contact shadows for actors/props (got ${shadowedActors.length})`);
+  const oc = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
+  const ocSnap = oc.snapshot(params);
+  check(ocSnap.hd2dDepth?.enabled === true, 'PA-14 should enable hd2dDepth rendering');
+  check(ocSnap.hd2dDepth?.sortByDepthY === true, 'PA-14 should enable Y-depth painter sorting');
+  const extrudedWalls = ocSnap.tiles.filter((t) => (t.extrudeH ?? 0) > 0);
+  check(extrudedWalls.length >= 4, `PA-14 should emit extruded 2.5D south wall faces (got ${extrudedWalls.length})`);
+  const shadowedActors = ocSnap.entities.filter((e) => e.castShadow === true);
+  check(shadowedActors.length >= 2, `PA-14 should emit ground contact shadows for actors/props (got ${shadowedActors.length})`);
 
   const synthetic = buildDepthDrawOrder(
     [{ sprite: 'stone', x: 100, y: 100, w: 20, h: 40, extrudeH: 10, elevationZ: 9, sortY: 140 }],
@@ -83,30 +77,13 @@ export function testHd2dDepthPipeline(): void {
     'buildDepthDrawOrder must sort north entity behind extruded wall and south entity in front of wall',
   );
 
-  const dndRunner = new CartridgeRunner('emberkeep-dnd');
-  const dndSnap = dndRunner.getSnapshot();
-  check(dndSnap.hd2dDepth?.enabled === true, 'PA-04 should enable hd2dDepth');
-  check(
-    dndSnap.tiles.some((t) => (t.extrudeH ?? 0) === 6),
-    'PA-04 should extrude south-facing stone dungeon walls',
-  );
-
   const cbRunner = new CartridgeRunner('cloudberry-hop');
   const cbSnap = cbRunner.getSnapshot();
   const cbHero = cbSnap.entities.find((e) => e.id === 'hero');
   check(cbHero?.castShadow === true, 'PA-01 hero should project platform landing contact shadow');
 
-  const sbDepth = new SandboxToyboxGame();
-  sbDepth.loadPuzzle(4);
-  const sbSnap = sbDepth.snapshot(params);
-  const movingPlatTile = sbSnap.tiles.find((t) => t.sprite === 'moving_plat');
-  check(
-    movingPlatTile !== undefined && movingPlatTile.extrudeH === 3 && movingPlatTile.extrudeAtY === movingPlatTile.y + 6,
-    'PA-03 moving_plat should emit 3px underside extrusion aligned with its 6px artwork bottom',
-  );
-
   console.log(
-    `[SIM OK] HD-2D 2.5D pipeline -> PA-05 extrudedWalls=${extrudedWalls.length}, shadows=${shadowedActors.length}, depthSort=verified`,
+    `[SIM OK] HD-2D 2.5D pipeline -> PA-14 extrudedWalls=${extrudedWalls.length}, shadows=${shadowedActors.length}, depthSort=verified`,
   );
 }
 
@@ -220,11 +197,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'SystemLogPanelView.ts',
     'WindowDioramaView.ts',
     'ConsoleHudPresenter.ts',
-    'RpgOverlayView.ts',
     'ShmupOverlayView.ts',
-    'ChronicleOverlayView.ts',
-    'RhythmWorkspaceView.ts',
-    'RhythmChartStudioView.ts',
     'ExternalImportModalView.ts',
   ];
   for (const viewFile of newUiViews) {
@@ -234,23 +207,18 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       `Lobby/Workbench/Overlay module ${viewFile} must expose public destroy() for clean teardown`,
     );
   }
-  for (const overlayFile of [
-    'RpgOverlayView.ts',
-    'ShmupOverlayView.ts',
-    'ChronicleOverlayView.ts',
-    'RhythmWorkspaceView.ts',
-    'RhythmChartStudioView.ts',
-  ]) {
+  for (const overlayFile of ['ShmupOverlayView.ts', 'ExternalImportModalView.ts']) {
     const ovSrc = fs.readFileSync(path.join(rootDir, 'src/ui', overlayFile), 'utf8');
     check(
       ovSrc.includes('new AbortController()') && ovSrc.includes('this.ac.abort()'),
       `Overlay/Panel ${overlayFile} must manage DOM listeners via AbortController`,
     );
   }
-  const toySynthSrc = fs.readFileSync(path.join(rootDir, 'src/core/audio/ToySynth.ts'), 'utf8');
+  const externalAudioSrc = fs.readFileSync(path.join(rootDir, 'src/core/audio/ExternalAudioBank.ts'), 'utf8');
   check(
-    toySynthSrc.includes('chargeRouteNode') && toySynthSrc.includes('routeNode.disconnect()'),
-    'ToySynth must track and disconnect chargeRouteNode in stopCharge()',
+    externalAudioSrc.includes('loadManifest(') &&
+      !externalAudioSrc.includes('createOscillator'),
+    'ExternalAudioBank must load external audio assets via manifest and contain ZERO procedural oscillator synthesis',
   );
   const webGpuSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGpuBackend.ts'), 'utf8');
   check(
@@ -277,11 +245,16 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     c2dSrc.includes('export class Canvas2DBackend') && c2dSrc.includes("kind = 'canvas2d'"),
     'Canvas2DBackend must implement canvas2d fallback backend cleanly',
   );
-  // Engine-First Phase A Hygiene Guardrails: zero legacy duplicate UI editors, zero AI JPEG wallpapers, zero orphan public assets
+  // Engine-First Hygiene Guardrails: zero legacy duplicate UI editors, zero parallel Stage3D/rhythm shadow renderers, zero AI synth bloat
   for (const retired of [
     'src/ui/WorkshopView.ts',
     'src/ui/StudioWorkbenchView.ts',
     'src/ui/StudioOrthogonalPanels.ts',
+    'src/ui/WorkshopTemplates.ts',
+    'src/core/gpu/Stage3DPipeline.ts',
+    'src/core/rhythm',
+    'src/assets/AudioPatterns.ts',
+    'src/game/LegacyCartridgePack.ts',
     'public/assets/aistudio',
     'src/assets/images',
   ]) {
@@ -369,11 +342,11 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   );
 
   // 4. EngineHost facade, Lobby OS APIs, pause simulation freeze, screen filters & destroy lifecycle
-  const runner = new CartridgeRunner('astral-chronicles');
+  const runner = new CartridgeRunner('obsidian-citadel');
   const saveSvc = new SaveService();
   const host = new EngineHost(runner, new ToySynth(), saveSvc);
-  check(host.getCartridgeId() === 'astral-chronicles', 'EngineHost.getCartridgeId should report active cartridge');
-  check(host.listCartridges().length >= 5, 'EngineHost.listCartridges should enumerate built-in cartridges');
+  check(host.getCartridgeId() === 'obsidian-citadel', 'EngineHost.getCartridgeId should report active cartridge');
+  check(host.listCartridges().length >= 4, 'EngineHost.listCartridges should enumerate built-in cartridges');
   const resumedFresh = host.mount('cloudberry-hop');
   check(!resumedFresh && host.activeCartridge === 'cloudberry-hop', 'EngineHost.mount should activate cartridge');
   check(!host.isPaused(), 'EngineHost.mount should start unpaused');
@@ -395,7 +368,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   check(host.getScreenFilter() === 'crt', 'EngineHost screen filter save/get roundtrip should persist crt');
   host.saveScreenFilter('clean');
 
-  host.mount('astral-chronicles');
+  host.mount('sugar-starlight');
   let feedbackSeen = 0;
   const offFb = host.events.on('sim:feedback', (p) => {
     if (p.preset === 'charge_shot') feedbackSeen++;
@@ -403,9 +376,9 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   host.emitFeedback('charge_shot', { combo: 2 });
   check(feedbackSeen === 1, 'EngineHost.emitFeedback should dispatch typed sim:feedback events');
   offFb();
-  host.dispatchCommand('title_new_game');
+  host.dispatchCommand('launch_sortie');
   check(
-    host.getSnapshot().chronicleHud?.uiMode === 'CUTSCENE',
+    host.getSnapshot().shmupHud?.phase === 'sortie',
     'EngineHost.dispatchCommand should route commands to active cartridge cleanly',
   );
   check(host.toggleBenchmark(true) && host.isBenchmarkOn(), 'EngineHost.toggleBenchmark(true) enables benchmark');
@@ -539,10 +512,16 @@ export function testUpgradedGpuPipelineAndAtlas(): void {
   gpu.setFilterModeCode(2);
 
   const bridge = new SceneGpuBridge();
-  const ac = new AstralChroniclesGame(0);
-  const params = new CartridgeRunner('astral-chronicles').getParams();
-  const snap = ac.snapshot(params);
+  const oc = new EcsCartridgeRuntime({
+    ...OBSIDIAN_CITADEL_PROJECT,
+    projection: { ...OBSIDIAN_CITADEL_PROJECT.projection, mode: 'hd2d_iso' },
+  });
+  const params = new CartridgeRunner('obsidian-citadel').getParams();
+  const snap = oc.snapshot(params);
   snap.bgStars = [{ x: 40, y: 24, size: 2, phase: 0.4, color: '#fffaf0' }];
+  if (snap.hd2dDepth) {
+    snap.hd2dDepth = { ...snap.hd2dDepth, horizonHazeAlpha: 0.25 };
+  }
   bridge.render(gpu, snap, null);
 
   check(uploadCalls === 1 && uploadedLut, 'GpuEngine.flush should upload dirty dynamic atlas + indexPixels + paletteLut');
@@ -689,24 +668,15 @@ export async function testStructuredLoggingAndErrorRecovery(): Promise<void> {
   const parsed = parseJsonlEntries(`${jsonl}\n{corrupted-json-line`);
   check(parsed.length === 2 && parsed[0].operation === 'test.save' && parsed[1].level === 'error', 'JSONL parser must recover valid lines when encountering corrupted lines');
 
-  // 2. Parsing & script execution try-catch logging
-  const badJson = parseDungeonModuleJson('{ invalid json');
-  check(Boolean(badJson.error) && appLogger.getEntries({ category: 'parsing', level: 'error' }).length >= 1, 'Invalid D&D JSON must log structured parsing error');
-
-  const badSandbox = new SandboxToyboxGame('api.setSky(;');
-  check(Boolean(badSandbox.scriptError) && badSandbox.snapshot(new CartridgeRunner().getParams()).entities.length > 0, 'Malformed Sandbox script must log error and recover with fallback star');
-  const injectedSandbox = new SandboxToyboxGame('window.alert(1);');
-  check(Boolean(injectedSandbox.scriptError), 'Sandbox DSL must reject arbitrary JS statements');
-  const protoSandbox = new SandboxToyboxGame('api.addMovingPlatform(10, 20, 3, { __proto__: 1 });');
-  check(Boolean(protoSandbox.scriptError), 'Sandbox DSL must reject forbidden prototype keys');
-  const validOptSandbox = new SandboxToyboxGame("api.addMovingPlatform(120, 100, 3, { minX: 80, maxX: 180, vx: 30 }); api.addStar(130, 80);");
-  check(validOptSandbox.scriptError === null, 'Sandbox DSL must support flat option objects for moving platforms');
+  // 2. Parsing & schema error logging
+  const badCartridge = validateCartridgeJson({ version: 999, meta: {} });
+  check(!badCartridge.ok, 'Invalid cartridge JSON schema must fail validation cleanly');
 
   // 3. Network failure -> HybridAiDirector fallback logging
   const remoteFail = new RemoteHttpAiProvider({ baseUrl: 'http://127.0.0.1:1/unreachable', timeoutMs: 25 });
   const director = new HybridAiDirector(undefined, remoteFail);
   const advice = await director.adviseTacticalAction({
-    observation: new EngineHost(new CartridgeRunner('emberkeep-dnd'), new ToySynth(), new SaveService()).getUnifiedObservation(),
+    observation: new EngineHost(new CartridgeRunner('sugar-starlight'), new ToySynth(), new SaveService()).getUnifiedObservation(),
   });
   check(typeof advice.rationale === 'string' && advice.rationale.length > 0, 'HybridAiDirector must recover via local fallback when remote HTTP fails');
   check(appLogger.getEntries({ category: 'network', level: 'warn' }).some((e) => e.operation === 'ai.director.fallback'), 'HybridAiDirector must record structured fallback warning');
@@ -861,51 +831,25 @@ export async function testM3LoadCartridgeAndPngCodec(): Promise<void> {
     }
   }
 
-  const pa06Json = host.getCartridgeJson('celestial-parkour');
-  check(Boolean(pa06Json), 'Built-in PA-06 celestial-parkour must expose CartridgeJsonV1 for Polaroid PNG export');
-  if (pa06Json) {
-    const pa06Png = await embedCartridgeIntoPng(minimalPng, pa06Json);
-    const pa06Decoded = await extractCartridgeFromPng(pa06Png);
+  const pa02Json = host.getCartridgeJson('sugar-starlight');
+  check(Boolean(pa02Json), 'Built-in PA-02 sugar-starlight must expose CartridgeJsonV1 for Polaroid PNG export');
+  if (pa02Json) {
+    const pa02Png = await embedCartridgeIntoPng(minimalPng, pa02Json);
+    const pa02Decoded = await extractCartridgeFromPng(pa02Png);
     check(
-      pa06Decoded.ok && validateCartridgeJson(pa06Decoded.data).ok,
-      'Built-in PA-06 Polaroid PNG must roundtrip cleanly and pass validateCartridgeJson',
+      pa02Decoded.ok && validateCartridgeJson(pa02Decoded.data).ok,
+      'Built-in PA-02 Polaroid PNG must roundtrip cleanly and pass validateCartridgeJson',
     );
-  }
-
-  const tplParams = host.getParams();
-  const templateIds: readonly WorkshopGenreTemplateId[] = ['parkour', 'fighter', 'card', 'grid'];
-  for (const tplId of templateIds) {
-    const tpl = buildWorkshopTemplate(tplId, host);
-    const tplCheck = validateCartridgeJson(tpl);
-    check(tplCheck.ok, `Workshop template '${tplId}' must pass validateCartridgeJson`);
-    const rt = new DataCartridgeRuntime(tpl);
-    for (let f = 0; f < 20; f++) {
-      rt.step(
-        1 / 60,
-        {
-          ...emptyInput(),
-          right: f < 10,
-          action: f === 10,
-          skillY: f === 14,
-          pointerActive: true,
-          pointerX: 0.72,
-          pointerY: 0.25,
-        },
-        tplParams,
-      );
+    const tplParams = host.getParams();
+    const rt = new DataCartridgeRuntime(pa02Json);
+    rt.dispatchCommand('launch_sortie');
+    for (let f = 0; f < 10; f++) {
+      rt.step(1 / 60, { ...emptyInput(), right: true, jump: true }, tplParams);
     }
-    const tplSnap = rt.snapshot(tplParams);
-    check(
-      Boolean(tplSnap.hudPrimitives?.some((p) => p.kind === 'bar' || p.kind === 'box' || p.kind === 'aim_line')),
-      `Workshop template '${tplId}' must emit genreHud/aim_line primitives in snapshot.hudPrimitives`,
-    );
     const s0 = rt.snapshot(tplParams);
     const s1 = rt.snapshot(tplParams);
     const s2 = rt.snapshot(tplParams);
-    check(
-      s0 === s2 && s0 !== s1,
-      `Workshop template '${tplId}' DataCartridgeRuntime must reuse ping-pong snapshot banks`,
-    );
+    check(s0 === s2 && s0 !== s1, 'DataCartridgeRuntime must reuse ping-pong snapshot banks cleanly');
   }
 
   // Verify multi-cartridge studio_* sprite isolation on mount & full deterministic PNG reload

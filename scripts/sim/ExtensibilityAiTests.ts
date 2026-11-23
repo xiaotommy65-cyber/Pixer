@@ -18,7 +18,6 @@ import {
 } from '../../src/core/sim/BehaviorTree.ts';
 import { RuleRegistry, type RuleEntityLike, type RuleWorldActions } from '../../src/core/sim/RuleMatrix.ts';
 import type { CartridgeInstance } from '../../src/core/types/WorldTypes.ts';
-import { SandboxToyboxGame } from '../../src/game/sandbox/SandboxToyboxGame.ts';
 import { check } from './SimTestHarness.ts';
 
 export async function testExtensibilityAndAiSpis(): Promise<void> {
@@ -208,9 +207,11 @@ export async function testExtensibilityAndAiSpis(): Promise<void> {
   const director = new HybridAiDirector(bus, failingRemote);
   check(director.getProviderInfo().hasRemotePrimary === true, 'HybridAiDirector should report remote primary in hybrid mode');
 
-  const stageRes = await director.generateStageRecipe({ cartridgeId: 'sandbox-toybox', theme: '暗影水晶' });
-  const sbVerify = new SandboxToyboxGame(stageRes.payload);
-  check(sbVerify.scriptError === null, `AI-generated sandbox recipe must run cleanly (err=${sbVerify.scriptError})`);
+  const stageRes = await director.generateStageRecipe({ cartridgeId: 'cloudberry-hop', theme: '暗影水晶' });
+  check(
+    typeof stageRes.payload === 'string' && stageRes.payload.trim().length > 0 && stageRes.providerId !== 'failing-proxy',
+    'HybridAiDirector must fall back cleanly to local provider when remote primary fails',
+  );
 
   const dialogRes = await director.generateDynamicDialog({
     cartridgeId: 'astral-chronicles',

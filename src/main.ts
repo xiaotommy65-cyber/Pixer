@@ -2,7 +2,6 @@ import './styles/atelier.css';
 import './styles/switch.css';
 import './styles/lobby.css';
 import './styles/studio7.css';
-import './styles/rhythm.css';
 
 import {
   applyPerformanceProfileAttr,
@@ -21,7 +20,7 @@ import {
   type PixelAtelierAgentApi,
   type PixerPlatformMode,
 } from './core/ai/AgentBridge.ts';
-import { ToySynth } from './core/audio/ToySynth.ts';
+import { ExternalAudioBank } from './core/audio/ExternalAudioBank.ts';
 import { EcsCartridgeRuntime } from './core/ecs/EcsCartridgeRuntime.ts';
 import { syncProjectCustomSpritesToAtlas } from './core/ecs/EcsCustomSpriteCompiler.ts';
 import type { EcsProjectV2 } from './core/ecs/EcsProjectSchema.ts';
@@ -40,11 +39,7 @@ import { EngineHost } from './core/runtime/EngineHost.ts';
 import { SaveService } from './core/runtime/SaveService.ts';
 import { SceneGpuBridge } from './core/runtime/SceneGpuBridge.ts';
 import { createEmptyInputState } from './core/types/WorldTypes.ts';
-import {
-  isLegacyCartridgePackLoaded,
-  loadLegacyCartridgePack,
-  registerBuiltinCartridges,
-} from './game/BuiltinCartridges.ts';
+import { registerBuiltinCartridges } from './game/BuiltinCartridges.ts';
 import { OBSIDIAN_CITADEL_PROJECT } from './game/obsidianCitadel/ObsidianCitadelProject.ts';
 import { initCapacitorNativeBridge } from './ui/CapacitorNativeBridge.ts';
 import { loadEngine4ArtPack } from './ui/BrowserAssetLoader.ts';
@@ -54,7 +49,6 @@ import { EcsWorkbenchView } from './ui/EcsWorkbenchView.ts';
 import { IrisWipeTransition } from './ui/IrisWipeTransition.ts';
 import { setElementIconLabel } from './ui/PixelIcons.ts';
 import { PixerPlatformShell, type PixerTopNavTab } from './ui/PixerPlatformShell.ts';
-import { RhythmWorkspaceView } from './ui/RhythmWorkspaceView.ts';
 import { SpriteAtelierView } from './ui/SpriteAtelierView.ts';
 import {
   SHELL_THEMES,
@@ -83,7 +77,7 @@ export function createApp(): AppHandle | null {
   installGlobalErrorHandlers(signal);
   void appLogger.hydrateFromPersistence();
 
-  const synth = new ToySynth();
+  const synth = new ExternalAudioBank();
   const runner = new CartridgeRunner('obsidian-citadel');
   const save = new SaveService();
   const bridge = new SceneGpuBridge();
@@ -112,11 +106,6 @@ export function createApp(): AppHandle | null {
   let rafId = 0;
 
   const { utilityBar, viewBtn, timeBtn, landscapeBtn, settingsBtn } = createOsUtilityBar();
-  const legacyPackBtn = document.createElement('button');
-  legacyPackBtn.type = 'button';
-  legacyPackBtn.className = 'p7-legacy-btn';
-  legacyPackBtn.textContent = '載入經典典藏包 (+5 卡匣)';
-  utilityBar.prepend(legacyPackBtn);
 
   const host = new EngineHost(runner, synth, save);
   const disposeHapticSink = registerDomHapticSink((profile, side, skipAcoustic) =>
@@ -136,7 +125,6 @@ export function createApp(): AppHandle | null {
   let activeTopTab: PixerTopNavTab = 'studio';
   let captureCanvasRef: HTMLCanvasElement | null = null;
   let ecsWorkbench: EcsWorkbenchView | null = null;
-  let rhythmWorkspace: RhythmWorkspaceView | null = null;
   let platformShell: PixerPlatformShell | null = null;
 
   const irisWipe = new IrisWipeTransition(host, atlas);
@@ -166,49 +154,21 @@ export function createApp(): AppHandle | null {
     spriteModalEl?.classList.remove('panel-hidden');
   };
 
-  const handleLoadLegacyPack = async (): Promise<number> => {
-    if (isLegacyCartridgePackLoaded()) return 5;
-    legacyPackBtn.disabled = true;
-    legacyPackBtn.textContent = '載入經典包中...';
-    try {
-      const count = await loadLegacyCartridgePack();
-      legacyPackBtn.textContent = `經典包已載入 (${count} 卡匣)`;
-      legacyPackBtn.classList.add('is-loaded');
-      consoleView.refreshCardArt();
-      return count;
-    } catch {
-      legacyPackBtn.disabled = false;
-      legacyPackBtn.textContent = '載入失敗 · 點擊重試';
-      return 0;
-    }
-  };
-  legacyPackBtn.addEventListener('click', () => void handleLoadLegacyPack(), { signal });
-
   const setPlatformMode = (nextMode: PixerPlatformMode, tabOverride?: PixerTopNavTab) => {
     platformMode = nextMode;
-    activeTopTab =
-      tabOverride ?? (nextMode === 'arcade' ? 'arcade' : nextMode === 'rhythm' ? 'rhythm' : 'studio');
+    activeTopTab = tabOverride ?? (nextMode === 'arcade' ? 'arcade' : 'studio');
     platformShell?.syncState(platformMode, activeTopTab);
-    shell.classList.toggle('is-standalone-game', nextMode === 'rhythm');
     closeSpriteModal();
     if (nextMode === 'studio') {
       drawerView?.close();
-      rhythmWorkspace?.setVisible(false);
       consoleView.setInEditor(true);
       utilityBar.classList.add('panel-hidden');
       ecsWorkbench?.setVisible(true);
       if (activeTopTab === 'atlas') ecsWorkbench?.setLeftTab('atlas');
       else ecsWorkbench?.setLeftTab(ecsSession.getProject().worldMap ? 'map' : 'hierarchy');
-    } else if (nextMode === 'rhythm') {
-      drawerView?.close();
-      ecsWorkbench?.setVisible(false);
-      consoleView.setInEditor(true);
-      utilityBar.classList.add('panel-hidden');
-      rhythmWorkspace?.setVisible(true);
     } else {
       ensureArcadeGpuInit();
       ecsWorkbench?.setVisible(false);
-      rhythmWorkspace?.setVisible(false);
       consoleView.setInEditor(false);
       utilityBar.classList.remove('panel-hidden');
       handleViewportMetrics();
@@ -232,8 +192,6 @@ export function createApp(): AppHandle | null {
     },
     onGetPlatformMode: () => platformMode,
     onSetPlatformMode: (m) => setPlatformMode(m),
-    onLoadLegacyPack: handleLoadLegacyPack,
-    onIsLegacyPackLoaded: () => isLegacyCartridgePackLoaded(),
     onGetAtlasStats: () => atlas.getAtlasStats(),
     onSyncProjectSprites: (proj) => syncProjectSpritesToSharedAtlas(proj),
   });
@@ -255,7 +213,6 @@ export function createApp(): AppHandle | null {
 
   const ensureForegroundVisible = () => {
     if (platformMode === 'studio' && ecsWorkbench?.isVisible()) return;
-    if (platformMode === 'rhythm' && rhythmWorkspace?.isVisible()) return;
     const consoleHidden = consoleView.element.classList.contains('panel-hidden');
     if (consoleHidden) {
       consoleView.setInEditor(false);
@@ -526,17 +483,11 @@ export function createApp(): AppHandle | null {
     },
   });
 
-  rhythmWorkspace = new RhythmWorkspaceView({
-    onExitToWorkstation: () => setPlatformMode('studio', 'studio'),
-  });
-
   platformShell = new PixerPlatformShell({
     onSelectTab: (tab) => {
       host.unlockAudio();
       if (tab === 'arcade') {
         setPlatformMode('arcade', 'arcade');
-      } else if (tab === 'rhythm') {
-        setPlatformMode('rhythm', 'rhythm');
       } else {
         setPlatformMode('studio', tab);
       }
@@ -774,7 +725,6 @@ export function createApp(): AppHandle | null {
     utilityBar,
     consoleView.element,
     ecsWorkbench.element,
-    rhythmWorkspace.element,
     spriteModalEl,
     drawerView.element,
     irisWipe.curtain,
@@ -783,13 +733,7 @@ export function createApp(): AppHandle | null {
   consoleView.startBootSequence();
   const urlParams = new URLSearchParams(window.location.search);
   const bootMode = urlParams.get('mode');
-  const autostart = urlParams.get('autostart') === '1';
-  if (bootMode === 'rhythm' || autostart) {
-    setPlatformMode('rhythm', 'rhythm');
-    if (autostart) {
-      rhythmWorkspace.setVisible(true, 'lobby');
-    }
-  } else if (bootMode === 'arcade') {
+  if (bootMode === 'arcade') {
     setPlatformMode('arcade', 'arcade');
   } else {
     setPlatformMode('studio', 'studio');
@@ -874,8 +818,6 @@ export function createApp(): AppHandle | null {
           nativeBridge.setKeepAwake(false);
           if (spriteModalOpen) {
             spriteAtelierView.tickPreview(dt);
-          } else if (platformMode === 'rhythm' && rhythmWorkspace?.isVisible()) {
-            rhythmWorkspace.tick(dt);
           } else if (platformMode === 'studio' && ecsWorkbench?.isVisible()) {
             ecsWorkbench.tick(dt);
           }
@@ -911,7 +853,6 @@ export function createApp(): AppHandle | null {
       irisWipe.destroy();
       platformShell?.destroy();
       ecsWorkbench?.destroy();
-      rhythmWorkspace?.destroy();
       drawerView?.destroy();
       consoleView.destroy();
       spriteAtelierView.destroy();

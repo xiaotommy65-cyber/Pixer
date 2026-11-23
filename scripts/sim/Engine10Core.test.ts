@@ -1,15 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getBuiltinRhythmSongs } from '../../src/core/rhythm/RhythmBuiltinSongs.ts';
-import { RhythmJudgeEngine } from '../../src/core/rhythm/RhythmJudgeEngine.ts';
-import {
-  BUILTIN_RHYTHM_COURSES,
-  computeSingleChartRating,
-  evaluateCourseOutcome,
-  evaluatePlayerProfile,
-  resolveRankTier,
-} from '../../src/core/rhythm/RhythmProgression.ts';
-import { buildRhythmChart, type RhythmNote } from '../../src/core/rhythm/RhythmTypes.ts';
+import { zipSync, zlibSync } from 'fflate';
+import { createMcpFrameReader } from '../pixer-mcp.ts';
+import { ExternalAudioBank, isSafeAudioUrl } from '../../src/core/audio/ExternalAudioBank.ts';
+import { decodeZlibB64ToRgba, uint8ToBase64 } from '../../src/core/ecs/EcsCustomSpriteCompiler.ts';
+import { loadExternalInteropFiles } from '../../src/core/interop/InteropBundleLoader.ts';
+import { decodeTiledLayerData } from '../../src/core/interop/TiledImporter.ts';
 import {
   CameraRigDirector,
   type ProjectedPoint2D,
@@ -23,18 +19,15 @@ test('CameraRigDirector converges 6DoF poses, projects 3D points accurately, and
   const cam = new CameraRigDirector('TITLE_ORBIT');
   assert.equal(cam.getActiveShot(), 'TITLE_ORBIT');
 
-  // Switch to PLAY_SWEEP_LEFT and step 1.5s -> should converge toward left sweep pose
   cam.setShot('PLAY_SWEEP_LEFT', 8.0);
   for (let i = 0; i < 90; i++) cam.step(1 / 60, 16 / 9);
   assert.ok(cam.current.posX < -0.45, `Expected posX < -0.45, got ${cam.current.posX}`);
   assert.ok(cam.current.rollDeg < -1.8, `Expected negative rollDeg, got ${cam.current.rollDeg}`);
 
-  // All 16 floats of viewProjMatrix must remain finite
   for (let i = 0; i < 16; i++) {
     assert.ok(Number.isFinite(cam.viewProjMatrix[i]), `Matrix entry ${i} must be finite`);
   }
 
-  // Projecting highway judge center (0, 0, 0) & horizon (0, 0, -24) must yield horizon above judge line
   cam.snapToShot('PLAY_STANDARD');
   const nearPt: ProjectedPoint2D = { x: 0, y: 0, ndcZ: 0, scale: 0, visible: false };
   const farPt: ProjectedPoint2D = { x: 0, y: 0, ndcZ: 0, scale: 0, visible: false };
@@ -45,7 +38,6 @@ test('CameraRigDirector converges 6DoF poses, projects 3D points accurately, and
   assert.ok(farPt.y < nearPt.y, `Expected horizon y (${farPt.y}) < judge line y (${nearPt.y})`);
   assert.ok(Math.abs(nearPt.x - 640) < 2, `Expected center x ~640, got ${nearPt.x}`);
 
-  // Static Competitive Lock forces gameplay shots to PLAY_STANDARD while allowing menu shots
   cam.setStaticGameplayLock(true);
   cam.setShot('PLAY_OVERDRIVE', 10);
   assert.equal(cam.getActiveShot(), 'PLAY_STANDARD');
@@ -65,7 +57,6 @@ test('GameFlowController manages 6-act transitions, Fly-In auto-promotion, skip,
   for (let i = 0; i < 30; i++) flow.step(1 / 60);
   assert.equal(flow.isTransitioning(), false);
 
-  // Stage fly-in intro auto-promotes to playing
   flow.startStageIntro(1.0);
   assert.equal(flow.getScene(), 'intro');
   let event: 'none' | 'intro_complete' = 'none';
@@ -76,88 +67,104 @@ test('GameFlowController manages 6-act transitions, Fly-In auto-promotion, skip,
   assert.equal(event, 'intro_complete');
   assert.equal(flow.getScene(), 'playing');
 
-  // Pause & Resume
   assert.equal(flow.pause(), true);
   assert.equal(flow.getSnapshot().bodyStateAttr, 'paused');
   assert.equal(flow.resume(), true);
   assert.equal(flow.getSnapshot().bodyStateAttr, 'playing');
 
-  // Skip intro immediately
   flow.startStageIntro(1.2);
   assert.equal(flow.skipIntro(), true);
   assert.equal(flow.getScene(), 'playing');
 });
 
-test('RhythmProgression computes Player Rating, Rank Tiers, 3-Song Course Outcomes & 8 Achievements', () => {
-  const songs = getBuiltinRhythmSongs();
-  assert.equal(BUILTIN_RHYTHM_COURSES.length, 3);
+test('ExternalAudioBank enforces safe URLs, tracks BGM manifest state, and degrades silently without AI synthesis', () => {
+  assert.equal(isSafeAudioUrl('https://cdn.pixer.app/audio/courtyard.opus'), true);
+  assert.equal(isSafeAudioUrl('./audio/slash.mp3'), true);
+  assert.equal(isSafeAudioUrl('javascript:alert(1)'), false);
+  assert.equal(isSafeAudioUrl('data:audio/wav;base64,AAA='), false);
+  assert.equal(isSafeAudioUrl('../secret.mp3'), false);
+  assert.equal(isSafeAudioUrl('//evil.example/a.mp3'), false);
 
-  const highRating = computeSingleChartRating(13, 998000, 'AP');
-  assert.ok(highRating >= 15.0, `Expected Lv.13 AP rating >= 15.0, got ${highRating}`);
-  assert.equal(resolveRankTier(highRating).rankCode, 'PRISM');
-
-  // Verify Course outcome evaluation with 3 cleared stages
-  const course = BUILTIN_RHYTHM_COURSES[0];
-  const mockRecs = course.stages.map((st) => ({
-    songId: st.songId,
-    difficulty: st.difficulty,
-    score: 982000,
-    accuracy: 98.8,
-    maxCombo: 140,
-    totalNotes: 140,
-    grade: 'S_PLUS' as const,
-    clearBadge: 'FC' as const,
-    counts: { MARVELOUS: 120, PERFECT: 20, GREAT: 0, GOOD: 0, MISS: 0 },
-    meanOffsetMs: -2,
-    timingHistogram: new Array(21).fill(0),
-    playedAt: Date.now(),
-  }));
-  const courseRes = evaluateCourseOutcome(course, mockRecs, 86, false);
-  assert.equal(courseRes.cleared, true);
-  assert.equal(courseRes.medal, 'GOLD');
-  assert.equal(courseRes.totalScore, 982000 * 3);
-
-  const profile = evaluatePlayerProfile({
-    songs,
-    records: {
-      'starlight-overture::NORMAL': mockRecs[0],
-    },
-    courseRecords: {
-      [course.id]: courseRes,
-    },
-    totalPlays: 4,
-    customChartCount: 1,
+  const bank = new ExternalAudioBank();
+  bank.loadManifest({
+    baseUrl: 'https://cdn.pixer.app/audio',
+    bgm: { boss: 'boss.opus' },
+    sfx: { jump: 'jump.opus' },
   });
-  assert.ok(profile.rating > 0);
-  assert.equal(profile.coursesCleared, 1);
-  assert.equal(profile.achievements.length, 8);
-  assert.equal(profile.achievements.find((a) => a.id === 'course-graduate')?.unlocked, true);
-  assert.equal(profile.achievements.find((a) => a.id === 'chart-architect')?.unlocked, true);
+  bank.setBgmTheme('boss');
+  assert.equal(bank.getBgmDiagnostics().theme, 'boss');
+  bank.setBgmMuffled(true);
+  assert.equal(bank.getBgmDiagnostics().muffled, true);
+  bank.queueEvent('jump', 2, 'left');
+  bank.flushQueue();
+  bank.playTactile('face', 'down', 'right');
+  assert.equal(bank.toggleMute(), true);
+  assert.equal(bank.isMuted(), true);
+  bank.destroy();
+  assert.equal(bank.getBgmDiagnostics().theme, null);
+  assert.equal(bank.getBgmDiagnostics().schedulerActive, false);
 });
 
-test('RhythmJudgeEngine tracks initialHp carry-over and Fever tiers at 50+ combo', () => {
-  const notes: RhythmNote[] = Array.from({ length: 55 }, (_, i) => ({
-    id: `f_${i}`,
-    lane: (i % 4) as 0 | 1 | 2 | 3,
-    timeMs: 1000 + i * 200,
-    durationMs: 0,
-  }));
-  const chart = buildRhythmChart('HARD', 9, notes, 15000);
-  const engine = new RhythmJudgeEngine({
-    songId: 'fever-test',
-    chart,
-    bpm: 150,
-    offsetMs: 0,
-    durationMs: 15000,
-    cameraCues: [{ id: 'c0', timeMs: 0, style: 'DROP', intensity: 1.0 }],
-    initialHp: 62,
-  });
-  assert.equal(engine.getLiveState().hp, 62);
-  assert.equal(engine.getLiveState().feverTier, 0);
+test('MCP frame reader parses multi-byte UTF-8 Content-Length payloads across split chunks accurately', () => {
+  const received: string[] = [];
+  const feed = createMcpFrameReader((msg) => received.push(msg));
 
-  for (let i = 0; i < 52; i++) {
-    engine.pressLane((i % 4) as 0 | 1 | 2 | 3, 1000 + i * 200);
+  const msg1 = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { title: '黑曜魔王城：赤月王座 🏰🔥' } });
+  const msg2 = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: { note: '翠律遺跡' } });
+  const buf1 = Buffer.from(msg1, 'utf8');
+  const buf2 = Buffer.from(msg2, 'utf8');
+  assert.ok(buf1.byteLength > msg1.length, 'Payload must contain multi-byte UTF-8 characters');
+
+  const framed = Buffer.concat([
+    Buffer.from(`Content-Length: ${buf1.byteLength}\r\n\r\n`, 'ascii'),
+    buf1,
+    Buffer.from(`Content-Length: ${buf2.byteLength}\r\n\r\n`, 'ascii'),
+    buf2,
+  ]);
+
+  // Feed in deliberately misaligned chunks that split inside UTF-8 sequences
+  for (let i = 0; i < framed.length; i += 7) {
+    feed(framed.subarray(i, Math.min(framed.length, i + 7)));
   }
-  assert.equal(engine.getLiveState().combo, 52);
-  assert.equal(engine.getLiveState().feverTier, 1);
+
+  // Also test newline-delimited JSON-RPC
+  const msg3 = JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'ping', text: '測試' });
+  feed(Buffer.from(`${msg3}\n`, 'utf8'));
+
+  assert.equal(received.length, 3);
+  assert.equal(received[0], msg1);
+  assert.equal(received[1], msg2);
+  assert.equal(received[2], msg3);
+});
+
+test('Security hardening: Interop ZIP path-traversal, Tiled zlib bomb & custom sprite zlib bomb are rejected cleanly', async () => {
+  // 1. ZIP path traversal must be rejected
+  const traversalZip = zipSync({
+    '../evil.json': new TextEncoder().encode('{}'),
+  });
+  await assert.rejects(
+    () => loadExternalInteropFiles([{ name: 'bad.zip', bytes: traversalZip }]),
+    /不安全路徑/,
+  );
+
+  // 2. Tiled zlib bomb (> 16 MiB uncompressed) must abort and throw
+  const hugeZeros = new Uint8Array(17 * 1024 * 1024);
+  const tiledBomb = zlibSync(hugeZeros, { level: 9 });
+  assert.throws(
+    () =>
+      decodeTiledLayerData({
+        name: 'bomb',
+        type: 'tilelayer',
+        encoding: 'base64',
+        compression: 'zlib',
+        data: uint8ToBase64(tiledBomb),
+      }),
+    /超過安全上限/,
+  );
+
+  // 3. Custom sprite rgba_b64 bomb (> 128x128x4 = 65536 bytes) must abort safely and return blank RGBA
+  const spriteBombPayload = zlibSync(new Uint8Array(256 * 1024), { level: 9 });
+  const decoded = decodeZlibB64ToRgba(uint8ToBase64(spriteBombPayload), 32 * 32 * 4);
+  assert.equal(decoded.length, 32 * 32 * 4);
+  assert.equal(decoded.every((b) => b === 0), true);
 });

@@ -61,11 +61,24 @@ export function detectJsonInteropFormat(jsonText: string): 'ldtk' | 'tiled' | 'a
   }
 }
 
+export const MAX_ZIP_ARCHIVE_BYTES = 16 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 256;
+export const MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024;
+export const MAX_ZIP_TOTAL_BYTES = 32 * 1024 * 1024;
+
+function isSafeArchiveEntryPath(entryPath: string): boolean {
+  if (!entryPath || entryPath.length > 512) return false;
+  if (entryPath.includes('\0') || entryPath.startsWith('/') || entryPath.startsWith('\\')) return false;
+  if (/^[a-zA-Z]:/.test(entryPath)) return false;
+  const parts = entryPath.replace(/\\/g, '/').split('/');
+  return !parts.some((seg) => seg === '..');
+}
+
 /**
  * Pure, DOM-free multi-file & `.zip` bundle loader.
- * Expands `.zip` archives with `fflate.unzipSync`, decodes companion `.png` assets via the injected
- * `decodePng` callback (provided by browser UI or test harness), auto-detects `.ase`/`.aseprite`/`.ldtk`/`.tmj`/`.json`,
- * and returns a normalized `InteropImportResult`.
+ * Expands `.zip` archives with `fflate.unzipSync` (with zip-bomb & path-traversal guards),
+ * decodes companion `.png` assets via the injected `decodePng` callback,
+ * auto-detects `.ase`/`.aseprite`/`.ldtk`/`.tmj`/`.json`, and returns a normalized `InteropImportResult`.
  */
 export async function loadExternalInteropFiles(
   files: readonly InteropBundleFile[],
@@ -80,9 +93,49 @@ export async function loadExternalInteropFiles(
   for (const f of files) {
     const lower = f.name.toLowerCase();
     if (lower.endsWith('.zip')) {
-      const entries = unzipSync(f.bytes);
+      if (f.bytes.byteLength > MAX_ZIP_ARCHIVE_BYTES) {
+        throw new Error(`ZIP 檔案過大 (${Math.round(f.bytes.byteLength / 1024)} KB)，上限為 ${MAX_ZIP_ARCHIVE_BYTES / (1024 * 1024)} MB`);
+      }
+      let entryCount = 0;
+      let declaredTotal = 0;
+      let rejectedReason: string | null = null;
+      const entries = unzipSync(f.bytes, {
+        filter: (info) => {
+          if (info.name.endsWith('/') || info.name.startsWith('__MACOSX/')) return false;
+          if (!isSafeArchiveEntryPath(info.name)) {
+            rejectedReason = `ZIP 包含不安全路徑「${info.name}」`;
+            return false;
+          }
+          entryCount++;
+          if (entryCount > MAX_ZIP_ENTRIES) {
+            rejectedReason = `ZIP 檔案數量超過上限 (${MAX_ZIP_ENTRIES})`;
+            return false;
+          }
+          if (info.originalSize > MAX_ZIP_ENTRY_BYTES) {
+            rejectedReason = `ZIP 單檔「${info.name}」解壓尺寸超過上限 (${MAX_ZIP_ENTRY_BYTES / (1024 * 1024)} MB)`;
+            return false;
+          }
+          declaredTotal += info.originalSize;
+          if (declaredTotal > MAX_ZIP_TOTAL_BYTES) {
+            rejectedReason = `ZIP 解壓總容量超過上限 (${MAX_ZIP_TOTAL_BYTES / (1024 * 1024)} MB)`;
+            return false;
+          }
+          return true;
+        },
+      });
+      if (rejectedReason) {
+        throw new Error(rejectedReason);
+      }
+      let actualTotal = 0;
       for (const [entryPath, entryBytes] of Object.entries(entries)) {
         if (entryPath.endsWith('/') || entryPath.startsWith('__MACOSX/')) continue;
+        if (entryBytes.byteLength > MAX_ZIP_ENTRY_BYTES) {
+          throw new Error(`ZIP 單檔「${entryPath}」實際解壓尺寸超過上限`);
+        }
+        actualTotal += entryBytes.byteLength;
+        if (actualTotal > MAX_ZIP_TOTAL_BYTES) {
+          throw new Error(`ZIP 實際解壓總容量超過上限 (${MAX_ZIP_TOTAL_BYTES / (1024 * 1024)} MB)`);
+        }
         expanded.push({ name: entryPath, bytes: entryBytes });
       }
     } else {

@@ -1,4 +1,4 @@
-import { unzlibSync, zlibSync } from 'fflate';
+import { Unzlib, zlibSync } from 'fflate';
 import { encodeRgbaToZlibB64 } from '../ecs/EcsCustomSpriteCompiler.ts';
 import type { EcsCustomSpriteDef } from '../ecs/EcsProjectSchema.ts';
 import {
@@ -9,6 +9,26 @@ import {
   type InteropAnimationTag,
   type InteropImportResult,
 } from './InteropTypes.ts';
+
+function unzlibBounded(rawBytes: Uint8Array, maxBytes: number): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const stream = new Unzlib((chunk) => {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`Aseprite 壓縮圖層資料超過預期上限 (${maxBytes} bytes)`);
+    }
+    chunks.push(chunk);
+  });
+  stream.push(rawBytes, true);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return out;
+}
 
 const ASE_HEADER_MAGIC = 0xa5e0;
 const ASE_FRAME_MAGIC = 0xf1fa;
@@ -283,11 +303,16 @@ export function parseAsepriteBinary(bytes: Uint8Array, sourceName: string): Inte
             celsForFrame.set(layerIndex, { ...srcCel });
           }
         } else if (celType === 2 && payloadStart + 4 <= chunkEnd) {
-          // Compressed Image Data (zlib via fflate)
+          // Compressed Image Data (bounded streaming zlib via fflate to prevent zlib-bomb OOM)
           const cw = dv.getUint16(payloadStart, true);
           const ch = dv.getUint16(payloadStart + 2, true);
+          const bpp = colorDepth === 32 ? 4 : colorDepth === 16 ? 2 : 1;
+          const maxCelBytes = cw * ch * bpp;
+          if (cw <= 0 || ch <= 0 || cw > 2048 || ch > 2048 || maxCelBytes > 16 * 1024 * 1024) {
+            throw new Error(`Aseprite 壓縮圖層尺寸異常: ${cw}×${ch}`);
+          }
           const compressed = bytes.subarray(payloadStart + 4, chunkEnd);
-          const inflated = unzlibSync(compressed);
+          const inflated = unzlibBounded(compressed, maxCelBytes);
           const rgba = decodeCelPixelsToRgba(inflated, cw, ch, colorDepth, transparentIndex, palette);
           celsForFrame.set(layerIndex, { layerIndex, x: celX, y: celY, w: cw, h: ch, opacity, rgba });
         }

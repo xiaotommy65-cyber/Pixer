@@ -5,26 +5,18 @@ import {
   testHd2dDepthPipeline,
   testM3LoadCartridgeAndPngCodec,
   testM41DynamicViewportAndCamera,
-  testStructuredLoggingAndErrorRecovery,
-  testUpgradedGpuPipelineAndAtlas,
   testM42M43ChunkedWorldsAndMultiLayerDepth,
   testProceduralDeclarativeCompiler,
+  testStructuredLoggingAndErrorRecovery,
+  testUpgradedGpuPipelineAndAtlas,
 } from './sim/ArchitectureTests.ts';
 import {
-  testCelestialParkourAndGrappleEngine3,
   testCloudberryHop,
-  testSandboxBenchmark,
+  testCoreSramSaveHydrateRoundtrips,
   testSugarStarlight,
-  testSystemicChainReactionAndPuzzles,
 } from './sim/CartridgeActionTests.ts';
 import {
-  testAstralChronicles,
-  testEmberkeepDndAndAgentBridge,
-  testSramSaveHydrateRoundtrips,
-} from './sim/CartridgeRpgTests.ts';
-import {
   testCoreSubsystems,
-  testDungeonGeneratorSolvability,
   testEngine2CameraAndCutscene,
   testM2EnginePrimitives,
   testModule1ColorMathAndShaderParity,
@@ -33,12 +25,7 @@ import {
 } from './sim/CoreSubsystemTests.ts';
 import { testExtensibilityAndAiSpis } from './sim/ExtensibilityAiTests.ts';
 import { testHalAndInputPipeline } from './sim/HalAndInputTests.ts';
-import {
-  testEngine5OrthogonalFoundations,
-  testOrthogonalCartridgesPA07toPA09,
-} from './sim/OrthogonalEngineTests.ts';
 import { testPixer7EcsMultiPageAtlasAndSlimCore } from './sim/Pixer7Tests.ts';
-import { testStudio6AndSkywardForgePA10 } from './sim/StudioEditorTests.ts';
 
 async function runAll() {
   await registerAllBuiltinCartridges();
@@ -49,15 +36,9 @@ async function runAll() {
   testModule3SpatialVisibilityAndPathfindingOracle();
   testM2EnginePrimitives();
   testEngine2CameraAndCutscene();
-  testDungeonGeneratorSolvability();
-  testSramSaveHydrateRoundtrips();
+  testCoreSramSaveHydrateRoundtrips();
   testCloudberryHop();
   testSugarStarlight();
-  testSystemicChainReactionAndPuzzles();
-  testSandboxBenchmark();
-  testEmberkeepDndAndAgentBridge();
-  testAstralChronicles();
-  testCelestialParkourAndGrappleEngine3();
   testHd2dDepthPipeline();
   testHalAndInputPipeline();
   testArchitectureBoundariesAndLifecycle();
@@ -68,11 +49,8 @@ async function runAll() {
   testM41DynamicViewportAndCamera();
   testM42M43ChunkedWorldsAndMultiLayerDepth();
   testProceduralDeclarativeCompiler();
-  testEngine5OrthogonalFoundations();
-  testOrthogonalCartridgesPA07toPA09();
-  await testStudio6AndSkywardForgePA10();
   testPixer7EcsMultiPageAtlasAndSlimCore();
-  console.log('[SIM ALL PASSED] Pixer 7.0 Engine & All 11 Cartridges (PA-01..PA-11) Passed!');
+  console.log('[SIM ALL PASSED] Pixer Core PBR/ECS Engine & Focused Flagship Cartridges (PA-01, PA-02, PA-11, PA-12, PA-14, PA-15) Passed!');
 }
 
 void runAll().catch((err) => {

@@ -1,4 +1,4 @@
-import { gunzipSync, unzlibSync } from 'fflate';
+import { Gunzip, Unzlib } from 'fflate';
 import { base64ToUint8, encodeRgbaToZlibB64 } from '../ecs/EcsCustomSpriteCompiler.ts';
 import type {
   EcsCustomSpriteDef,
@@ -100,8 +100,32 @@ function getTiledProp(props: readonly TiledProperty[] | undefined, names: readon
   return undefined;
 }
 
+const MAX_TILED_LAYER_BYTES = 16 * 1024 * 1024;
+
+function decompressBounded(rawBytes: Uint8Array, kind: 'zlib' | 'gzip', maxBytes: number): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const onData = (chunk: Uint8Array): void => {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`Tiled 圖層解壓資料超過安全上限 (${maxBytes / (1024 * 1024)} MB)`);
+    }
+    chunks.push(chunk);
+  };
+  const stream = kind === 'zlib' ? new Unzlib(onData) : new Gunzip(onData);
+  stream.push(rawBytes, true);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.byteLength;
+  }
+  return out;
+}
+
 /**
- * Decodes Tiled `tilelayer.data` supporting CSV arrays AND Base64 raw / zlib / gzip streams via `fflate`.
+ * Decodes Tiled `tilelayer.data` supporting CSV arrays AND Base64 raw / zlib / gzip streams via `fflate`
+ * with strict decompressed size bounds.
  */
 export function decodeTiledLayerData(layer: TiledLayer): Uint32Array {
   if (Array.isArray(layer.data)) {
@@ -115,10 +139,13 @@ export function decodeTiledLayerData(layer: TiledLayer): Uint32Array {
     const rawBytes = base64ToUint8(layer.data.trim());
     let decodedBytes: Uint8Array;
     if (layer.compression === 'zlib') {
-      decodedBytes = unzlibSync(rawBytes);
+      decodedBytes = decompressBounded(rawBytes, 'zlib', MAX_TILED_LAYER_BYTES);
     } else if (layer.compression === 'gzip') {
-      decodedBytes = gunzipSync(rawBytes);
+      decodedBytes = decompressBounded(rawBytes, 'gzip', MAX_TILED_LAYER_BYTES);
     } else if (!layer.compression || layer.compression === '') {
+      if (rawBytes.byteLength > MAX_TILED_LAYER_BYTES) {
+        throw new Error(`Tiled 圖層資料超過安全上限 (${MAX_TILED_LAYER_BYTES / (1024 * 1024)} MB)`);
+      }
       decodedBytes = rawBytes;
     } else {
       throw new Error(`不支援的 Tiled 圖層壓縮格式: ${layer.compression}（支援 uncompressed / zlib / gzip）`);

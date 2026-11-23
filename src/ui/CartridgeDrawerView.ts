@@ -91,7 +91,7 @@ export class CartridgeDrawerView {
     this.listEl.innerHTML = '';
     const activeId = this.host.activeCartridge;
     const all = this.host.listCartridges();
-    const fullGameIds = new Set(['pulse-resonance', 'sugar-starlight', 'astral-chronicles', 'astral-deck']);
+    const fullGameIds = new Set(['obsidian-citadel', 'emerald-ruins', 'cloudberry-hop', 'sugar-starlight']);
     const groups: { title: string; items: typeof all }[] = [
       { title: '完整獨立遊戲', items: all.filter((m) => fullGameIds.has(m.id)) },
       { title: '引擎範例與單關卡匣', items: all.filter((m) => !fullGameIds.has(m.id)) },

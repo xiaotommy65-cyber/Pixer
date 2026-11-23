@@ -153,6 +153,26 @@ const ART: Record<string, ArtSpec> = {
       { id: 'hero_a', x: 10, y: 22, scale: 1.55 },
     ],
   },
+  'obsidian-citadel': {
+    top: '#1a0a16',
+    bottom: '#7f1d1d',
+    ground: 'stone',
+    sprites: [
+      { id: 'castle_torch_brazier', x: 6, y: 14, scale: 0.7 },
+      { id: 'castle_hero_a', x: 18, y: 16, scale: 0.85 },
+      { id: 'castle_demon_lord', x: 46, y: 4, scale: 0.65 },
+    ],
+  },
+  'emerald-ruins': {
+    top: '#064e3b',
+    bottom: '#34d399',
+    ground: 'grass',
+    sprites: [
+      { id: 'star_a', x: 34, y: 6, scale: 1.1 },
+      { id: 'hero_a', x: 14, y: 20, scale: 1.45 },
+      { id: 'slime_a', x: 52, y: 22, scale: 1.3 },
+    ],
+  },
 };
 
 const W = 80;

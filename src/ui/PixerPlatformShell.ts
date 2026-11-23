@@ -1,6 +1,6 @@
 import type { PixerPlatformMode } from '../core/ai/AgentBridge.ts';
 
-export type PixerTopNavTab = 'studio' | 'ecs' | 'atlas' | 'rhythm' | 'arcade';
+export type PixerTopNavTab = 'studio' | 'ecs' | 'atlas' | 'arcade';
 
 export interface PixerPlatformShellCallbacks {
   onSelectTab: (tab: PixerTopNavTab) => void;
@@ -40,7 +40,6 @@ export class PixerPlatformShell {
       { id: 'studio', label: '工作站' },
       { id: 'ecs', label: '場景與元件' },
       { id: 'atlas', label: '資產圖集' },
-      { id: 'rhythm', label: '星脈共鳴' },
       { id: 'arcade', label: '掌機展示' },
     ];
 
@@ -93,8 +92,7 @@ export class PixerPlatformShell {
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-current', active ? 'page' : 'false');
     }
-    this.ctaBtn.textContent =
-      mode === 'studio' ? '掌機試玩' : mode === 'rhythm' ? '回工作站' : '回到工作站';
+    this.ctaBtn.textContent = mode === 'studio' ? '掌機試玩' : '回到工作站';
   }
 
   public destroy(): void {

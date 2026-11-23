@@ -1,6 +1,5 @@
 {
-  "name": "Pixel Atelier — 可愛工房風 GPU 幻想主機",
-  "description": "從零打造的可愛工房風幻想主機與 WebGPU / WebGL2 Sprite Batch 遊戲引擎：遊玩台、精靈畫室與積木工房。",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "name": "Pixer — HD-2D Pixel PBR Engine & AI-Native Workstation",
+  "description": "Zero-GC vanilla TypeScript HD-2D Pixel PBR-Lite GPU engine (WebGPU / WebGL2 / Canvas2D), True Generational ECS Workstation, External Standard Importer (Aseprite / LDtk / Tiled), and Switch-style Handheld Showcase.",
+  "requestFramePermissions": []
 }
