@@ -1,4 +1,5 @@
 import type { TextureAtlas } from '../assets/TextureAtlas.ts';
+import { critiqueCutsceneAesthetics } from '../core/ai/EcsCinematicOracle.ts';
 import { analyzeWorldMapReachability } from '../core/ai/EcsSpatialOracle.ts';
 import { EcsCartridgeRuntime } from '../core/ecs/EcsCartridgeRuntime.ts';
 import { syncProjectCustomSpritesToAtlas } from '../core/ecs/EcsCustomSpriteCompiler.ts';
@@ -43,7 +44,7 @@ import {
 } from './EcsWorkbenchShellBuilder.ts';
 import { EcsWorldRulesInspectorPanel } from './EcsWorldRulesInspectorPanel.ts';
 import { EventGraphEditorView } from './EventGraphEditorView.ts';
-import { ExternalImportModalView } from './ExternalImportModalView.ts';
+import type { ExternalImportModalView } from './ExternalImportModalView.ts';
 
 export interface EcsWorkbenchCallbacks {
   onLaunchInArcade: (proj: EcsProjectV2) => void;
@@ -73,7 +74,9 @@ export class EcsWorkbenchView {
   private readonly liveMutator: EcsWorkbenchLiveMutator;
   private readonly mapCanvasCtrl: EcsWorkbenchMapCanvasController;
   private readonly eventGraphView: EventGraphEditorView;
-  private readonly externalImportModal: ExternalImportModalView;
+  private readonly externalImportSlotEl: HTMLDivElement;
+  private externalImportModal: ExternalImportModalView | null = null;
+  private externalImportLoadPromise: Promise<ExternalImportModalView> | null = null;
   private readonly worldRulesPanel: EcsWorldRulesInspectorPanel;
   private readonly liveInput = createEmptyInputState();
 
@@ -87,6 +90,9 @@ export class EcsWorkbenchView {
   private debugOverlay = false;
   private visible = false;
   private previewGpuInitialized = false;
+  private previewDirty = true;
+  private lastRenderedScore = 0;
+  private destroyed = false;
   private syncedCustomSpriteIds = new Set<string>();
   private lastLoadedProjectId: string;
   private readonly mapState: MapDesignerState = createDefaultMapDesignerState();
@@ -123,13 +129,18 @@ export class EcsWorkbenchView {
     this.leftTab = initialProj.worldMap ? 'map' : 'hierarchy';
     this.simRunning = !initialProj.worldMap;
     this.runtime = new EcsCartridgeRuntime(initialProj);
-    this.liveMutator = new EcsWorkbenchLiveMutator(this.runtime, () => this.renderPreviewNow());
+    if (!this.simRunning) {
+      this.runtime.getWorldMapController().director.reset(true);
+    }
+    this.liveMutator = new EcsWorkbenchLiveMutator(this.runtime, () => {
+      this.previewDirty = true;
+      this.renderPreviewNow();
+    });
 
     this.eventGraphView = new EventGraphEditorView(this.session);
     this.eventGraphView.element.classList.add('panel-hidden');
-    this.externalImportModal = new ExternalImportModalView({
-      onCommit: (result, options) => this.handleExternalImportCommit(result, options),
-    });
+    this.externalImportSlotEl = document.createElement('div');
+    this.externalImportSlotEl.hidden = true;
     this.worldRulesPanel = new EcsWorldRulesInspectorPanel({
       onFocusRoom: (roomId) => this.switchActiveRoom(roomId),
       getSpriteOptions: (proj) => collectProjectSpriteOptions(proj),
@@ -141,9 +152,11 @@ export class EcsWorkbenchView {
       initialLeftTab: this.leftTab,
       initialPlayPauseLabel: this.getPlayPauseLabel(),
       eventGraphEl: this.eventGraphView.element,
-      externalImportModalEl: this.externalImportModal.element,
+      externalImportModalEl: this.externalImportSlotEl,
       signal,
-      onOpenExternalImport: () => this.openExternalImportModal(),
+      onOpenExternalImport: () => {
+        void this.openExternalImportModal();
+      },
       onOpenClassicWorkshop: () => this.callbacks.onOpenClassicWorkshop(),
       onSelectBuiltinProject: (project) => {
         this.lastDiagReport = null;
@@ -158,16 +171,24 @@ export class EcsWorkbenchView {
       onStepFrame: () => {
         this.setSimRunning(false);
         this.runtime.step(1 / 60, this.liveInput, DEFAULT_RUNTIME_PARAMS);
+        this.previewDirty = true;
         this.renderPreviewNow();
+        this.updateStatusStrip();
       },
       onResetRuntime: () => {
         this.runtime.reset();
+        if (!this.simRunning) {
+          this.runtime.getWorldMapController().director.reset(true);
+        }
+        this.previewDirty = true;
         this.renderPreviewNow();
+        this.updateStatusStrip();
       },
       onToggleDebugOverlay: () => {
         this.debugOverlay = !this.debugOverlay;
         this.runtime.setDebugHitboxes(this.debugOverlay);
         this.dom.overlayBtn.classList.toggle('p7-btn-accent', this.debugOverlay);
+        this.previewDirty = true;
       },
       onUndo: () => {
         this.session.undo();
@@ -185,15 +206,18 @@ export class EcsWorkbenchView {
         this.host.unlockAudio();
         if (this.session.getProject().worldMap && !this.simRunning) this.setSimRunning(true);
         this.pulseActionFrames = 4;
+        this.previewDirty = true;
       },
       onHitActionB: () => {
         this.host.unlockAudio();
         if (this.session.getProject().worldMap && !this.simRunning) this.setSimRunning(true);
         this.pulseJumpFrames = 4;
+        this.previewDirty = true;
       },
       onShiftRealm: () => {
         this.host.unlockAudio();
         this.pulseShiftFrames = 2;
+        this.previewDirty = true;
       },
       onLaunchArcade: () => this.callbacks.onLaunchInArcade(this.session.getProject()),
       onSelectProjection: (mode) => {
@@ -202,6 +226,7 @@ export class EcsWorkbenchView {
       onSelectDimensionMask: (mask) => {
         this.runtime.setActiveDimensionMask(mask);
         this.session.dispatch({ type: 'set_projection', patch: { activeDimensionMask: mask } });
+        this.previewDirty = true;
       },
     });
     this.element = this.dom.rootEl;
@@ -219,6 +244,9 @@ export class EcsWorkbenchView {
       onEntityStamped: (entityId) => {
         this.selectedEntityId = entityId;
         this.renderRightPanel();
+      },
+      onPreviewDirty: () => {
+        this.previewDirty = true;
       },
     });
 
@@ -241,6 +269,9 @@ export class EcsWorkbenchView {
           this.mapState.selectedStampPrefabId = null;
         }
       }
+      if (!this.simRunning) {
+        this.runtime.getWorldMapController().director.reset(true);
+      }
       this.syncViewportSize(proj);
       if (this.selectedEntityId && !proj.entities.some((e) => e.id === this.selectedEntityId)) {
         this.selectedEntityId = proj.entities[0]?.id ?? null;
@@ -248,8 +279,9 @@ export class EcsWorkbenchView {
       if (this.selectedPrefabId && !proj.prefabs[this.selectedPrefabId]) {
         this.selectedPrefabId = null;
       }
-      this.renderAllPanels();
+      this.previewDirty = true;
       this.renderPreviewNow();
+      this.renderAllPanels();
     });
 
     this.renderAllPanels();
@@ -259,7 +291,7 @@ export class EcsWorkbenchView {
     window.addEventListener(
       'keydown',
       (e) => {
-        if (!this.visible || this.externalImportModal.isOpen()) return;
+        if (!this.visible || this.externalImportModal?.isOpen()) return;
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         const proj = this.session.getProject();
@@ -288,11 +320,11 @@ export class EcsWorkbenchView {
             this.host.unlockAudio();
             this.pulseActionFrames = 4;
           } else if (!this.simRunning) {
-            if (e.code === 'KeyB') { this.mapState.tool = 'brush'; this.renderLeftPanel(); }
-            else if (e.code === 'KeyR') { this.mapState.tool = 'rect'; this.renderLeftPanel(); }
-            else if (e.code === 'KeyG') { this.mapState.tool = 'fill'; this.renderLeftPanel(); }
-            else if (e.code === 'KeyE') { this.mapState.tool = 'erase'; this.renderLeftPanel(); }
-            else if (e.code === 'KeyI') { this.mapState.tool = 'eyedropper'; this.renderLeftPanel(); }
+            if (e.code === 'KeyB') { this.mapState.tool = 'brush'; this.previewDirty = true; this.renderLeftPanel(); this.mapCanvasCtrl.renderOverlay(); }
+            else if (e.code === 'KeyR') { this.mapState.tool = 'rect'; this.previewDirty = true; this.renderLeftPanel(); this.mapCanvasCtrl.renderOverlay(); }
+            else if (e.code === 'KeyG') { this.mapState.tool = 'fill'; this.previewDirty = true; this.renderLeftPanel(); this.mapCanvasCtrl.renderOverlay(); }
+            else if (e.code === 'KeyE') { this.mapState.tool = 'erase'; this.previewDirty = true; this.renderLeftPanel(); this.mapCanvasCtrl.renderOverlay(); }
+            else if (e.code === 'KeyI') { this.mapState.tool = 'eyedropper'; this.previewDirty = true; this.renderLeftPanel(); this.mapCanvasCtrl.renderOverlay(); }
           }
           return;
         }
@@ -360,8 +392,9 @@ export class EcsWorkbenchView {
     this.mapState.selectedStampPrefabId = null;
     if (this.simRunning) this.setSimRunning(false);
     this.setLeftTab('map');
-    this.renderAllPanels();
+    this.previewDirty = true;
     this.renderPreviewNow();
+    this.renderAllPanels();
   }
 
   public focusPublishedPrefab(prefabId: string): void {
@@ -370,8 +403,9 @@ export class EcsWorkbenchView {
     this.selectedPrefabId = prefabId;
     if (this.simRunning) this.setSimRunning(false);
     this.setLeftTab(this.session.getProject().worldMap ? 'map' : 'prefabs');
-    this.renderAllPanels();
+    this.previewDirty = true;
     this.renderPreviewNow();
+    this.renderAllPanels();
   }
 
   private getPlayPauseLabel(): string {
@@ -385,10 +419,14 @@ export class EcsWorkbenchView {
     if (running) {
       this.runtime.clearEditorCamera();
       this.mapCanvasCtrl.clearPendingStroke();
+    } else if (this.session.getProject().worldMap) {
+      this.runtime.getWorldMapController().director.reset(false);
     }
     this.dom.playPauseBtn.textContent = this.getPlayPauseLabel();
     this.mapCanvasCtrl.syncInteractivity();
+    this.previewDirty = true;
     this.renderPreviewNow();
+    this.updateStatusStrip();
   }
 
   private isMapEditingActive(): boolean {
@@ -400,6 +438,7 @@ export class EcsWorkbenchView {
     const proj = this.session.getProject();
     const room = proj.worldMap?.rooms.find((r) => r.id === roomId);
     if (!this.simRunning && room && proj.worldMap) {
+      this.runtime.getWorldMapController().director.reset(true);
       const ts = proj.worldMap.tileSize;
       const worldW = room.cols * ts;
       const centerX = Math.max(0, (worldW - proj.viewport.width) * 0.5);
@@ -411,16 +450,19 @@ export class EcsWorkbenchView {
     } else {
       this.runtime.clearEditorCamera();
     }
-    this.renderAllPanels();
+    this.previewDirty = true;
     this.renderPreviewNow();
+    this.renderAllPanels();
   }
 
   private ensurePreviewGpuInit(): void {
     if (this.previewGpuInitialized) return;
     this.previewGpuInitialized = true;
     void this.previewGpu.init().then(() => {
+      if (this.destroyed) return;
       this.syncViewportSize(this.session.getProject());
       this.previewGpu.syncAtlasToGpu();
+      this.previewDirty = true;
       if (this.visible) this.renderPreviewNow();
     });
   }
@@ -429,6 +471,7 @@ export class EcsWorkbenchView {
     this.visible = visible;
     this.element.classList.toggle('panel-hidden', !visible);
     if (visible) {
+      this.previewDirty = true;
       this.ensurePreviewGpuInit();
       this.previewGpu.syncAtlasToGpu();
       this.renderAllPanels();
@@ -455,7 +498,9 @@ export class EcsWorkbenchView {
     this.dom.centerTabGraphBtn.classList.toggle('is-active', mode === 'event_graph');
     this.dom.viewportStageEl.classList.toggle('panel-hidden', mode !== 'viewport');
     this.eventGraphView.element.classList.toggle('panel-hidden', mode !== 'event_graph');
-    if (mode === 'event_graph') {
+    if (mode === 'viewport') {
+      this.previewDirty = true;
+    } else if (mode === 'event_graph') {
       this.eventGraphView.syncProject(this.session.getProject(), focusScriptId);
       this.eventGraphView.updateLiveTrace(this.runtime.vm);
     }
@@ -467,6 +512,7 @@ export class EcsWorkbenchView {
 
   public syncAtlasToPreview(): void {
     this.previewGpu.syncAtlasToGpu();
+    this.previewDirty = true;
     if (this.leftTab === 'atlas') {
       this.renderLeftPanel();
     }
@@ -492,6 +538,7 @@ export class EcsWorkbenchView {
     if (proj.viewport.preset) {
       this.dom.viewportSelectEl.value = proj.viewport.preset;
     }
+    this.previewDirty = true;
   }
 
   public tick(dt: number): void {
@@ -522,10 +569,14 @@ export class EcsWorkbenchView {
       if (dx !== 0 || dy !== 0) {
         const cam = this.runtime.getCamera();
         this.runtime.setEditorCamera(cam.x + dx * panSpeed, cam.y + dy * panSpeed);
+        this.previewDirty = true;
       }
     }
     if (this.centerMode === 'viewport') {
-      this.renderPreviewNow();
+      const directorActive = this.runtime.getWorldMapController().director.isCutscenePlaying();
+      if (this.simRunning || directorActive || this.previewDirty) {
+        this.renderPreviewNow();
+      }
     } else {
       this.eventGraphView.updateLiveTrace(this.runtime.vm);
     }
@@ -538,7 +589,9 @@ export class EcsWorkbenchView {
   }
 
   private renderPreviewNow(): void {
+    this.previewDirty = false;
     const snap = this.runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+    this.lastRenderedScore = snap.score;
     this.previewBridge.render(this.previewGpu, snap, null);
     this.mapCanvasCtrl.renderOverlay();
   }
@@ -546,7 +599,6 @@ export class EcsWorkbenchView {
   private updateStatusStrip(): void {
     const proj = this.session.getProject();
     const stats = this.atlas.getAtlasStats();
-    const snap = this.runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
     const sysCount = this.runtime.world.getSystemPipeline().length;
     const activeRoomId = this.runtime.getActiveRoomId();
     const activeRoom = proj.worldMap?.rooms.find((r) => r.id === activeRoomId);
@@ -555,7 +607,7 @@ export class EcsWorkbenchView {
       `${proj.meta.code} ${proj.meta.title}${roomPart} · 視口 ${proj.viewport.width}×${proj.viewport.height}` +
       ` · ECS ${this.runtime.world.activeCount} 實體 / ${sysCount} 系統`;
     this.dom.statusRightEl.textContent =
-      `圖集 ${stats.pageCount}/${stats.maxPages} 頁 · ${this.simRunning ? '試玩中' : '編輯模式'} · 分數 ${snap.score} · 修訂 #${this.session.getRevision()}`;
+      `圖集 ${stats.pageCount}/${stats.maxPages} 頁 · ${this.simRunning ? '試玩中' : '編輯模式'} · 分數 ${this.lastRenderedScore} · 修訂 #${this.session.getRevision()}`;
   }
 
   private renderAllPanels(): void {
@@ -618,6 +670,7 @@ export class EcsWorkbenchView {
           onStateChange: () => {
             this.mapCanvasCtrl.syncInteractivity();
             this.renderLeftPanel();
+            this.previewDirty = true;
             this.mapCanvasCtrl.renderOverlay();
           },
           onSwitchRoom: (roomId) => this.switchActiveRoom(roomId),
@@ -635,7 +688,9 @@ export class EcsWorkbenchView {
               this.callbacks.onOpenClassicWorkshop();
             }
           },
-          onOpenExternalImport: () => this.openExternalImportModal(),
+          onOpenExternalImport: () => {
+            void this.openExternalImportModal();
+          },
         },
       );
     } else if (this.leftTab === 'rules') {
@@ -686,7 +741,9 @@ export class EcsWorkbenchView {
       );
     } else {
       renderAtlasPanel(this.dom.leftContentEl, this.atlas, this.session, {
-        onOpenExternalImport: () => this.openExternalImportModal(),
+        onOpenExternalImport: () => {
+          void this.openExternalImportModal();
+        },
         onOpenSpriteAtelier: () => {
           if (this.callbacks.onOpenSpriteAtelierForTile) {
             this.callbacks.onOpenSpriteAtelierForTile(this.mapState.layer);
@@ -768,6 +825,92 @@ export class EcsWorkbenchView {
     });
   }
 
+  private buildSceneSections(proj: EcsProjectV2): HTMLElement[] {
+    return buildSceneAndHistorySections(
+      proj,
+      this.session,
+      this.runtime,
+      () => {
+        this.previewDirty = true;
+        this.renderPreviewNow();
+      },
+      {
+        onPlayCutscene: (cutsceneId) => this.playCutsceneInWorkbench(cutsceneId),
+        onCritiqueCutscene: (cutsceneId) => this.critiqueCutsceneInWorkbench(cutsceneId),
+        fovPreviewEnabled: this.mapState.showFovPreview,
+        onToggleFovPreview: () => this.toggleFovPreview(),
+      },
+    );
+  }
+
+  private playCutsceneInWorkbench(cutsceneId: string): void {
+    const proj = this.session.getProject();
+    const cs = proj.cutscenes?.find((c) => c.id === cutsceneId);
+    if (!cs) return;
+    if (this.centerMode !== 'viewport') {
+      this.setCenterMode('viewport');
+    }
+    if (!this.simRunning) {
+      this.setSimRunning(true);
+    }
+    if (cs.roomId && proj.worldMap && this.runtime.getActiveRoomId() !== cs.roomId) {
+      this.switchActiveRoom(cs.roomId);
+    }
+    this.runtime.clearEditorCamera();
+    this.runtime.playCutscene(cs.id);
+    this.previewDirty = true;
+    this.renderPreviewNow();
+  }
+
+  private critiqueCutsceneInWorkbench(cutsceneId: string): void {
+    const proj = this.session.getProject();
+    const report = critiqueCutsceneAesthetics(proj, cutsceneId);
+    if (!report.ok) {
+      this.lastDiagReport = {
+        ok: false,
+        headline: `審美預言機無法評分：${cutsceneId}`,
+        lines: report.suggestions,
+      };
+      this.renderRightPanel();
+      return;
+    }
+
+    const shotCount = Math.max(1, report.shots.length);
+    let sumOcc = 0;
+    let sumComp = 0;
+    let sumAxis = 0;
+    let sumDram = 0;
+    const shotHeadlines: string[] = [];
+    for (let i = 0; i < report.shots.length; i++) {
+      const s = report.shots[i];
+      sumOcc += s.occlusionScore;
+      sumComp += s.compositionScore;
+      sumAxis += s.axisContinuityScore;
+      sumDram += s.dramaturgyScore;
+      shotHeadlines.push(s.asciiViewfinder.split('\n')[0] ?? `Shot #${i + 1} [${s.shotId}]`);
+    }
+
+    this.lastDiagReport = {
+      ok: report.pass,
+      headline: `電影審美神諭 [${report.grade}] ${report.overallScore}/100 · ${report.pass ? 'PASS' : '需調校'} · ${report.cutsceneName}`,
+      lines: [
+        `5 軸評分：遮蔽 ${Math.round(sumOcc / shotCount)} · 構圖 ${Math.round(sumComp / shotCount)} · 180°軸線 ${Math.round(sumAxis / shotCount)} · 戲劇 ${Math.round(sumDram / shotCount)} · 回歸 ${report.handbackContinuityScore} (殘差 ${report.handbackResidualPx}px)`,
+        ...shotHeadlines.slice(0, 4),
+        ...(report.suggestions.length > 0
+          ? report.suggestions.slice(0, 3).map((s) => `建議：${s}`)
+          : [`0 項遮蔽/構圖/軸線異常 · ${report.totalDurationSec}s (${report.framesSimulated} 幀)`]),
+      ],
+    };
+    this.renderRightPanel();
+  }
+
+  private toggleFovPreview(): void {
+    this.mapState.showFovPreview = !this.mapState.showFovPreview;
+    this.previewDirty = true;
+    this.mapCanvasCtrl.renderOverlay();
+    this.renderRightPanel();
+  }
+
   private renderRightPanel(): void {
     this.dom.rightContentEl.textContent = '';
     const proj = this.session.getProject();
@@ -783,11 +926,12 @@ export class EcsWorkbenchView {
 
     this.dom.rightTitleEl.textContent = 'ECS 元件檢查器與沙盒腳本';
     const ent = proj.entities.find((e) => e.id === this.selectedEntityId);
+    const sceneSections = this.buildSceneSections(proj);
     if (!ent) {
       const empty = document.createElement('p');
       empty.className = 'p7-empty-note';
       empty.textContent = '請從左側階層樹選取任一實體以檢視或編輯其 ECS 元件與 PBR 材質。';
-      this.dom.rightContentEl.appendChild(empty);
+      this.dom.rightContentEl.append(empty, ...sceneSections);
       return;
     }
 
@@ -801,11 +945,33 @@ export class EcsWorkbenchView {
       },
       onOpenEventGraph: (scriptId) => this.setCenterMode('event_graph', scriptId),
     });
-    const sceneSections = buildSceneAndHistorySections(proj, this.session, this.runtime, () => this.renderPreviewNow());
     this.dom.rightContentEl.append(...entitySections, ...sceneSections);
   }
 
-  public openExternalImportModal(): void {
+  public async openExternalImportModal(): Promise<void> {
+    if (this.destroyed) return;
+    if (!this.externalImportModal) {
+      if (!this.externalImportLoadPromise) {
+        this.externalImportLoadPromise = import('./ExternalImportModalView.ts')
+          .then(({ ExternalImportModalView }) => {
+            const modal = new ExternalImportModalView({
+              onCommit: (result, options) => this.handleExternalImportCommit(result, options),
+            });
+            if (this.destroyed) {
+              modal.destroy();
+            } else {
+              this.externalImportModal = modal;
+              this.element.appendChild(modal.element);
+            }
+            return modal;
+          })
+          .finally(() => {
+            this.externalImportLoadPromise = null;
+          });
+      }
+      await this.externalImportLoadPromise;
+    }
+    if (this.destroyed || !this.externalImportModal) return;
     this.externalImportModal.open();
   }
 
@@ -856,11 +1022,15 @@ export class EcsWorkbenchView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     this.unsubSession();
     this.ac.abort();
     this.mapCanvasCtrl.destroy();
     this.worldRulesPanel.destroy();
-    this.externalImportModal.destroy();
+    if (this.externalImportModal) {
+      this.externalImportModal.destroy();
+      this.externalImportModal = null;
+    }
     this.eventGraphView.destroy();
     this.previewGpu.dispose();
     this.element.remove();

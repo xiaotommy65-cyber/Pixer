@@ -13,7 +13,7 @@ import {
   type ComputedCamera3D,
   type ScreenPoint3D,
 } from '../core/math/Perspective3DMath.ts';
-import { drawMapEditorOverlay, type MapDesignerState } from './EcsMapDesignerPanel.ts';
+import { renderMapOverlay, type MapDesignerState } from './EcsMapDesignerPanel.ts';
 
 export interface MapCanvasControllerDeps {
   canvas: HTMLCanvasElement;
@@ -24,6 +24,7 @@ export interface MapCanvasControllerDeps {
   isEditingActive: () => boolean;
   onToolStateMutated: () => void;
   onEntityStamped: (entityId: string) => void;
+  onPreviewDirty?: () => void;
 }
 
 /**
@@ -45,6 +46,7 @@ export class EcsWorkbenchMapCanvasController {
 
   private readonly editCam3D: ComputedCamera3D = createComputedCamera3D();
   private readonly pickWorldScratch: [number, number] = [0, 0];
+  private fovMaskBuf = new Uint8Array(64 * 64);
   private readonly overlayPtsScratch: readonly [ScreenPoint3D, ScreenPoint3D, ScreenPoint3D, ScreenPoint3D] = [
     { x: 0, y: 0, scale: 1, depth: 1, visible: true },
     { x: 0, y: 0, scale: 1, depth: 1, visible: true },
@@ -68,7 +70,7 @@ export class EcsWorkbenchMapCanvasController {
     const active = this.deps.isEditingActive();
     this.deps.canvas.classList.toggle('is-interactive', active);
     this.deps.canvas.classList.toggle('is-pan', active && this.deps.mapState.tool === 'pan');
-    if (!active && this.ctx) {
+    if (!active && !this.deps.mapState.showFovPreview && this.ctx) {
       this.ctx.clearRect(0, 0, this.deps.canvas.width, this.deps.canvas.height);
     }
   }
@@ -159,6 +161,7 @@ export class EcsWorkbenchMapCanvasController {
           const cam = runtime.getCamera();
           this.pointerMode = 'pan';
           this.panOrigin = { clientX: e.clientX, clientY: e.clientY, camX: cam.x, camY: cam.y };
+          this.deps.onPreviewDirty?.();
           return;
         }
 
@@ -174,6 +177,8 @@ export class EcsWorkbenchMapCanvasController {
             mapState.tool = 'brush';
             this.deps.onToolStateMutated();
           }
+          this.deps.onPreviewDirty?.();
+          this.renderOverlay();
           return;
         }
 
@@ -186,6 +191,7 @@ export class EcsWorkbenchMapCanvasController {
             row: hit.row,
             tileId: mapState.selectedTileId,
           });
+          this.deps.onPreviewDirty?.();
           return;
         }
 
@@ -201,12 +207,15 @@ export class EcsWorkbenchMapCanvasController {
           if (res.ok && res.createdEntityId) {
             this.deps.onEntityStamped(res.createdEntityId);
           }
+          this.deps.onPreviewDirty?.();
           return;
         }
 
         if (mapState.tool === 'rect') {
           this.pointerMode = 'rect';
           this.rectDrag = { c0: hit.col, r0: hit.row, c1: hit.col, r1: hit.row };
+          this.deps.onPreviewDirty?.();
+          this.renderOverlay();
           return;
         }
 
@@ -215,6 +224,8 @@ export class EcsWorkbenchMapCanvasController {
           this.pendingBrushMap.clear();
           const tileId = mapState.tool === 'erase' ? 0 : mapState.selectedTileId;
           this.pendingBrushMap.set(`${hit.col},${hit.row}`, { col: hit.col, row: hit.row, tileId });
+          this.deps.onPreviewDirty?.();
+          this.renderOverlay();
         }
       },
       { signal },
@@ -238,11 +249,13 @@ export class EcsWorkbenchMapCanvasController {
           const dx = (e.clientX - this.panOrigin.clientX) * scaleX;
           const dy = (e.clientY - this.panOrigin.clientY) * scaleY;
           runtime.setEditorCamera(this.panOrigin.camX - dx, this.panOrigin.camY - dy);
+          this.deps.onPreviewDirty?.();
           return;
         }
 
         const hit = this.screenToTile(e.clientX, e.clientY);
         if (!hit) return;
+        const cellChanged = this.hoverTileCol !== hit.col || this.hoverTileRow !== hit.row;
         this.hoverTileCol = hit.col;
         this.hoverTileRow = hit.row;
 
@@ -254,6 +267,10 @@ export class EcsWorkbenchMapCanvasController {
             const tileId = mapState.tool === 'erase' ? 0 : mapState.selectedTileId;
             this.pendingBrushMap.set(`${hit.col},${hit.row}`, { col: hit.col, row: hit.row, tileId });
           }
+        }
+        if (cellChanged || this.pointerMode === 'rect' || this.pointerMode === 'brush') {
+          this.deps.onPreviewDirty?.();
+          this.renderOverlay();
         }
       },
       { signal },
@@ -282,6 +299,8 @@ export class EcsWorkbenchMapCanvasController {
         });
       }
       this.clearPendingStroke();
+      this.deps.onPreviewDirty?.();
+      this.renderOverlay();
     };
 
     canvas.addEventListener('pointerup', finishPointer, { signal });
@@ -289,9 +308,11 @@ export class EcsWorkbenchMapCanvasController {
     canvas.addEventListener(
       'pointerleave',
       () => {
-        if (this.pointerMode === 'none') {
+        if (this.pointerMode === 'none' && (this.hoverTileCol !== -1 || this.hoverTileRow !== -1)) {
           this.hoverTileCol = -1;
           this.hoverTileRow = -1;
+          this.deps.onPreviewDirty?.();
+          this.renderOverlay();
         }
       },
       { signal },
@@ -302,18 +323,58 @@ export class EcsWorkbenchMapCanvasController {
     const ctx = this.ctx;
     if (!ctx) return;
     const { canvas, session, runtime, mapState } = this.deps;
-    if (!this.deps.isEditingActive()) {
+    const editingActive = this.deps.isEditingActive();
+    const proj = session.getProject();
+    const wm = proj.worldMap;
+    const fovActive = Boolean(mapState.showFovPreview && wm);
+    if (!editingActive && !fovActive) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       return;
     }
-    const proj = session.getProject();
-    const wm = proj.worldMap;
     const activeRoomId = runtime.getActiveRoomId();
     const room = wm?.rooms.find((r) => r.id === activeRoomId);
-    if (!wm || !room) return;
+    if (!wm || !room) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+
+    let fovMask: Uint8Array | null = null;
+    if (fovActive) {
+      const needed = room.cols * room.rows;
+      if (this.fovMaskBuf.length < needed) {
+        this.fovMaskBuf = new Uint8Array(needed);
+      }
+      const core = runtime.world.core;
+      const c = core.components;
+      const tagStore = core.getStore(c.Tag);
+      const ts = Math.max(8, wm.tileSize);
+      let heroCol = Math.floor(room.cols * 0.5);
+      let heroRow = Math.floor(room.rows * 0.5);
+      for (let i = 0; i < tagStore.size(); i++) {
+        const td = tagStore.getDenseDataAt(i);
+        if (td.tag === 'hero' || td.tag === 'player' || td.entityId === 'hero') {
+          const tr = core.getComponent(tagStore.getDenseEntityAt(i), c.Transform2D);
+          if (tr) {
+            heroCol = Math.max(0, Math.min(room.cols - 1, Math.floor((tr.x + tr.w * 0.5) / ts)));
+            heroRow = Math.max(0, Math.min(room.rows - 1, Math.floor((tr.y + tr.h * 0.5) / ts)));
+            break;
+          }
+        }
+      }
+      const radius = Math.max(7, Math.min(12, Math.round(Math.max(room.cols, room.rows) * 0.42)));
+      runtime.getWorldMapController().computeRoomFovMask(
+        heroCol,
+        heroRow,
+        radius,
+        runtime.world.globals,
+        this.fovMaskBuf,
+      );
+      fovMask = this.fovMaskBuf;
+    }
+
     const cam = runtime.getCamera();
     const cam3d = this.computeActiveEditorCamera3D(proj);
-    drawMapEditorOverlay(canvas, ctx, {
+    renderMapOverlay(canvas, ctx, {
       room,
       portals: wm.portals.filter((p) => p.fromRoomId === room.id),
       tileSize: wm.tileSize,
@@ -326,9 +387,11 @@ export class EcsWorkbenchMapCanvasController {
       hoverRow: this.hoverTileRow,
       rectDrag: this.rectDrag,
       camera3D: cam3d,
+      fovMask,
+      showEditingAffordances: editingActive,
     });
 
-    if (this.pendingBrushMap.size > 0) {
+    if (editingActive && this.pendingBrushMap.size > 0) {
       const sx = canvas.width / Math.max(1, proj.viewport.width);
       const sy = canvas.height / Math.max(1, proj.viewport.height);
       const ts = wm.tileSize;
