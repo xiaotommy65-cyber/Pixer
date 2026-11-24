@@ -1665,3 +1665,21 @@
   color: var(--p7-text, #e2e8f0);
   cursor: pointer;
 }
+
+/* ==================== Phase 6 Cutscene Director Rows ==================== */
+.p7-cutscene-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--p7-hairline);
+  border-radius: 6px;
+  background: var(--p7-bg);
+}
+
+.p7-cutscene-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}

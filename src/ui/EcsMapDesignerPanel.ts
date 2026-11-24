@@ -24,6 +24,7 @@ export interface MapDesignerState {
   selectedStampPrefabId: string | null;
   showGrid: boolean;
   showPortals: boolean;
+  showFovPreview: boolean;
 }
 
 export interface MapDesignerPanelCallbacks {
@@ -48,6 +49,8 @@ export interface MapOverlayContext {
   hoverRow: number;
   rectDrag: { c0: number; r0: number; c1: number; r1: number } | null;
   camera3D?: ComputedCamera3D | null;
+  fovMask?: Uint8Array | null;
+  showEditingAffordances?: boolean;
 }
 
 const TOOL_BUTTONS: readonly { id: MapToolMode; label: string; title: string }[] = [
@@ -73,6 +76,7 @@ export function createDefaultMapDesignerState(): MapDesignerState {
     selectedStampPrefabId: null,
     showGrid: true,
     showPortals: true,
+    showFovPreview: false,
   };
 }
 
@@ -448,7 +452,7 @@ const _p1: ScreenPoint3D = { x: 0, y: 0, scale: 1, depth: 1, visible: true };
 const _p2: ScreenPoint3D = { x: 0, y: 0, scale: 1, depth: 1, visible: true };
 const _p3: ScreenPoint3D = { x: 0, y: 0, scale: 1, depth: 1, visible: true };
 
-function traceProjectedQuad(
+function appendProjectedQuadSubpath(
   ctx: CanvasRenderingContext2D,
   wx0: number,
   wy0: number,
@@ -463,13 +467,78 @@ function traceProjectedQuad(
   projectWorld3DToScreen(wx1, wy1, 0, cam3d, _p2);
   projectWorld3DToScreen(wx0, wy1, 0, cam3d, _p3);
   if (!_p0.visible || !_p1.visible || !_p2.visible || !_p3.visible) return false;
-  ctx.beginPath();
   ctx.moveTo(_p0.x * sx, _p0.y * sy);
   ctx.lineTo(_p1.x * sx, _p1.y * sy);
   ctx.lineTo(_p2.x * sx, _p2.y * sy);
   ctx.lineTo(_p3.x * sx, _p3.y * sy);
   ctx.closePath();
   return true;
+}
+
+function traceProjectedQuad(
+  ctx: CanvasRenderingContext2D,
+  wx0: number,
+  wy0: number,
+  wx1: number,
+  wy1: number,
+  cam3d: ComputedCamera3D,
+  sx: number,
+  sy: number,
+): boolean {
+  ctx.beginPath();
+  return appendProjectedQuadSubpath(ctx, wx0, wy0, wx1, wy1, cam3d, sx, sy);
+}
+
+function drawFovFogOverlay(
+  ctx: CanvasRenderingContext2D,
+  room: EcsMapRoomDef,
+  fovMask: Uint8Array,
+  ts: number,
+  camX: number,
+  camY: number,
+  viewW: number,
+  viewH: number,
+  sx: number,
+  sy: number,
+  cam3d: ComputedCamera3D | null,
+): void {
+  const cols = room.cols;
+  const rows = room.rows;
+  if (fovMask.length < cols * rows) return;
+
+  ctx.beginPath();
+  if (cam3d) {
+    const margin = ts * 4;
+    const minCol = Math.max(0, Math.floor((camX - margin) / ts));
+    const maxCol = Math.min(cols - 1, Math.ceil((camX + viewW + margin) / ts));
+    const minRow = Math.max(0, Math.floor((camY - margin) / ts));
+    const maxRow = Math.min(rows - 1, Math.ceil((camY + viewH + margin) / ts));
+    for (let r = minRow; r <= maxRow; r++) {
+      const rowOff = r * cols;
+      const wy0 = r * ts;
+      for (let c = minCol; c <= maxCol; c++) {
+        if (fovMask[rowOff + c] !== 0) continue;
+        appendProjectedQuadSubpath(ctx, c * ts, wy0, (c + 1) * ts, wy0 + ts, cam3d, sx, sy);
+      }
+    }
+  } else {
+    const minCol = Math.max(0, Math.floor(camX / ts));
+    const maxCol = Math.min(cols - 1, Math.ceil((camX + viewW) / ts));
+    const minRow = Math.max(0, Math.floor(camY / ts));
+    const maxRow = Math.min(rows - 1, Math.ceil((camY + viewH) / ts));
+    const tw = ts * sx;
+    const th = ts * sy;
+    for (let r = minRow; r <= maxRow; r++) {
+      const rowOff = r * cols;
+      const py = (r * ts - camY) * sy;
+      for (let c = minCol; c <= maxCol; c++) {
+        if (fovMask[rowOff + c] !== 0) continue;
+        ctx.rect((c * ts - camX) * sx, py, tw, th);
+      }
+    }
+  }
+  ctx.fillStyle = 'rgba(10, 22, 52, 0.56)';
+  ctx.fill();
 }
 
 export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, info: MapOverlayContext): void {
@@ -482,6 +551,14 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
   const ts = info.tileSize;
   const { room, portals, camX, camY, state } = info;
   const cam3d = info.camera3D ?? null;
+  const editing = info.showEditingAffordances !== false;
+
+  // 0. Phase 4 Symmetric Shadowcasting FOV Fog-of-War Preview
+  if (state.showFovPreview && info.fovMask) {
+    drawFovFogOverlay(ctx, room, info.fovMask, ts, camX, camY, info.viewW, info.viewH, sx, sy, cam3d);
+  }
+
+  if (!editing) return;
 
   // 1. Subtle 32px Tile Grid
   if (state.showGrid) {
@@ -661,3 +738,5 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
     ctx.fillText(coordText, tx + 4, ty + 10);
   }
 }
+
+export const renderMapOverlay = drawMapEditorOverlay;
