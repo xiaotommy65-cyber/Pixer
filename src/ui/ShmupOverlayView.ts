@@ -35,7 +35,25 @@ export class ShmupOverlayView {
   private readonly onCommand: (commandId: string) => void;
   private readonly ac = new AbortController();
   private hangarAc: AbortController | null = null;
+  private lastVisible = false;
+  private lastPhase: '' | 'hangar' | 'sortie' = '';
   private lastHangarKey = '';
+  private lastFighterId = '';
+  private lastHearts = -1;
+  private lastMaxHearts = -1;
+  private lastFunnelCount = -1;
+  private lastFighterText = '';
+  private lastBossVisible = false;
+  private lastBossPhase = -1;
+  private lastBossName = '';
+  private lastBossWeakPoints = -1;
+  private lastBossKey = '';
+  private lastBossPct = -1;
+  private lastBombs = -1;
+  private lastWeaponKey = '';
+  private lastOverdriveActive = false;
+  private lastGrazeMeter = -1;
+  private lastGrazeKey = '';
 
   constructor(callbacks: ShmupOverlayCallbacks) {
     this.onCommand = callbacks.onCommand;
@@ -114,7 +132,26 @@ export class ShmupOverlayView {
 
   public reset(): void {
     this.element.classList.add('panel-hidden');
+    this.bossBarEl.classList.add('panel-hidden');
+    this.lastVisible = false;
+    this.lastPhase = '';
     this.lastHangarKey = '';
+    this.lastFighterId = '';
+    this.lastHearts = -1;
+    this.lastMaxHearts = -1;
+    this.lastFunnelCount = -1;
+    this.lastFighterText = '';
+    this.lastBossVisible = false;
+    this.lastBossPhase = -1;
+    this.lastBossName = '';
+    this.lastBossWeakPoints = -1;
+    this.lastBossKey = '';
+    this.lastBossPct = -1;
+    this.lastBombs = -1;
+    this.lastWeaponKey = '';
+    this.lastOverdriveActive = false;
+    this.lastGrazeMeter = -1;
+    this.lastGrazeKey = '';
   }
 
   public destroy(): void {
@@ -131,18 +168,24 @@ export class ShmupOverlayView {
 
   public render(hud: ShmupHudSnapshot | undefined, isRunning: boolean): void {
     if (!hud || !isRunning || hud.phase === 'won' || hud.phase === 'lost') {
-      if (!this.element.classList.contains('panel-hidden')) {
+      if (this.lastVisible || !this.element.classList.contains('panel-hidden')) {
         this.reset();
       }
       return;
     }
 
-    this.element.classList.remove('panel-hidden');
+    if (!this.lastVisible) {
+      this.lastVisible = true;
+      this.element.classList.remove('panel-hidden');
+    }
 
     if (hud.phase === 'hangar') {
-      this.hangarModal.classList.remove('panel-hidden');
-      this.sortieTop.classList.add('panel-hidden');
-      this.sortieBottom.classList.add('panel-hidden');
+      if (this.lastPhase !== 'hangar') {
+        this.lastPhase = 'hangar';
+        this.hangarModal.classList.remove('panel-hidden');
+        this.sortieTop.classList.add('panel-hidden');
+        this.sortieBottom.classList.add('panel-hidden');
+      }
 
       const hKey = `${hud.selectedFighterId}|${hud.fighters.length}`;
       if (hKey !== this.lastHangarKey) {
@@ -182,43 +225,113 @@ export class ShmupOverlayView {
     }
 
     // Active Sortie HUD
-    this.hangarModal.classList.add('panel-hidden');
-    this.sortieTop.classList.remove('panel-hidden');
-    this.sortieBottom.classList.remove('panel-hidden');
+    if (this.lastPhase !== 'sortie') {
+      this.lastPhase = 'sortie';
+      this.hangarModal.classList.add('panel-hidden');
+      this.sortieTop.classList.remove('panel-hidden');
+      this.sortieBottom.classList.remove('panel-hidden');
+    }
 
-    const activeFighter = hud.fighters.find((f) => f.id === hud.selectedFighterId);
-    const heartsTxt = '♥'.repeat(hud.hearts) + '♡'.repeat(Math.max(0, hud.maxHearts - hud.hearts));
-    this.fighterInfoEl.textContent = `${activeFighter?.name ?? '星戰機'} · ${heartsTxt} · 子機×${hud.funnelCount}`;
+    if (
+      hud.selectedFighterId !== this.lastFighterId ||
+      hud.hearts !== this.lastHearts ||
+      hud.maxHearts !== this.lastMaxHearts ||
+      hud.funnelCount !== this.lastFunnelCount
+    ) {
+      this.lastFighterId = hud.selectedFighterId;
+      this.lastHearts = hud.hearts;
+      this.lastMaxHearts = hud.maxHearts;
+      this.lastFunnelCount = hud.funnelCount;
+      const activeFighter = hud.fighters.find((f) => f.id === hud.selectedFighterId);
+      const heartsTxt = '♥'.repeat(hud.hearts) + '♡'.repeat(Math.max(0, hud.maxHearts - hud.hearts));
+      const fighterText = `${activeFighter?.name ?? '星戰機'} · ${heartsTxt} · 子機×${hud.funnelCount}`;
+      if (fighterText !== this.lastFighterText) {
+        this.lastFighterText = fighterText;
+        this.fighterInfoEl.textContent = fighterText;
+      }
+    }
 
     if (hud.boss) {
-      this.bossBarEl.classList.remove('panel-hidden');
+      if (!this.lastBossVisible) {
+        this.lastBossVisible = true;
+        this.bossBarEl.classList.remove('panel-hidden');
+      }
+      if (
+        hud.boss.phase !== this.lastBossPhase ||
+        hud.boss.name !== this.lastBossName ||
+        hud.boss.activeWeakPoints !== this.lastBossWeakPoints
+      ) {
+        if (hud.boss.phase !== this.lastBossPhase) {
+          this.bossBarEl.classList.toggle('is-phase2', hud.boss.phase === 2);
+        }
+        this.lastBossPhase = hud.boss.phase;
+        this.lastBossName = hud.boss.name;
+        this.lastBossWeakPoints = hud.boss.activeWeakPoints;
+        const bossKey = `P${hud.boss.phase} ${hud.boss.name} · 弱點×${hud.boss.activeWeakPoints}`;
+        if (bossKey !== this.lastBossKey) {
+          this.lastBossKey = bossKey;
+          this.bossLabelEl.textContent = bossKey;
+        }
+      }
       const pct = Math.max(0, Math.min(100, (hud.boss.hp / Math.max(1, hud.boss.maxHp)) * 100));
-      this.bossFillEl.style.width = `${pct}%`;
-      this.bossBarEl.classList.toggle('is-phase2', hud.boss.phase === 2);
-      this.bossLabelEl.textContent = `P${hud.boss.phase} ${hud.boss.name} · 弱點×${hud.boss.activeWeakPoints}`;
-    } else {
+      if (pct !== this.lastBossPct) {
+        this.lastBossPct = pct;
+        this.bossFillEl.style.width = `${pct}%`;
+      }
+    } else if (this.lastBossVisible) {
+      this.lastBossVisible = false;
+      this.lastBossPhase = -1;
+      this.lastBossName = '';
+      this.lastBossWeakPoints = -1;
+      this.lastBossKey = '';
+      this.lastBossPct = -1;
       this.bossBarEl.classList.add('panel-hidden');
     }
 
-    this.bombBtn.textContent = `💣 ${hud.bombs}`;
-    this.bombBtn.disabled = hud.bombs <= 0;
+    if (hud.bombs !== this.lastBombs) {
+      this.lastBombs = hud.bombs;
+      this.bombBtn.textContent = `💣 ${hud.bombs}`;
+      this.bombBtn.disabled = hud.bombs <= 0;
+    }
 
-    for (const tab of WEAPON_TABS) {
-      const btnEl = this.weaponBtns.get(tab.kind);
-      if (!btnEl) continue;
-      const active = hud.weaponKind === tab.kind;
-      btnEl.classList.toggle('is-active', active);
-      btnEl.textContent = active ? `${tab.label} Lv.${hud.weaponLevel}` : tab.label;
+    const weaponKey = `${hud.weaponKind}|${hud.weaponLevel}`;
+    if (weaponKey !== this.lastWeaponKey) {
+      this.lastWeaponKey = weaponKey;
+      for (const tab of WEAPON_TABS) {
+        const btnEl = this.weaponBtns.get(tab.kind);
+        if (!btnEl) continue;
+        const active = hud.weaponKind === tab.kind;
+        btnEl.classList.toggle('is-active', active);
+        btnEl.textContent = active ? `${tab.label} Lv.${hud.weaponLevel}` : tab.label;
+      }
     }
 
     if (hud.overdriveTimer > 0) {
-      this.grazeTextEl.textContent = `⚡ 無敵反擊 ${hud.overdriveTimer.toFixed(1)}s`;
-      this.grazeFillEl.style.width = '100%';
-      this.grazeFillEl.classList.add('is-overdrive');
-    } else {
+      const secStr = hud.overdriveTimer.toFixed(1);
+      const grazeKey = `od:${secStr}`;
+      if (grazeKey !== this.lastGrazeKey) {
+        const wasOverdrive = this.lastOverdriveActive;
+        const wasInit = this.lastGrazeKey !== '';
+        this.lastOverdriveActive = true;
+        this.lastGrazeMeter = -1;
+        this.lastGrazeKey = grazeKey;
+        this.grazeTextEl.textContent = `⚡ 無敵反擊 ${secStr}s`;
+        if (!wasInit || !wasOverdrive) {
+          this.grazeFillEl.style.width = '100%';
+          this.grazeFillEl.classList.add('is-overdrive');
+        }
+      }
+    } else if (this.lastOverdriveActive || hud.grazeMeter !== this.lastGrazeMeter || this.lastGrazeKey === '') {
+      const wasOverdrive = this.lastOverdriveActive;
+      const wasInit = this.lastGrazeKey !== '';
+      this.lastOverdriveActive = false;
+      this.lastGrazeMeter = hud.grazeMeter;
+      this.lastGrazeKey = `gm:${hud.grazeMeter}`;
       this.grazeTextEl.textContent = `擦彈反擊 ${hud.grazeMeter}%`;
       this.grazeFillEl.style.width = `${hud.grazeMeter}%`;
-      this.grazeFillEl.classList.remove('is-overdrive');
+      if (!wasInit || wasOverdrive) {
+        this.grazeFillEl.classList.remove('is-overdrive');
+      }
     }
   }
 }

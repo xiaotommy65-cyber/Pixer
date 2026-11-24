@@ -27,10 +27,10 @@ import { syncProjectCustomSpritesToAtlas } from './core/ecs/EcsCustomSpriteCompi
 import type { EcsProjectV2 } from './core/ecs/EcsProjectSchema.ts';
 import { EcsStudioSession, type EcsStudioCommand } from './core/ecs/EcsStudioSession.ts';
 import { CASTLE_TILE_REGISTRY, type EcsMapLayerName } from './core/ecs/EcsTilemapTypes.ts';
-import { StudioSession } from './core/editor/StudioSession.ts';
 import { GpuEngine } from './core/gpu/GpuEngine.ts';
 import type { GpuBackendKind, RenderPerformanceProfile } from './core/gpu/GpuTypes.ts';
-import type { ErgonomicGripMode } from './core/hal/SystemHal.ts';
+import type { NativeHalAdapter } from './core/hal/HapticEngine.ts';
+import type { ErgonomicGripMode, SystemHal } from './core/hal/SystemHal.ts';
 import type { DpadDeadzoneMode, StickCurveMode } from './core/input/InputPipeline.ts';
 import { appLogger } from './core/runtime/AppLogger.ts';
 import { registerCartridgePlugin } from './core/runtime/CartridgeRegistry.ts';
@@ -42,7 +42,7 @@ import { SceneGpuBridge } from './core/runtime/SceneGpuBridge.ts';
 import { createEmptyInputState } from './core/types/WorldTypes.ts';
 import { registerBuiltinCartridges } from './game/BuiltinCartridges.ts';
 import { OBSIDIAN_CITADEL_PROJECT } from './game/obsidianCitadel/ObsidianCitadelProject.ts';
-import { initCapacitorNativeBridge } from './ui/CapacitorNativeBridge.ts';
+import type { NativeHostBridgeHandle } from './ui/CapacitorNativeBridge.ts';
 import { loadEngine4ArtPack } from './ui/BrowserAssetLoader.ts';
 import { ConsoleView } from './ui/ConsoleView.ts';
 import { installGlobalTactileFeedback, registerDomHapticSink } from './ui/dom.ts';
@@ -50,7 +50,7 @@ import { EcsWorkbenchView } from './ui/EcsWorkbenchView.ts';
 import { IrisWipeTransition } from './ui/IrisWipeTransition.ts';
 import { setElementIconLabel } from './ui/PixelIcons.ts';
 import { PixerPlatformShell, type PixerTopNavTab } from './ui/PixerPlatformShell.ts';
-import { SpriteAtelierView } from './ui/SpriteAtelierView.ts';
+import type { SpriteAtelierView } from './ui/SpriteAtelierView.ts';
 import {
   SHELL_THEMES,
   SystemSettingsDrawerView,
@@ -116,7 +116,6 @@ export function createApp(): AppHandle | null {
     host.playTactile(profile, phase),
   );
 
-  const studioSession = new StudioSession('parkour_flagship');
   const ecsSession = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
   const atlas = new TextureAtlas();
   host.bindAtlas(atlas);
@@ -132,8 +131,11 @@ export function createApp(): AppHandle | null {
   let drawerView: SystemSettingsDrawerView | null = null;
   let spriteModalOpen = false;
   let spriteModalEl: HTMLElement | null = null;
+  let spriteAtelierView: SpriteAtelierView | null = null;
+  let spriteAtelierPromise: Promise<SpriteAtelierView | null> | null = null;
   let consoleView: ConsoleView;
   let ensureArcadeGpuInit = () => {};
+  let ensureSpriteAtelier = (): Promise<SpriteAtelierView | null> => Promise.resolve(null);
 
   const closeSpriteModal = () => {
     if (!spriteModalOpen) return;
@@ -149,10 +151,19 @@ export function createApp(): AppHandle | null {
     ecsWorkbench?.syncAtlasToPreview();
   };
 
-  const openSpriteModal = () => {
+  const openSpriteModal = (prepare?: (view: SpriteAtelierView) => void) => {
     ensureArcadeGpuInit();
     spriteModalOpen = true;
-    spriteModalEl?.classList.remove('panel-hidden');
+    if (spriteAtelierView) {
+      prepare?.(spriteAtelierView);
+      spriteModalEl?.classList.remove('panel-hidden');
+      return;
+    }
+    void ensureSpriteAtelier().then((view) => {
+      if (!view || destroyed || !spriteModalOpen) return;
+      prepare?.(view);
+      spriteModalEl?.classList.remove('panel-hidden');
+    });
   };
 
   const setPlatformMode = (nextMode: PixerPlatformMode, tabOverride?: PixerTopNavTab) => {
@@ -181,7 +192,6 @@ export function createApp(): AppHandle | null {
 
   window.__PIXEL_ATELIER_AGENT__ = createAgentBridge(runner, host.ai, {
     onLoadCartridge: (rawJson, opts) => host.loadCartridge(rawJson, opts),
-    studioSession,
     ecsSession,
     onCapturePreviewPng: () => {
       try {
@@ -334,103 +344,6 @@ export function createApp(): AppHandle | null {
     consoleView.refreshCardArt();
   });
 
-  const spriteAtelierView = new SpriteAtelierView(
-    gpuEngine,
-    synth,
-    save,
-    () => {
-      host.reactMomo();
-      ecsWorkbench?.syncAtlasToPreview();
-    },
-    {
-      onPublishMapTile: (req) => {
-        const proj = ecsSession.getProject();
-        const usedIds = new Set<number>(CASTLE_TILE_REGISTRY.map((t) => t.id));
-        if (proj.worldMap?.tileDefs) {
-          for (const td of proj.worldMap.tileDefs) usedIds.add(td.id);
-        }
-        let nextTileId = 100;
-        while (usedIds.has(nextTileId)) nextTileId++;
-
-        const cmds: EcsStudioCommand[] = [];
-        if (!proj.worldMap || proj.worldMap.rooms.length === 0) {
-          cmds.push({ type: 'ensure_world_map', cols: 24, rows: 16, roomName: '自訂像素大廳' });
-        }
-        cmds.push(
-          { type: 'upsert_custom_sprite', sprite: req.sprite },
-          {
-            type: 'upsert_tile_def',
-            tileDef: {
-              id: nextTileId,
-              name: req.name,
-              layer: req.layer,
-              sprite: req.sprite.id,
-              solid: req.solid,
-              ...(req.hazard ? { hazard: true } : {}),
-              ...(req.extrudeH ? { extrudeH: req.extrudeH } : {}),
-              ...(req.renderH ? { renderH: req.renderH } : {}),
-              ...(req.ambientLight ? { ambientLight: req.ambientLight } : {}),
-            },
-          },
-        );
-        const res = ecsSession.dispatchBatch(cmds, `像素畫室發佈瓦片「${req.name}」`);
-        if (!res.ok) {
-          return { ok: false, message: `發佈失敗：${res.errors.join('; ') || res.summary}` };
-        }
-        closeSpriteModal();
-        ecsWorkbench?.focusPublishedTile(req.layer, nextTileId);
-        return { ok: true, message: `已發佈瓦片「${req.name}」(#${nextTileId}) 至地圖盤！` };
-      },
-      onPublishPrefabStamp: (req) => {
-        const proj = ecsSession.getProject();
-        let pid = req.sprite.id.replace(/[^a-zA-Z0-9_-]/g, '_');
-        let seq = 2;
-        while (proj.prefabs[pid]) {
-          pid = `${req.sprite.id}_${seq++}`;
-        }
-        const res = ecsSession.dispatchBatch(
-          [
-            { type: 'upsert_custom_sprite', sprite: req.sprite },
-            {
-              type: 'create_prefab',
-              prefab: {
-                id: pid,
-                name: req.name,
-                category: 'custom',
-                components: {
-                  transform: {
-                    x: 0,
-                    y: 0,
-                    w: Math.max(16, Math.min(64, req.sprite.width)),
-                    h: Math.max(16, Math.min(64, req.sprite.height)),
-                    zOrder: 20,
-                  },
-                  sprite: {
-                    sprite: req.sprite.id,
-                    metallic: 0.3,
-                    roughness: 0.45,
-                    emissive: req.ambientLight ? 0.55 : 0.1,
-                    castShadow: true,
-                  },
-                  ...(req.ambientLight ? { light: req.ambientLight } : {}),
-                  ...(req.solid ? { collider: { radius: Math.round(Math.min(req.sprite.width, req.sprite.height) * 0.42), isSolid: true } } : {}),
-                  tag: 'custom_prop',
-                },
-              },
-            },
-          ],
-          `像素畫室發佈物件印章「${req.name}」`,
-        );
-        if (!res.ok) {
-          return { ok: false, message: `發佈失敗：${res.errors.join('; ') || res.summary}` };
-        }
-        closeSpriteModal();
-        ecsWorkbench?.focusPublishedPrefab(pid);
-        return { ok: true, message: `已發佈物件印章「${req.name}」至地圖印章盤！` };
-      },
-    },
-  );
-
   spriteModalEl = document.createElement('section');
   spriteModalEl.className = 'p7-sprite-modal panel-hidden';
   spriteModalEl.setAttribute('aria-label', '像素精靈畫室');
@@ -447,8 +360,132 @@ export function createApp(): AppHandle | null {
   spriteBar.append(spriteTitle, spriteCloseBtn);
   const spriteBody = document.createElement('div');
   spriteBody.className = 'p7-sprite-modal-body';
-  spriteBody.appendChild(spriteAtelierView.element);
   spriteModalEl.append(spriteBar, spriteBody);
+
+  ensureSpriteAtelier = async () => {
+    if (spriteAtelierView) return spriteAtelierView;
+    if (destroyed || !gpuEngine) return null;
+    if (!spriteAtelierPromise) {
+      const engine = gpuEngine;
+      spriteAtelierPromise = (async () => {
+        try {
+          const { SpriteAtelierView: SpriteAtelierCtor } = await import('./ui/SpriteAtelierView.ts');
+          if (destroyed) return null;
+          const view = new SpriteAtelierCtor(
+            engine,
+            synth,
+            save,
+            () => {
+              host.reactMomo();
+              ecsWorkbench?.syncAtlasToPreview();
+            },
+            {
+              onPublishMapTile: (req) => {
+                const proj = ecsSession.getProject();
+                const usedIds = new Set<number>(CASTLE_TILE_REGISTRY.map((t) => t.id));
+                if (proj.worldMap?.tileDefs) {
+                  for (const td of proj.worldMap.tileDefs) usedIds.add(td.id);
+                }
+                let nextTileId = 100;
+                while (usedIds.has(nextTileId)) nextTileId++;
+
+                const cmds: EcsStudioCommand[] = [];
+                if (!proj.worldMap || proj.worldMap.rooms.length === 0) {
+                  cmds.push({ type: 'ensure_world_map', cols: 24, rows: 16, roomName: '自訂像素大廳' });
+                }
+                cmds.push(
+                  { type: 'upsert_custom_sprite', sprite: req.sprite },
+                  {
+                    type: 'upsert_tile_def',
+                    tileDef: {
+                      id: nextTileId,
+                      name: req.name,
+                      layer: req.layer,
+                      sprite: req.sprite.id,
+                      solid: req.solid,
+                      ...(req.hazard ? { hazard: true } : {}),
+                      ...(req.extrudeH ? { extrudeH: req.extrudeH } : {}),
+                      ...(req.renderH ? { renderH: req.renderH } : {}),
+                      ...(req.ambientLight ? { ambientLight: req.ambientLight } : {}),
+                    },
+                  },
+                );
+                const res = ecsSession.dispatchBatch(cmds, `像素畫室發佈瓦片「${req.name}」`);
+                if (!res.ok) {
+                  return { ok: false, message: `發佈失敗：${res.errors.join('; ') || res.summary}` };
+                }
+                closeSpriteModal();
+                ecsWorkbench?.focusPublishedTile(req.layer, nextTileId);
+                return { ok: true, message: `已發佈瓦片「${req.name}」(#${nextTileId}) 至地圖盤！` };
+              },
+              onPublishPrefabStamp: (req) => {
+                const proj = ecsSession.getProject();
+                let pid = req.sprite.id.replace(/[^a-zA-Z0-9_-]/g, '_');
+                let seq = 2;
+                while (proj.prefabs[pid]) {
+                  pid = `${req.sprite.id}_${seq++}`;
+                }
+                const res = ecsSession.dispatchBatch(
+                  [
+                    { type: 'upsert_custom_sprite', sprite: req.sprite },
+                    {
+                      type: 'create_prefab',
+                      prefab: {
+                        id: pid,
+                        name: req.name,
+                        category: 'custom',
+                        components: {
+                          transform: {
+                            x: 0,
+                            y: 0,
+                            w: Math.max(16, Math.min(64, req.sprite.width)),
+                            h: Math.max(16, Math.min(64, req.sprite.height)),
+                            zOrder: 20,
+                          },
+                          sprite: {
+                            sprite: req.sprite.id,
+                            metallic: 0.3,
+                            roughness: 0.45,
+                            emissive: req.ambientLight ? 0.55 : 0.1,
+                            castShadow: true,
+                          },
+                          ...(req.ambientLight ? { light: req.ambientLight } : {}),
+                          ...(req.solid
+                            ? {
+                                collider: {
+                                  radius: Math.round(Math.min(req.sprite.width, req.sprite.height) * 0.42),
+                                  isSolid: true,
+                                },
+                              }
+                            : {}),
+                          tag: 'custom_prop',
+                        },
+                      },
+                    },
+                  ],
+                  `像素畫室發佈物件印章「${req.name}」`,
+                );
+                if (!res.ok) {
+                  return { ok: false, message: `發佈失敗：${res.errors.join('; ') || res.summary}` };
+                }
+                closeSpriteModal();
+                ecsWorkbench?.focusPublishedPrefab(pid);
+                return { ok: true, message: `已發佈物件印章「${req.name}」至地圖印章盤！` };
+              },
+            },
+          );
+          spriteAtelierView = view;
+          spriteBody.appendChild(view.element);
+          return view;
+        } catch (err) {
+          spriteAtelierPromise = null;
+          appLogger.error('ui', 'spriteAtelier.lazyLoad', '無法載入像素精靈畫室模組', err);
+          return null;
+        }
+      })();
+    }
+    return spriteAtelierPromise;
+  };
 
   const launchEcsProjectInArcade = (proj: EcsProjectV2) => {
     syncProjectSpritesToSharedAtlas(proj);
@@ -475,8 +512,7 @@ export function createApp(): AppHandle | null {
     onLaunchInArcade: (proj) => launchEcsProjectInArcade(proj),
     onOpenClassicWorkshop: () => openSpriteModal(),
     onOpenSpriteAtelierForTile: (layer: EcsMapLayerName) => {
-      spriteAtelierView.prepareForMapTile(32, 32, layer);
-      openSpriteModal();
+      openSpriteModal((view) => view.prepareForMapTile(32, 32, layer));
     },
     onAtlasMutated: () => {
       gpuEngine?.syncAtlasIfDirty();
@@ -634,9 +670,15 @@ export function createApp(): AppHandle | null {
   settingsBtn.addEventListener('click', () => drawerView?.toggle(), { signal });
 
   let lastTs = performance.now();
+  let lastKeepAwake = false;
+  let nativeBridge: NativeHostBridgeHandle = createWebNativeBridgeFallback(host.hal);
+  const syncKeepAwake = (enabled: boolean) => {
+    lastKeepAwake = enabled;
+    nativeBridge.setKeepAwake(enabled);
+  };
   const enterBackground = () => {
     governor.setBackground(true);
-    nativeBridge.setKeepAwake(false);
+    syncKeepAwake(false);
     host.suspendForBackground();
     consoleView.syncPauseState();
   };
@@ -647,30 +689,47 @@ export function createApp(): AppHandle | null {
     consoleView.syncPauseState();
   };
 
-  const nativeBridge = initCapacitorNativeBridge({
-    hal: host.hal,
-    onEnterBackground: enterBackground,
-    onEnterForeground: enterForeground,
-    onHardwareBack: () => {
-      if (drawerView?.isOpen()) {
-        drawerView.close();
-        return true;
-      }
-      if (consoleView.getShellPhase() === 'IN_EDITOR') {
-        exitEditorToHandheld();
-        return true;
-      }
-      if (consoleView.getInserted()) {
-        consoleView.returnToHomeLobby();
-        return true;
-      }
-      if (orientationCtrl.isLandscape()) {
-        orientationCtrl.setLandscape(false);
-        return true;
-      }
-      return false;
-    },
-  });
+  const handleHardwareBack = (): boolean => {
+    if (drawerView?.isOpen()) {
+      drawerView.close();
+      return true;
+    }
+    if (consoleView.getShellPhase() === 'IN_EDITOR') {
+      exitEditorToHandheld();
+      return true;
+    }
+    if (consoleView.getInserted()) {
+      consoleView.returnToHomeLobby();
+      return true;
+    }
+    if (orientationCtrl.isLandscape()) {
+      orientationCtrl.setLandscape(false);
+      return true;
+    }
+    return false;
+  };
+
+  const isNativeCapacitor = Boolean(
+    (window as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.(),
+  );
+  if (isNativeCapacitor) {
+    void import('./ui/CapacitorNativeBridge.ts')
+      .then(({ initCapacitorNativeBridge }) => {
+        if (destroyed) return;
+        nativeBridge.destroy();
+        nativeBridge = initCapacitorNativeBridge({
+          hal: host.hal,
+          onEnterBackground: enterBackground,
+          onEnterForeground: enterForeground,
+          onHardwareBack: handleHardwareBack,
+        });
+        nativeBridge.hideSplash();
+        nativeBridge.setKeepAwake(lastKeepAwake);
+      })
+      .catch((err) => {
+        appLogger.warn('lifecycle', 'native.bridgeLazyLoad', 'Capacitor 原生橋接動態載入失敗，維持 Web 保底模式', err);
+      });
+  }
 
   document.addEventListener(
     'visibilitychange',
@@ -796,7 +855,7 @@ export function createApp(): AppHandle | null {
         const shellPhase = consoleView.getShellPhase();
         if (shellPhase !== 'IN_EDITOR') {
           const activeSim = consoleView.isSimulationActive() && consoleView.getPhase() === 'running';
-          nativeBridge.setKeepAwake(activeSim);
+          syncKeepAwake(activeSim);
 
           const bootStage = shellPhase === 'BOOT_BLINK' ? consoleView.getBootStage() : 'awake';
           const skipIdleRender = shellPhase === 'BOOT_BLINK' && (bootStage === 'standby' || bootStage === 'picking');
@@ -848,9 +907,9 @@ export function createApp(): AppHandle | null {
             }
           }
         } else {
-          nativeBridge.setKeepAwake(false);
+          syncKeepAwake(false);
           if (spriteModalOpen) {
-            spriteAtelierView.tickPreview(dt);
+            spriteAtelierView?.tickPreview(dt);
           } else if (platformMode === 'studio' && ecsWorkbench?.isVisible()) {
             ecsWorkbench.tick(dt);
           }
@@ -888,13 +947,84 @@ export function createApp(): AppHandle | null {
       ecsWorkbench?.destroy();
       drawerView?.destroy();
       consoleView.destroy();
-      spriteAtelierView.destroy();
+      if (spriteAtelierView) spriteAtelierView.destroy();
       gpuEngine.dispose();
       host.destroy();
       delete window.__PIXEL_ATELIER_AGENT__;
       document.body.classList.remove('is-handheld-lock');
       delete document.body.dataset.perf;
       shell.remove();
+    },
+  };
+}
+
+interface WebWakeLockSentinel {
+  released: boolean;
+  release: () => Promise<void>;
+}
+
+interface NavigatorWithWebWakeLock {
+  wakeLock?: {
+    request: (type: 'screen') => Promise<WebWakeLockSentinel>;
+  };
+}
+
+/**
+ * Lightweight zero-dependency Web WakeLock/HAL fallback so standard browsers never load Capacitor packages at boot.
+ */
+function createWebNativeBridgeFallback(hal: SystemHal): NativeHostBridgeHandle {
+  let destroyed = false;
+  let desiredWakeLock = false;
+  let wakeSentinel: WebWakeLockSentinel | null = null;
+
+  const applyKeepAwake = async (enabled: boolean): Promise<boolean> => {
+    desiredWakeLock = enabled;
+    const nav = typeof navigator !== 'undefined' ? (navigator as unknown as NavigatorWithWebWakeLock) : undefined;
+    if (!nav?.wakeLock) return false;
+    try {
+      if (enabled) {
+        if (!wakeSentinel || wakeSentinel.released) {
+          wakeSentinel = await nav.wakeLock.request('screen');
+        }
+        return true;
+      }
+      if (wakeSentinel && !wakeSentinel.released) {
+        await wakeSentinel.release();
+      }
+      wakeSentinel = null;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const adapter: NativeHalAdapter = {
+    id: 'web-fallback',
+    isNativeApp: () => false,
+    getPlatform: () => 'web',
+    hapticTrigger: () => false,
+    vibratePattern: () => false,
+    requestFullscreenLock: async () => false,
+    setKeepAwake: applyKeepAwake,
+    shareImageDataUrl: async () => false,
+  };
+  hal.registerNativeAdapter(adapter);
+
+  return {
+    isNative: false,
+    platform: 'web',
+    hideSplash: () => {},
+    setKeepAwake: (enabled: boolean) => {
+      if (desiredWakeLock === enabled && (enabled ? wakeSentinel && !wakeSentinel.released : !wakeSentinel)) {
+        return;
+      }
+      void applyKeepAwake(enabled);
+    },
+    destroy: () => {
+      if (destroyed) return;
+      destroyed = true;
+      void applyKeepAwake(false);
+      hal.unregisterNativeAdapter(adapter.id);
     },
   };
 }
