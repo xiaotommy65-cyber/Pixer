@@ -203,25 +203,57 @@ fn sampleShadowOcclusion(fragPos: vec2f, lightPos: vec2f) -> f32 {
   let fragCell = (fragPos - origin) / tilePx;
   let lightCell = (lightPos - origin) / tilePx;
   let delta = lightCell - fragCell;
-  let cellDist = length(delta);
-  if (cellDist < 0.25) {
+  if (dot(delta, delta) < 0.0625) {
     return 1.0;
   }
   let fragTile = floor(fragCell);
   let lightTile = floor(lightCell);
+  if (abs(fragTile.x - lightTile.x) < 0.5 && abs(fragTile.y - lightTile.y) < 0.5) {
+    return 1.0;
+  }
+  let hasX = abs(delta.x) > 1e-6;
+  let hasY = abs(delta.y) > 1e-6;
+  let stepX = select(-1.0, 1.0, delta.x >= 0.0);
+  let stepY = select(-1.0, 1.0, delta.y >= 0.0);
+  let tDeltaX = select(1e9, 1.0 / max(abs(delta.x), 1e-6), hasX);
+  let tDeltaY = select(1e9, 1.0 / max(abs(delta.y), 1e-6), hasY);
+  var tMaxX = select(
+    1e9,
+    select((fragCell.x - fragTile.x) * tDeltaX, (fragTile.x + 1.0 - fragCell.x) * tDeltaX, delta.x >= 0.0),
+    hasX
+  );
+  var tMaxY = select(
+    1e9,
+    select((fragCell.y - fragTile.y) * tDeltaY, (fragTile.y + 1.0 - fragCell.y) * tDeltaY, delta.y >= 0.0),
+    hasY
+  );
+  let softSteps = max(0.35, uLights.occParams.w * 2.4);
+  var curTile = fragTile;
   var hits = 0.0;
-  for (var s = 1; s <= 14; s += 1) {
-    let t = f32(s) / 15.0;
-    let pTile = floor(fragCell + delta * t);
-    let isSelf = abs(pTile.x - fragTile.x) < 0.5 && abs(pTile.y - fragTile.y) < 0.5;
-    let isLightCell = abs(pTile.x - lightTile.x) < 0.5 && abs(pTile.y - lightTile.y) < 0.5;
-    if (!isSelf && !isLightCell) {
-      if (sampleOccCell(pTile) > 0.5) {
-        hits += 1.0;
+  for (var s: i32 = 0; s < 32; s += 1) {
+    var tHit = 0.0;
+    if (tMaxX < tMaxY) {
+      tHit = tMaxX;
+      curTile.x += stepX;
+      tMaxX += tDeltaX;
+    } else {
+      tHit = tMaxY;
+      curTile.y += stepY;
+      tMaxY += tDeltaY;
+    }
+    if (tHit >= 1.0) {
+      break;
+    }
+    if (abs(curTile.x - lightTile.x) < 0.5 && abs(curTile.y - lightTile.y) < 0.5) {
+      break;
+    }
+    if (sampleOccCell(curTile) > 0.5) {
+      hits += 1.0;
+      if (hits >= softSteps) {
+        break;
       }
     }
   }
-  let softSteps = max(0.35, uLights.occParams.w * 2.4);
   let shadowAmt = clamp(hits / softSteps, 0.0, 1.0) * strength;
   return 1.0 - shadowAmt;
 }
@@ -463,9 +495,10 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
   let metal = clamp(in.material.z, 0.0, 1.0);
   let matEmissive = clamp(in.material.w, 0.0, 2.0);
   let specExp = mix(56.0, 6.0, rough);
+  let specNorm = (specExp + 8.0) / 25.132741;
   let isHdRgba = idxVal > 250.0;
-  let specScale = mix(1.0, 0.22, rough) * (0.26 + 0.74 * metal + select(0.0, 0.14, isHdRgba));
-  let f0 = mix(vec3f(0.95), texRgb * 1.15, metal);
+  let specScale = mix(1.0, 0.28, rough) * (0.45 + 0.55 * metal + select(0.0, 0.18, isHdRgba)) * specNorm;
+  let f0 = mix(vec3f(0.04), clamp(texRgb, vec3f(0.0), vec3f(1.0)), metal);
   let diffConserv = mix(1.0, 0.58, metal);
 
   var reliefShade = 1.0;
@@ -481,14 +514,13 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     let safeMax = max(uvMin, uvMax);
     let flipSign = select(1.0, -1.0, in.uvBounds.x > in.uvBounds.z);
     let lumaW = vec3f(0.299, 0.587, 0.114);
-    let sC = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv, safeMin, safeMax), atlasLayer, 0.0);
     let sL = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), atlasLayer, 0.0);
     let sR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, 0.0), safeMin, safeMax), atlasLayer, 0.0);
     let sU = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv - vec2f(0.0, texel.y), safeMin, safeMax), atlasLayer, 0.0);
     let sD = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(0.0, texel.y), safeMin, safeMax), atlasLayer, 0.0);
     let sBR = textureSampleLevel(uAtlas, uSamp, clamp(in.texUv + vec2f(texel.x * flipSign, texel.y), safeMin, safeMax), atlasLayer, 0.0);
 
-    let hC = sC.a * (0.65 + 0.35 * dot(sC.rgb, lumaW));
+    let hC = texAlpha * (0.65 + 0.35 * dot(texRgb, lumaW));
     let hL = sL.a * (0.65 + 0.35 * dot(sL.rgb, lumaW));
     let hR = sR.a * (0.65 + 0.35 * dot(sR.rgb, lumaW));
     let hU = sU.a * (0.65 + 0.35 * dot(sU.rgb, lumaW));
@@ -500,12 +532,14 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
     let sobelN = normalize(vec3f(-gx * 1.45, -gy * 1.45, 1.0));
     let sobelLight = normalize(vec3f(-0.55, -0.75, 0.42));
     let viewDir = vec3f(0.0, 0.0, 1.0);
+    let ndv = clamp(dot(sobelN, viewDir), 0.0, 1.0);
+    let fresnel = f0 + (vec3f(1.0) - f0) * pow(clamp(1.0 - ndv, 0.0, 1.0), 5.0);
     let halfKey = normalize(sobelLight + viewDir);
     let keySpecAmt = pow(max(0.0, dot(sobelN, halfKey)), specExp) * specScale * 0.42;
     let ndl = dot(sobelN, sobelLight) - sobelLight.z;
     let rimBoost = select(0.0, 0.07 + 0.14 * metal, (hC - hBR) > 0.45);
     reliefShade = clamp(1.0 + ndl * 0.28, 0.84, 1.18) * diffConserv + rimBoost;
-    keySpecRgb = f0 * keySpecAmt;
+    keySpecRgb = fresnel * keySpecAmt;
 
     let lightCnt = min(24u, u32(max(0.0, uLights.info.x + 0.5)));
     var li = 0u;
@@ -525,7 +559,7 @@ fn fsSprite(in: SpriteOut) -> SceneOut {
           let hVec = normalize(lDir + viewDir);
           let spec = pow(max(0.0, dot(sobelN, hVec)), specExp) * specScale * 0.92;
           litDiff += lc.rgb * (lc.a * att * (0.34 + 0.90 * diff) * diffConserv);
-          litSpec += lc.rgb * f0 * (lc.a * att * spec);
+          litSpec += lc.rgb * fresnel * (lc.a * att * spec);
         }
       }
       li += 1u;
@@ -621,24 +655,57 @@ fn sampleShadowOcclusion3D(fragWorldXy: vec2f, lightWorldXy: vec2f) -> f32 {
   let fragCell = (fragWorldXy - origin) / tileSize;
   let lightCell = (lightWorldXy - origin) / tileSize;
   let delta = lightCell - fragCell;
-  if (length(delta) < 0.25) {
+  if (dot(delta, delta) < 0.0625) {
     return 1.0;
   }
   let fragTile = floor(fragCell);
   let lightTile = floor(lightCell);
+  if (abs(fragTile.x - lightTile.x) < 0.5 && abs(fragTile.y - lightTile.y) < 0.5) {
+    return 1.0;
+  }
+  let hasX = abs(delta.x) > 1e-6;
+  let hasY = abs(delta.y) > 1e-6;
+  let stepX = select(-1.0, 1.0, delta.x >= 0.0);
+  let stepY = select(-1.0, 1.0, delta.y >= 0.0);
+  let tDeltaX = select(1e9, 1.0 / max(abs(delta.x), 1e-6), hasX);
+  let tDeltaY = select(1e9, 1.0 / max(abs(delta.y), 1e-6), hasY);
+  var tMaxX = select(
+    1e9,
+    select((fragCell.x - fragTile.x) * tDeltaX, (fragTile.x + 1.0 - fragCell.x) * tDeltaX, delta.x >= 0.0),
+    hasX
+  );
+  var tMaxY = select(
+    1e9,
+    select((fragCell.y - fragTile.y) * tDeltaY, (fragTile.y + 1.0 - fragCell.y) * tDeltaY, delta.y >= 0.0),
+    hasY
+  );
+  let softSteps = max(0.35, uLights.occParams.w * 2.4);
+  var curTile = fragTile;
   var hits = 0.0;
-  for (var s = 1; s <= 14; s += 1) {
-    let t = f32(s) / 15.0;
-    let pTile = floor(fragCell + delta * t);
-    let isSelf = abs(pTile.x - fragTile.x) < 0.5 && abs(pTile.y - fragTile.y) < 0.5;
-    let isLightCell = abs(pTile.x - lightTile.x) < 0.5 && abs(pTile.y - lightTile.y) < 0.5;
-    if (!isSelf && !isLightCell) {
-      if (sampleOccCell(pTile) > 0.5) {
-        hits += 1.0;
+  for (var s: i32 = 0; s < 32; s += 1) {
+    var tHit = 0.0;
+    if (tMaxX < tMaxY) {
+      tHit = tMaxX;
+      curTile.x += stepX;
+      tMaxX += tDeltaX;
+    } else {
+      tHit = tMaxY;
+      curTile.y += stepY;
+      tMaxY += tDeltaY;
+    }
+    if (tHit >= 1.0) {
+      break;
+    }
+    if (abs(curTile.x - lightTile.x) < 0.5 && abs(curTile.y - lightTile.y) < 0.5) {
+      break;
+    }
+    if (sampleOccCell(curTile) > 0.5) {
+      hits += 1.0;
+      if (hits >= softSteps) {
+        break;
       }
     }
   }
-  let softSteps = max(0.35, uLights.occParams.w * 2.4);
   let shadowAmt = clamp(hits / softSteps, 0.0, 1.0) * strength;
   return 1.0 - shadowAmt;
 }
@@ -724,7 +791,8 @@ fn fsQuad3D(in: Quad3DOut) -> SceneOut {
     return out;
   }
 
-  let n3d = normalize(in.normal);
+  let normLen2 = dot(in.normal, in.normal);
+  let n3d = select(vec3f(0.0, 0.0, 1.0), in.normal * inverseSqrt(max(normLen2, 1e-6)), normLen2 >= 1e-6);
   let isVertical = abs(n3d.z) < 0.5;
   let shadowSamplePos = in.worldPos.xy + select(vec2f(0.0), n3d.xy * 2.5, isVertical);
 
@@ -762,7 +830,9 @@ fn fsQuad3D(in: Quad3DOut) -> SceneOut {
         let vis = sampleShadowOcclusion3D(shadowSamplePos, lp.xy);
         if (vis > 0.01) {
           let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w)) * vis;
-          let diff = max(0.12, dot(n3d, normalize(toL)));
+          let toL2 = dot(toL, toL);
+          let lDir = select(toL * inverseSqrt(max(toL2, 1e-6)), vec3f(0.0, 0.0, 1.0), toL2 < 1e-6);
+          let diff = max(0.12, dot(n3d, lDir));
           litDiff += lc.rgb * (lc.a * att * diff * 0.92);
         }
       }
@@ -805,12 +875,15 @@ fn fsQuad3D(in: Quad3DOut) -> SceneOut {
   let metal = clamp(in.material.z, 0.0, 1.0);
   let matEmissive = clamp(in.material.w, 0.0, 2.0);
   let specExp = mix(48.0, 6.0, rough);
-  let specScale = mix(0.85, 0.18, rough) * (0.24 + 0.76 * metal);
-  let f0 = mix(vec3f(0.95), texRgb * 1.15, metal);
+  let specNorm = (specExp + 8.0) / 25.132741;
+  let specScale = mix(0.95, 0.24, rough) * (0.42 + 0.58 * metal) * specNorm;
+  let f0 = mix(vec3f(0.04), clamp(texRgb, vec3f(0.0), vec3f(1.0)), metal);
   let diffConserv = mix(1.0, 0.62, metal);
 
   let sunDir = normalize(vec3f(-0.38, 0.48, 0.79));
   let viewDir = normalize(vec3f(0.0, 0.65, 0.76));
+  let ndv = clamp(dot(n3d, viewDir), 0.0, 1.0);
+  let fresnel = f0 + (vec3f(1.0) - f0) * pow(clamp(1.0 - ndv, 0.0, 1.0), 5.0);
   let hemi = mix(0.74, 1.12, dot(n3d, sunDir) * 0.5 + 0.5);
 
   var reliefShade = max(0.15, shadeMult) * hemi * diffConserv;
@@ -839,13 +912,16 @@ fn fsQuad3D(in: Quad3DOut) -> SceneOut {
         let vis = sampleShadowOcclusion3D(shadowSamplePos, lp.xy);
         if (vis > 0.01) {
           let att = pow(clamp(1.0 - dist / max(1.0, lp.z), 0.0, 1.0), max(0.2, lp.w)) * vis;
-          let lDir = normalize(toL);
+          let toL2 = dot(toL, toL);
+          let lDir = select(toL * inverseSqrt(max(toL2, 1e-6)), vec3f(0.0, 0.0, 1.0), toL2 < 1e-6);
           let ndl = max(0.0, dot(n3d, lDir));
           let wrapDiff = select(0.32 + 0.85 * ndl, 0.42 + 0.72 * ndl, isVertical);
-          let hVec = normalize(lDir + viewDir);
+          let halfSum = lDir + viewDir;
+          let halfSum2 = dot(halfSum, halfSum);
+          let hVec = select(halfSum * inverseSqrt(max(halfSum2, 1e-6)), n3d, halfSum2 < 1e-6);
           let spec = pow(max(0.0, dot(n3d, hVec)), specExp) * specScale * 0.78;
           litDiff += lc.rgb * (lc.a * att * wrapDiff * diffConserv);
-          litSpec += lc.rgb * f0 * (lc.a * att * spec);
+          litSpec += lc.rgb * fresnel * (lc.a * att * spec);
         }
       }
       li += 1u;

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { TextureAtlas } from '../../src/assets/TextureAtlas.ts';
 import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
@@ -11,6 +14,8 @@ import type {
   Quad3DPassData,
   SkyGradient,
 } from '../../src/core/gpu/GpuTypes.ts';
+import { COMPOSITE_FS, QUAD3D_FS, SPRITE_FS } from '../../src/core/gpu/WebGl2Shaders.ts';
+import { WGSL_CODE, WGSL_POST_CODE } from '../../src/core/gpu/WebGpuShaders.ts';
 import {
   buildCamera3DViewProjMatrix,
   computeCamera3D,
@@ -341,5 +346,150 @@ test('GPU & SceneGpuBridge edge cases: strict hex parsing, NaN light/camera reje
   snap.bossHp = 150;
   const stats = bridge.render(glMock.gpu, snap, null);
   assert.ok(Number.isFinite(stats.spriteCount) && stats.spriteCount > 0);
+});
+
+function evalShaderDdaShadowRef(
+  fragX: number,
+  fragY: number,
+  lightX: number,
+  lightY: number,
+  strength: number,
+  softness: number,
+  isSolid: (cx: number, cy: number) => boolean,
+): { vis: number; stepsTaken: number } {
+  if (strength <= 0.01) return { vis: 1.0, stepsTaken: 0 };
+  const dx = lightX - fragX;
+  const dy = lightY - fragY;
+  if (dx * dx + dy * dy < 0.0625) return { vis: 1.0, stepsTaken: 0 };
+  const fragTileX = Math.floor(fragX);
+  const fragTileY = Math.floor(fragY);
+  const lightTileX = Math.floor(lightX);
+  const lightTileY = Math.floor(lightY);
+  if (Math.abs(fragTileX - lightTileX) < 0.5 && Math.abs(fragTileY - lightTileY) < 0.5) {
+    return { vis: 1.0, stepsTaken: 0 };
+  }
+  const hasX = Math.abs(dx) > 1e-6;
+  const hasY = Math.abs(dy) > 1e-6;
+  const stepX = dx >= 0 ? 1 : -1;
+  const stepY = dy >= 0 ? 1 : -1;
+  const tDeltaX = hasX ? 1 / Math.max(Math.abs(dx), 1e-6) : 1e9;
+  const tDeltaY = hasY ? 1 / Math.max(Math.abs(dy), 1e-6) : 1e9;
+  let tMaxX = hasX
+    ? (dx >= 0 ? fragTileX + 1 - fragX : fragX - fragTileX) * tDeltaX
+    : 1e9;
+  let tMaxY = hasY
+    ? (dy >= 0 ? fragTileY + 1 - fragY : fragY - fragTileY) * tDeltaY
+    : 1e9;
+  const softSteps = Math.max(0.35, softness * 2.4);
+  let curX = fragTileX;
+  let curY = fragTileY;
+  let hits = 0;
+  let stepsTaken = 0;
+  for (let s = 0; s < 32; s++) {
+    stepsTaken++;
+    let tHit = 0;
+    if (tMaxX < tMaxY) {
+      tHit = tMaxX;
+      curX += stepX;
+      tMaxX += tDeltaX;
+    } else {
+      tHit = tMaxY;
+      curY += stepY;
+      tMaxY += tDeltaY;
+    }
+    if (tHit >= 1.0) break;
+    if (Math.abs(curX - lightTileX) < 0.5 && Math.abs(curY - lightTileY) < 0.5) break;
+    if (isSolid(curX, curY)) {
+      hits += 1.0;
+      if (hits >= softSteps) break;
+    }
+  }
+  const shadowAmt = Math.min(1, Math.max(0, hits / softSteps)) * strength;
+  return { vis: 1.0 - shadowAmt, stepsTaken };
+}
+
+test('GPU backends enforce Pass 1B overlay light isolation, WebGL2 atlas reuse guard, and DoF sampler parity', () => {
+  const testDir = path.dirname(fileURLToPath(import.meta.url));
+  const rootDir = path.resolve(testDir, '../..');
+  const webGpuBackendSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGpuBackend.ts'), 'utf8');
+  const webGl2BackendSrc = fs.readFileSync(path.join(rootDir, 'src/core/gpu/WebGl2Backend.ts'), 'utf8');
+
+  // WebGPU Pass 1B zero-light overlay bind group & cleanup
+  assert.ok(webGpuBackendSrc.includes('overlayLightUniformBuffer'));
+  assert.ok(webGpuBackendSrc.includes('pass1OverlayBindGroup'));
+  assert.match(webGpuBackendSrc, /pass1b\.setBindGroup\s*\(\s*0\s*,\s*this\.pass1OverlayBindGroup\s*\)/);
+  assert.doesNotMatch(webGpuBackendSrc, /pass1b\.setBindGroup\s*\(\s*0\s*,\s*this\.pass1BindGroup\s*\)/);
+  assert.match(webGpuBackendSrc, /this\.overlayLightUniformBuffer\.destroy\(\)/);
+
+  // WebGL2 Pass 1B zero-light parity
+  assert.match(webGl2BackendSrc, /gl\.uniform1i\(this\.uLightCountLoc,\s*use3D\s*\?\s*0\s*:\s*safeLights\)/);
+
+  // WebGL2 atlas reuse guard (texStorage3D + texSubImage3D, no unconditional texImage3D reallocation)
+  assert.ok(webGl2BackendSrc.includes('atlasAllocW'));
+  assert.ok(webGl2BackendSrc.includes('atlasAllocH'));
+  assert.ok(webGl2BackendSrc.includes('atlasAllocLayers'));
+  assert.match(webGl2BackendSrc, /gl\.texStorage3D\(/);
+  assert.match(webGl2BackendSrc, /gl\.texSubImage3D\(/);
+  assert.doesNotMatch(webGl2BackendSrc, /gl\.texImage3D\s*\(/);
+
+  // WebGL2 DoF linear/nearest samplers & cleanup
+  assert.ok(webGl2BackendSrc.includes('nearestSampler'));
+  assert.ok(webGl2BackendSrc.includes('linearSampler'));
+  assert.match(webGl2BackendSrc, /gl\.bindSampler\(0,\s*this\.nearestSampler\)/);
+  assert.match(webGl2BackendSrc, /gl\.bindSampler\(2,\s*this\.linearSampler\)/);
+  assert.match(webGl2BackendSrc, /gl\.deleteSampler\(this\.nearestSampler\)/);
+  assert.match(webGl2BackendSrc, /gl\.deleteSampler\(this\.linearSampler\)/);
+});
+
+test('WGSL and GLSL shaders share F0/Schlick PBR, relief reuse, NaN-safe Quad3D lighting, DDA shadows, and CRT/Bayer Y-alignment', () => {
+  // 1. Physically grounded F0 + Schlick Fresnel parity (no fake 0.95 / 1.15)
+  for (const shaderSrc of [WGSL_CODE, SPRITE_FS, QUAD3D_FS]) {
+    assert.doesNotMatch(shaderSrc, /mix\s*\(\s*vec3f?\s*\(\s*0\.95\s*\)/);
+    assert.doesNotMatch(shaderSrc, /texRgb\s*\*\s*1\.15/);
+    assert.match(shaderSrc, /mix\s*\(\s*vec3f?\s*\(\s*0\.04\s*\),\s*clamp\s*\(\s*texRgb/);
+    assert.match(shaderSrc, /pow\s*\(\s*clamp\s*\(\s*1\.0\s*-\s*ndv,\s*0\.0,\s*1\.0\s*\),\s*5\.0\s*\)/);
+  }
+
+  // 2. No redundant center texel sC re-fetch in 2D relief pass
+  assert.doesNotMatch(WGSL_CODE, /\bsC\b/);
+  assert.doesNotMatch(SPRITE_FS, /\bsC\b/);
+
+  // 3. Quad3D zero-distance light normalize guard
+  assert.match(WGSL_CODE, /toL2\s*<\s*1e-6/);
+  assert.match(QUAD3D_FS, /toL2\s*<\s*1e-6/);
+
+  // 4. Bounded 32-step Amanatides-Woo DDA shadow traversal (no fixed 14-step march)
+  for (const shaderSrc of [WGSL_CODE, SPRITE_FS, QUAD3D_FS]) {
+    assert.doesNotMatch(shaderSrc, /s\s*<=\s*14/);
+    assert.match(shaderSrc, /s\s*<\s*32/);
+    assert.match(shaderSrc, /tDeltaX/);
+    assert.match(shaderSrc, /tDeltaY/);
+    assert.match(shaderSrc, /hits\s*>=\s*softSteps/);
+  }
+
+  // 5. DoF sampler, CRT scanline phase, and Bayer 4x4 Y-orientation parity
+  assert.match(WGSL_POST_CODE, /textureSampleLevel\(uTexA,\s*uNearestSamp,\s*sampleUv/);
+  assert.match(WGSL_POST_CODE, /textureSampleLevel\(uTexA,\s*uLinearSamp,\s*clamp\(sampleUv/);
+  assert.match(COMPOSITE_FS, /texture\(uSceneTex,\s*sampleUv\)/);
+  assert.match(COMPOSITE_FS, /texture\(uSceneLinearTex,\s*clamp\(sampleUv/);
+  assert.match(COMPOSITE_FS, /sin\(screenY\s*\*\s*viewSize\.y\s*\*\s*6\.28318\)/);
+  assert.match(COMPOSITE_FS, /uOutputSize\.y\s*-\s*gl_FragCoord\.y/);
+
+  // 6. Algorithmic DDA checks (>15 tile anti-tunneling, corner-pinch blocking, early exit, light-cell exemption)
+  const wallAt12 = (cx: number, cy: number) => cx === 12 && cy === 1;
+  const longRange = evalShaderDdaShadowRef(1.5, 1.5, 23.5, 1.5, 0.9, 0.36, wallAt12);
+  assert.ok(longRange.vis < 0.15, `Long 22-tile ray must not tunnel through 1-tile wall (vis=${longRange.vis})`);
+  assert.ok(longRange.stepsTaken < 32, `DDA must early-exit once hits >= softSteps (steps=${longRange.stepsTaken})`);
+
+  const diagPinch = (cx: number, cy: number) => (cx === 1 && cy === 2) || (cx === 2 && cy === 1);
+  const cornerHit = evalShaderDdaShadowRef(0.5, 0.5, 4.5, 4.5, 0.9, 0.36, diagPinch);
+  assert.ok(cornerHit.vis < 0.15, `45-deg ray must be blocked by diagonal corner-pinch walls (vis=${cornerHit.vis})`);
+
+  const wallTorch = (cx: number, cy: number) => cx === 5 && cy === 1;
+  const torchClear = evalShaderDdaShadowRef(2.5, 1.5, 5.5, 1.5, 0.9, 0.36, wallTorch);
+  assert.equal(torchClear.vis, 1.0, 'Light placed inside an occluder tile must not block itself');
+
+  const clearLong = evalShaderDdaShadowRef(1.5, 1.5, 21.5, 1.5, 0.9, 0.36, () => false);
+  assert.equal(clearLong.vis, 1.0, 'Clear 20-tile ray must return full visibility');
 });
 

@@ -72,6 +72,7 @@ export class WebGpuBackend implements IGpuBackend {
   private skyUniformBuffer: GPUBuffer;
   private skyUniformData = new Float32Array(16);
   private lightUniformBuffer: GPUBuffer;
+  private overlayLightUniformBuffer: GPUBuffer;
   private lightUniformData = new Float32Array(200);
   private quad3dOpaqueUniBuf: GPUBuffer;
   private quad3dBlendUniBuf: GPUBuffer;
@@ -94,6 +95,7 @@ export class WebGpuBackend implements IGpuBackend {
   private nearestSampler: GPUSampler;
   private pass1BindGroupLayout: GPUBindGroupLayout;
   private pass1BindGroup: GPUBindGroup;
+  private pass1OverlayBindGroup: GPUBindGroup;
   private postBindGroupLayout: GPUBindGroupLayout;
   private postDownBuf: GPUBuffer;
   private postBlurHBuf: GPUBuffer;
@@ -132,6 +134,7 @@ export class WebGpuBackend implements IGpuBackend {
     compositePipeline: GPURenderPipeline,
     skyUniformBuffer: GPUBuffer,
     lightUniformBuffer: GPUBuffer,
+    overlayLightUniformBuffer: GPUBuffer,
     quad3dOpaqueUniBuf: GPUBuffer,
     quad3dBlendUniBuf: GPUBuffer,
     quad3dOpaqueBindGroup: GPUBindGroup,
@@ -150,6 +153,7 @@ export class WebGpuBackend implements IGpuBackend {
     nearestSampler: GPUSampler,
     pass1BindGroupLayout: GPUBindGroupLayout,
     pass1BindGroup: GPUBindGroup,
+    pass1OverlayBindGroup: GPUBindGroup,
     postBindGroupLayout: GPUBindGroupLayout,
     postDownBuf: GPUBuffer,
     postBlurHBuf: GPUBuffer,
@@ -176,6 +180,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.compositePipeline = compositePipeline;
     this.skyUniformBuffer = skyUniformBuffer;
     this.lightUniformBuffer = lightUniformBuffer;
+    this.overlayLightUniformBuffer = overlayLightUniformBuffer;
     this.quad3dOpaqueUniBuf = quad3dOpaqueUniBuf;
     this.quad3dBlendUniBuf = quad3dBlendUniBuf;
     this.quad3dOpaqueBindGroup = quad3dOpaqueBindGroup;
@@ -194,6 +199,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.nearestSampler = nearestSampler;
     this.pass1BindGroupLayout = pass1BindGroupLayout;
     this.pass1BindGroup = pass1BindGroup;
+    this.pass1OverlayBindGroup = pass1OverlayBindGroup;
     this.postBindGroupLayout = postBindGroupLayout;
     this.postDownBuf = postDownBuf;
     this.postBlurHBuf = postBlurHBuf;
@@ -243,6 +249,32 @@ export class WebGpuBackend implements IGpuBackend {
       { width, height, depthOrArrayLayers: 1 },
     );
     return buf;
+  }
+
+  private static buildPass1BindGroup(
+    device: GPUDevice,
+    layout: GPUBindGroupLayout,
+    skyUniformBuffer: GPUBuffer,
+    atlasTexture: GPUTexture,
+    atlasSampler: GPUSampler,
+    indexAtlasTexture: GPUTexture,
+    paletteLutTexture: GPUTexture,
+    lightBuffer: GPUBuffer,
+    occlusionTexture: GPUTexture,
+    layerCount: number,
+  ): GPUBindGroup {
+    return device.createBindGroup({
+      layout,
+      entries: [
+        { binding: 0, resource: { buffer: skyUniformBuffer } },
+        { binding: 1, resource: atlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
+        { binding: 2, resource: atlasSampler },
+        { binding: 3, resource: indexAtlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
+        { binding: 4, resource: paletteLutTexture.createView() },
+        { binding: 5, resource: { buffer: lightBuffer } },
+        { binding: 6, resource: occlusionTexture.createView() },
+      ],
+    });
   }
 
   private static writePaddedLutTexture(
@@ -411,6 +443,14 @@ export class WebGpuBackend implements IGpuBackend {
         size: 800,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      const overlayLightUniformBuffer = device.createBuffer({
+        size: 800,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      const zeroOverlayLights = new Float32Array(200);
+      zeroOverlayLights[6] = 32;
+      zeroOverlayLights[7] = 0.35;
+      device.queue.writeBuffer(overlayLightUniformBuffer, 0, zeroOverlayLights);
       const makePostBuf = () =>
         device.createBuffer({
           size: 80,
@@ -463,18 +503,30 @@ export class WebGpuBackend implements IGpuBackend {
           { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         ],
       });
-      const pass1BindGroup = device.createBindGroup({
-        layout: pass1BindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: skyUniformBuffer } },
-          { binding: 1, resource: atlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
-          { binding: 2, resource: atlasSampler },
-          { binding: 3, resource: indexAtlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
-          { binding: 4, resource: paletteLutTexture.createView() },
-          { binding: 5, resource: { buffer: lightUniformBuffer } },
-          { binding: 6, resource: occlusionTexture.createView() },
-        ],
-      });
+      const pass1BindGroup = WebGpuBackend.buildPass1BindGroup(
+        device,
+        pass1BindGroupLayout,
+        skyUniformBuffer,
+        atlasTexture,
+        atlasSampler,
+        indexAtlasTexture,
+        paletteLutTexture,
+        lightUniformBuffer,
+        occlusionTexture,
+        layerCount,
+      );
+      const pass1OverlayBindGroup = WebGpuBackend.buildPass1BindGroup(
+        device,
+        pass1BindGroupLayout,
+        skyUniformBuffer,
+        atlasTexture,
+        atlasSampler,
+        indexAtlasTexture,
+        paletteLutTexture,
+        overlayLightUniformBuffer,
+        occlusionTexture,
+        layerCount,
+      );
 
       const quad3dBindGroupLayout = device.createBindGroupLayout({
         entries: [
@@ -678,6 +730,7 @@ export class WebGpuBackend implements IGpuBackend {
         compositePipeline,
         skyUniformBuffer,
         lightUniformBuffer,
+        overlayLightUniformBuffer,
         quad3dOpaqueUniBuf,
         quad3dBlendUniBuf,
         quad3dOpaqueBindGroup,
@@ -696,6 +749,7 @@ export class WebGpuBackend implements IGpuBackend {
         nearestSampler,
         pass1BindGroupLayout,
         pass1BindGroup,
+        pass1OverlayBindGroup,
         postBindGroupLayout,
         postDownBuf,
         postBlurHBuf,
@@ -908,18 +962,30 @@ export class WebGpuBackend implements IGpuBackend {
     }
 
     if (rebuildBindGroup) {
-      this.pass1BindGroup = this.device.createBindGroup({
-        layout: this.pass1BindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.skyUniformBuffer } },
-          { binding: 1, resource: this.atlasTexture.createView({ dimension: '2d-array', arrayLayerCount: this.atlasLayerCount }) },
-          { binding: 2, resource: this.atlasSampler },
-          { binding: 3, resource: this.indexAtlasTexture.createView({ dimension: '2d-array', arrayLayerCount: this.atlasLayerCount }) },
-          { binding: 4, resource: this.paletteLutTexture.createView() },
-          { binding: 5, resource: { buffer: this.lightUniformBuffer } },
-          { binding: 6, resource: this.occlusionTexture.createView() },
-        ],
-      });
+      this.pass1BindGroup = WebGpuBackend.buildPass1BindGroup(
+        this.device,
+        this.pass1BindGroupLayout,
+        this.skyUniformBuffer,
+        this.atlasTexture,
+        this.atlasSampler,
+        this.indexAtlasTexture,
+        this.paletteLutTexture,
+        this.lightUniformBuffer,
+        this.occlusionTexture,
+        this.atlasLayerCount,
+      );
+      this.pass1OverlayBindGroup = WebGpuBackend.buildPass1BindGroup(
+        this.device,
+        this.pass1BindGroupLayout,
+        this.skyUniformBuffer,
+        this.atlasTexture,
+        this.atlasSampler,
+        this.indexAtlasTexture,
+        this.paletteLutTexture,
+        this.overlayLightUniformBuffer,
+        this.occlusionTexture,
+        this.atlasLayerCount,
+      );
     }
   }
 
@@ -1224,7 +1290,7 @@ export class WebGpuBackend implements IGpuBackend {
             { view: rt.emissiveView, loadOp: 'load', storeOp: 'store' },
           ],
         });
-        pass1b.setBindGroup(0, this.pass1BindGroup);
+        pass1b.setBindGroup(0, this.pass1OverlayBindGroup);
         if (safeAlpha > 0) {
           pass1b.setPipeline(this.alphaPipeline);
           pass1b.setVertexBuffer(0, this.alphaBuffer);
@@ -1343,6 +1409,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.quad3dBlendUniBuf.destroy();
     this.skyUniformBuffer.destroy();
     this.lightUniformBuffer.destroy();
+    this.overlayLightUniformBuffer.destroy();
     this.postDownBuf.destroy();
     this.postBlurHBuf.destroy();
     this.postBlurVBuf.destroy();
