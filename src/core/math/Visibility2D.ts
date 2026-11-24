@@ -359,20 +359,14 @@ export function raycastGrid2DInto(
     let nx = 0;
     let ny = 0;
 
-    if (tMaxX < tMaxY) {
-      t = tMaxX;
-      if (t > maxDist) break;
-      cellX += stepX;
-      tMaxX += tDeltaX;
-      nx = -stepX;
-    } else if (tMaxY < tMaxX) {
-      t = tMaxY;
-      if (t > maxDist) break;
-      cellY += stepY;
-      tMaxY += tDeltaY;
-      ny = -stepY;
-    } else {
-      t = tMaxX;
+    // Guard tie detection on finite diagonal axes so axis-aligned Infinity never equals Infinity
+    const isTie =
+      stepX !== 0 &&
+      stepY !== 0 &&
+      Math.abs(tMaxX - tMaxY) <= 1e-9 * Math.max(1, tMaxX, tMaxY);
+
+    if (isTie) {
+      t = 0.5 * (tMaxX + tMaxY);
       if (t > maxDist) break;
       const adjX = cellX + stepX;
       const adjY = cellY + stepY;
@@ -383,8 +377,8 @@ export function raycastGrid2DInto(
         outHit[offset + 1] = t;
         outHit[offset + 2] = startX + ndx * t;
         outHit[offset + 3] = startY + ndy * t;
-        outHit[offset + 4] = -stepX;
-        outHit[offset + 5] = -stepY;
+        outHit[offset + 4] = -stepX * Math.SQRT1_2;
+        outHit[offset + 5] = -stepY * Math.SQRT1_2;
         outHit[offset + 6] = adjX;
         outHit[offset + 7] = cellY;
         return true;
@@ -393,7 +387,19 @@ export function raycastGrid2DInto(
       cellY = adjY;
       tMaxX += tDeltaX;
       tMaxY += tDeltaY;
+      nx = -stepX * Math.SQRT1_2;
+      ny = -stepY * Math.SQRT1_2;
+    } else if (tMaxX < tMaxY) {
+      t = tMaxX;
+      if (t > maxDist) break;
+      cellX += stepX;
+      tMaxX += tDeltaX;
       nx = -stepX;
+    } else {
+      t = tMaxY;
+      if (t > maxDist) break;
+      cellY += stepY;
+      tMaxY += tDeltaY;
       ny = -stepY;
     }
 
