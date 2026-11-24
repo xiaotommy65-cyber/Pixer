@@ -64,3 +64,19 @@
 - **`bun run sim`**: `[SIM ALL PASSED]` — `ColorMath 50k Oklab mix: 2.23ms (heapDelta=0KB)`, `240f Snapshot Zero-GC: EcsCartridgeRuntime=0.58ms (heapDelta=48.5KB), ChunkedRuntime=2.10ms (heapDelta=26.7KB)`.
 - **`npm run test`**: `62 pass / 0 fail` (up from `58`).
 - **`bun run build` + `bun run clean`**: `210` modules built in `264ms` (`index.css` `123.60 kB -> 111.46 kB`, 0 chunk warnings), `dist/` cleaned.
+
+---
+
+## 6. Wave 2 Verification Log (`workspace: "share"` Git Worktrees)
+- **Status**: `PASSED` on `feat/swarm-p0-p1-hardening` (merged `lazy-perf` `93f40bd`, `oracle-cutscenes` `5628e27`, `workstation-ui` `7a6aba9`)
+- **Code-Splitting & 60Hz UI Trim (`lazy-perf`)**:
+  - `dynamicImportCount`: `0 -> 3` (`SpriteAtelierView`, `CapacitorNativeBridge`, `ExternalImportModalView` lazy-loaded; `StudioSession` lazy in `AgentBridge`); `PERF-NO-CODE-SPLIT` & `ARCH-LEGACY-STUDIO-BOOT` eliminated.
+  - `ConsoleHudPresenter`, `ShmupOverlayView`, and `SaveService` updated with numeric/field dirty checks and `>=1s` playing-mode save throttling.
+- **Oracles & Flagship Cutscenes (`oracle-cutscenes`)**:
+  - `EcsCinematicOracle`: 3-point (`25%/55%/85%`) multi-frame sampling, `hd2d_3d` projected wall occlusion, `actorB` `two_shot` occlusion checks, live gameplay handback target parity.
+  - `EcsSpatialOracle`: solid hero spawn guard, walled-in portal/boss rejection, one-way dead-end room detection, dynamic pass limit.
+  - Authored 4 flagship cutscenes (`PA-14`: `citadel_gate_intro` 100/S, `malakor_awakening` 98/S; `PA-15`: `grove_arrival` 100/S, `warden_awakening` 98/S).
+- **Phase 6 Workstation UI & Live Browser GPU Verification (`workstation-ui` + `browser`)**:
+  - Exposed Cutscene Director / 5-Axis Critic Oracle UI, `視野遮蔽預覽 (FOV Fog)` Zero-GC overlay, and idle Studio 0-draw GPU cap.
+  - Live `http://localhost:3000/` Chromium check: **0** uncaught JS/console/shader errors; verified `PA-14` `真 3D 透視 (HD-2D)` rendering, `100/100 [S]` diagnostic banner, FOV fog toggle, and 21:9 letterbox cutscene playback.
+- **Full Gate**: `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`: `ColorMath 2.46ms / 13KB`, `240f Zero-GC: ECS 0.53ms / 37.3KB, Chunked 2.00ms / 26.7KB`) · `npm run test` (**64 pass / 0 fail**) · `bun run audit -- --strict` (**exit 0**, `critical=0`, `Math/Shader` 0 warn, `Perf/Arch` 0 warn) · `bun run build` (`211 modules`, `570ms`, `CapacitorNativeBridge` async chunk `2.86 kB`, note `ecs-workbench` chunk `510.77 kB > 500 kB`) · `bun run clean`.
