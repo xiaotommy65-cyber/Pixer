@@ -44,15 +44,33 @@ export class ConsoleHudPresenter {
   private readonly refs: ConsoleHudRefs;
   private readonly cb: ConsoleHudCallbacks;
   private lastBannerState: 'playing' | 'won' | 'lost' = 'playing';
-  private lastProfileKey = '';
+  private lastProfileId: CartridgeId | null | undefined = undefined;
+  private lastShmupPhase = '';
+  private lastRpgMode = '';
+  private lastChronicleMode = '';
   private lastStageHidden: boolean | null = null;
+  private lastStageIndex = -1;
+  private lastStageTotal = -1;
+  private lastStageName = '';
   private lastStageText = '';
+  private lastScore = -1;
+  private lastCombo = -1;
   private lastScoreText = '';
+  private lastStarsCollected = -1;
+  private lastStarsTotal = -1;
   private lastStarText = '';
+  private lastSpriteCount = -1;
+  private lastDrawCalls = -1;
   private lastSpriteStatText = '';
+  private lastFpsRounded = -1;
   private lastFpsText = '';
   private lastStatusHint = '';
   private lastClearSaveHidden: boolean | null = null;
+  private lastRecordCartridgeId: CartridgeId | null = null;
+  private lastRecordScore = -1;
+  private lastRecordStars = -1;
+  private lastRecordStatus: 'playing' | 'won' | 'lost' | '' = '';
+  private lastRecordSaveMs = -1000;
 
   constructor(host: EngineHost, refs: ConsoleHudRefs, callbacks: ConsoleHudCallbacks) {
     this.host = host;
@@ -86,8 +104,24 @@ export class ConsoleHudPresenter {
     }
   }
 
+  private resetRecordThrottle(): void {
+    this.lastRecordCartridgeId = null;
+    this.lastRecordScore = -1;
+    this.lastRecordStars = -1;
+    this.lastRecordStatus = '';
+    this.lastRecordSaveMs = -1000;
+  }
+
   public showBeforeBoot(id: CartridgeId, resumedSram: boolean, meta: CartridgeMeta): void {
     this.lastBannerState = 'playing';
+    this.lastStageIndex = -1;
+    this.lastStageTotal = -1;
+    this.lastStageName = '';
+    this.lastScore = -1;
+    this.lastCombo = -1;
+    this.lastStarsCollected = -1;
+    this.lastStarsTotal = -1;
+    this.resetRecordThrottle();
     this.resetOverlays();
     this.refs.resultOverlay.classList.add('panel-hidden');
     this.setStatusHint(
@@ -98,31 +132,46 @@ export class ConsoleHudPresenter {
 
   public showEmpty(): void {
     this.resetOverlays();
+    this.lastStageIndex = -1;
+    this.lastStageTotal = -1;
+    this.lastStageName = '';
     this.setStageDisplay(false);
     this.refs.resultOverlay.classList.add('panel-hidden');
+    this.lastScore = 0;
+    this.lastCombo = 0;
     if (this.lastScoreText !== '分數 0') {
       this.lastScoreText = '分數 0';
       this.refs.scoreTag.textContent = '分數 0';
     }
+    this.lastStarsCollected = 0;
+    this.lastStarsTotal = 0;
     if (this.lastStarText !== '★ 0/0') {
       this.lastStarText = '★ 0/0';
       this.refs.starTag.textContent = '★ 0/0';
     }
+    this.resetRecordThrottle();
     this.setStatusHint('從大廳挑選遊戲卡匣即可開始冒險！');
     this.updateControlLabels(null);
   }
 
   public updateStats(stats: GpuFrameStats, fps: number): void {
-    const statText = `精靈 ${stats.spriteCount} · ${stats.drawCalls} draws`;
-    if (this.lastSpriteStatText !== statText) {
-      this.lastSpriteStatText = statText;
-      this.refs.spriteStatTag.textContent = statText;
+    if (stats.spriteCount !== this.lastSpriteCount || stats.drawCalls !== this.lastDrawCalls) {
+      this.lastSpriteCount = stats.spriteCount;
+      this.lastDrawCalls = stats.drawCalls;
+      const statText = `精靈 ${stats.spriteCount} · ${stats.drawCalls} draws`;
+      if (this.lastSpriteStatText !== statText) {
+        this.lastSpriteStatText = statText;
+        this.refs.spriteStatTag.textContent = statText;
+      }
     }
     const fpsRounded = Math.round(fps);
-    const fpsText = `${fpsRounded} FPS`;
-    if (this.lastFpsText !== fpsText) {
-      this.lastFpsText = fpsText;
-      this.refs.fpsTag.textContent = fpsText;
+    if (fpsRounded !== this.lastFpsRounded) {
+      this.lastFpsRounded = fpsRounded;
+      const fpsText = `${fpsRounded} FPS`;
+      if (this.lastFpsText !== fpsText) {
+        this.lastFpsText = fpsText;
+        this.refs.fpsTag.textContent = fpsText;
+      }
     }
   }
 
@@ -134,20 +183,42 @@ export class ConsoleHudPresenter {
     insertedId: CartridgeId | null,
   ): void {
     if (snap.stage) {
-      this.setStageDisplay(true, `${snap.stage.index}/${snap.stage.total} · ${snap.stage.name}`);
-    } else {
+      if (
+        this.lastStageHidden !== false ||
+        snap.stage.index !== this.lastStageIndex ||
+        snap.stage.total !== this.lastStageTotal ||
+        snap.stage.name !== this.lastStageName
+      ) {
+        this.lastStageIndex = snap.stage.index;
+        this.lastStageTotal = snap.stage.total;
+        this.lastStageName = snap.stage.name;
+        this.setStageDisplay(true, `${snap.stage.index}/${snap.stage.total} · ${snap.stage.name}`);
+      }
+    } else if (this.lastStageHidden !== true) {
+      this.lastStageIndex = -1;
+      this.lastStageTotal = -1;
+      this.lastStageName = '';
       this.setStageDisplay(false);
     }
-    const comboStr = snap.comboCount && snap.comboCount > 1 ? ` · ×${snap.comboCount}` : '';
-    const scoreText = `分數 ${snap.score}${comboStr}`;
-    if (this.lastScoreText !== scoreText) {
-      this.lastScoreText = scoreText;
-      this.refs.scoreTag.textContent = scoreText;
+    const combo = snap.comboCount && snap.comboCount > 1 ? snap.comboCount : 0;
+    if (snap.score !== this.lastScore || combo !== this.lastCombo) {
+      this.lastScore = snap.score;
+      this.lastCombo = combo;
+      const comboStr = combo > 1 ? ` · ×${combo}` : '';
+      const scoreText = `分數 ${snap.score}${comboStr}`;
+      if (this.lastScoreText !== scoreText) {
+        this.lastScoreText = scoreText;
+        this.refs.scoreTag.textContent = scoreText;
+      }
     }
-    const starText = `★ ${snap.starsCollected}/${snap.starsTotal}`;
-    if (this.lastStarText !== starText) {
-      this.lastStarText = starText;
-      this.refs.starTag.textContent = starText;
+    if (snap.starsCollected !== this.lastStarsCollected || snap.starsTotal !== this.lastStarsTotal) {
+      this.lastStarsCollected = snap.starsCollected;
+      this.lastStarsTotal = snap.starsTotal;
+      const starText = `★ ${snap.starsCollected}/${snap.starsTotal}`;
+      if (this.lastStarText !== starText) {
+        this.lastStarText = starText;
+        this.refs.starTag.textContent = starText;
+      }
     }
     this.updateStats(stats, fps);
     this.setStatusHint(snap.statusBanner);
@@ -161,8 +232,24 @@ export class ConsoleHudPresenter {
         this.lastClearSaveHidden = clearHidden;
         this.refs.clearSaveBtn.classList.toggle('panel-hidden', clearHidden);
       }
-      if (this.host.saveRecord(insertedId, snap)) {
-        this.cb.onRecordSaved(insertedId);
+      const recordChanged =
+        insertedId !== this.lastRecordCartridgeId ||
+        snap.score !== this.lastRecordScore ||
+        snap.starsCollected !== this.lastRecordStars ||
+        snap.status !== this.lastRecordStatus;
+      if (recordChanged) {
+        const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const isTerminal = snap.status === 'won' || snap.status === 'lost';
+        if (isTerminal || nowMs - this.lastRecordSaveMs >= 1000) {
+          this.lastRecordCartridgeId = insertedId;
+          this.lastRecordScore = snap.score;
+          this.lastRecordStars = snap.starsCollected;
+          this.lastRecordStatus = snap.status;
+          this.lastRecordSaveMs = nowMs;
+          if (this.host.saveRecord(insertedId, snap)) {
+            this.cb.onRecordSaved(insertedId);
+          }
+        }
       }
     }
 
@@ -197,9 +284,21 @@ export class ConsoleHudPresenter {
   }
 
   public updateControlLabels(id: CartridgeId | null, snap?: RenderSceneSnapshot): void {
-    const key = `${id ?? 'empty'}|${snap?.shmupHud?.phase ?? ''}|${snap?.rpgHud?.mode ?? ''}|${snap?.chronicleHud?.uiMode ?? ''}`;
-    if (key === this.lastProfileKey) return;
-    this.lastProfileKey = key;
+    const shmupPhase = snap?.shmupHud?.phase ?? '';
+    const rpgMode = snap?.rpgHud?.mode ?? '';
+    const chronicleMode = snap?.chronicleHud?.uiMode ?? '';
+    if (
+      id === this.lastProfileId &&
+      shmupPhase === this.lastShmupPhase &&
+      rpgMode === this.lastRpgMode &&
+      chronicleMode === this.lastChronicleMode
+    ) {
+      return;
+    }
+    this.lastProfileId = id;
+    this.lastShmupPhase = shmupPhase;
+    this.lastRpgMode = rpgMode;
+    this.lastChronicleMode = chronicleMode;
 
     this.cb.setAutofireBlocked(id ? shouldBypassTouchActionAutofire(id) : false);
     const prof = getCartridgeControlProfile(id, snap);
