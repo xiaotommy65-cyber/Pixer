@@ -182,7 +182,28 @@ export class ConsoleView {
           this.setPerspective('window');
         }
       },
+      onLightingChange: (env) => {
+        const s = this.element.style;
+        s.setProperty('--env-light-x', env.lightX);
+        s.setProperty('--env-light-dir', env.lightDir);
+        s.setProperty('--env-shadow-x', env.shadowX);
+        s.setProperty('--env-light-color', env.lightColor);
+        s.setProperty('--env-rim-color', env.rimColor);
+        s.setProperty('--env-glass-angle', env.glassAngle);
+        s.setProperty('--env-light-strength', env.lightStrength);
+        s.setProperty('--env-fire', env.fire);
+      },
     });
+    const initEnv = this.diorama.getLightEnv();
+    const rootStyle = this.element.style;
+    rootStyle.setProperty('--env-light-x', initEnv.lightX);
+    rootStyle.setProperty('--env-light-dir', initEnv.lightDir);
+    rootStyle.setProperty('--env-shadow-x', initEnv.shadowX);
+    rootStyle.setProperty('--env-light-color', initEnv.lightColor);
+    rootStyle.setProperty('--env-rim-color', initEnv.rimColor);
+    rootStyle.setProperty('--env-glass-angle', initEnv.glassAngle);
+    rootStyle.setProperty('--env-light-strength', initEnv.lightStrength);
+    rootStyle.setProperty('--env-fire', initEnv.fire);
 
     this.spatialTrackEl = el('div', 'desk-spatial-track');
     const consoleSlot = el('div', 'desk-console-slot');
