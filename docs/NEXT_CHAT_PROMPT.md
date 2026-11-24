@@ -1,18 +1,17 @@
-# Pixer — 新對話開局速讀詞（Phase 5 Complete · 本機 Antigravity IDE / App 接手版）
+# Pixer — 新對話開局速讀詞（Wave 1 & 2 Complete · `feat/swarm-p0-p1-hardening`）
 
-請先閱讀 [`AGENTS.md`](../AGENTS.md)（引擎原教旨憲法）、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)（零 Grep 檔案路由與依賴圖）、[`docs/ROADMAP.md`](ROADMAP.md) 與 [`docs/HANDOFF.md`](HANDOFF.md)，避免耗費大量探索時間。
+請先閱讀 [`AGENTS.md`](../AGENTS.md)（引擎憲法）、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)（零 Grep 檔案路由）、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與 [`docs/HANDOFF.md`](HANDOFF.md)，接著第一時間執行 `bun run audit -- --strict`（<1s 唯讀體檢），切勿重新全倉搜尋消耗額度。
 
-## 當前已驗收基線（Phase 0 → Phase 5 Complete）
-- **HD-2D Pixel PBR-Lite 引擎與外部音訊層**：`WebGPU` / `WebGL2` / `Canvas2DBackend`、`1280×720`、8 頁 `1024×1024` 圖集池、完全移除 AI 程序合成器並以 [`ExternalAudioBank.ts`](../src/core/audio/ExternalAudioBank.ts) 外部 `.opus`/`.mp3` 資源層取代；保留旗艦卡匣 `PA-14`、`PA-15`、`PA-01`、`PA-02`、`PA-11`、`PA-12`。
-- **真 ECS 運行時與全品類軍火庫**：[`EcsCartridgeRuntime.ts`](../src/core/ecs/EcsCartridgeRuntime.ts) + [`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts) 已接通 Zero-GC `GridPathfinder` A*、`Visibility2D` LOS/FOV、`CameraRigDirector`、`GameFlowController` 與 [`EcsCinematicDirector.ts`](../src/core/ecs/EcsCinematicDirector.ts)（Auteur DSL + Toric Two-Shot + 3 階段彈簧切回），並附無頭審美預言機 [`EcsCinematicOracle.ts`](../src/core/ai/EcsCinematicOracle.ts) 與完整 MCP（`critique_cutscene_aesthetics`）。
-- **單一模組化工作站與雲端疏導層**：[`EcsWorkbenchView.ts`](../src/ui/EcsWorkbenchView.ts)（868L 協調層）+ M2 規則檢視器 + [`src/workers/interop.worker.ts`](../src/workers/interop.worker.ts) + Cloudflare Workers/R2 + Supabase RLS（[`CloudSyncClient.ts`](../src/core/cloud/CloudSyncClient.ts)）。
-- **本機 Antigravity 整備**：已配置 `.agents/mcp_config.json`（`pixer-ecs` 預設啟用，另附 `context7` / `chrome-devtools` 範本）、`.agents/rules/`（5 份）與 `.agents/skills/`（`pixer-verify-and-pr`、`pixer-ecs-authoring`）。
+## 當前已驗收基線（`feat/swarm-p0-p1-hardening` 本機已提交待推遠端）
+- **審計與驗證全綠**：`bun run audit -- --strict`（`critical=0`、Math/Shader `0` warn、Perf/Arch `0` warn、`circularDepsCount=0`、`42/42` 指令目錄一致、`dynamicImportCount=3`）、`bun run lint`（0 err）、`bun run sim`（`[SIM ALL PASSED]`，`ColorMath 50k: 2.46ms / 13KB`，`240f Zero-GC: ECS 37.3KB / Chunked 26.7KB`）、`npm run test`（**64/64 PASS**）。
+- **Wave 1 + Wave 2 交付完成**：
+  - 核心數學庫（`NoiseMath`/`ColorMath`/`SpringDynamics`/`Visibility2D`/`SpatialHash`）、WGSL/GLSL 雙端一致性（Pass 1B 零光源、WebGL2 `texSubImage3D` + DoF 線性取樣器、`F0=0.04` + Schlick、32 步 2D DDA 陰影）、Phase 4/5 導演端到端串接與 60Hz Zero-GC 全部完成。
+  - 動態 `import()` 真分包（`SpriteAtelierView`、`CapacitorNativeBridge`、`ExternalImportModalView`）、60Hz HUD/Save 節流、3D/SCC 預言機升級、`PA-14`/`PA-15` 4 支旗艦過場（審美評分 98–100/S）、Phase 6 工作站過場/審美/FOV 迷霧 UI，以及本機 Chrome `http://localhost:3000/` 實機 GPU 零報錯驗收皆已完成。
+- **本機環境就緒**：Windows 本機已備齊 `Node v26.13.0`、`Bun 1.4.5`、`Git 2.56.1`，可直接啟用 Swarm `workspace: "share"` 獨立工作樹（工作樹內用 `cmd /c mklink /J node_modules "c:\Users\TCSH\Downloads\Pixer-main\node_modules"` 毫秒級掛載依賴）。
 
-## 本機開工快速檢查
-1. 確認本機工具鏈：`bun --version` >= `1.4.5`、`node -v` >= `22`；執行 `bun install --frozen-lockfile`。
-2. 驗證基線：`bun run lint && bun run sim && npm run test && bun run build && bun run clean`。
-3. 如需從手機／網頁遠端操控本機完整環境（含 GPU 與 MCP），可使用 Antigravity **Remote Control**（`agy remote-control start`）。
-
-## 下階段建議任務（Phase 6）
-1. **工作站 UI 開放 Phase 4/5 能力 & 實機 GPU 驗收**：在 `EcsWorkbenchView` 檢視器開放分鏡編輯／試映（`critiqueCutsceneAesthetics`）、`CameraRigDirector` 鏡頭預設與 `computeRoomFovMask` 視野預覽；為 `PA-14` / `PA-15` 編排首支過場演出並以本機瀏覽器 / `chrome-devtools` MCP 實測 WebGPU/WebGL2。
-2. **工作站雲端發佈 UI 與正式環境佈建**：在 `EcsWorkbenchView` 串接 `CloudSyncClient` 提供「登入與一鍵發佈複製 `?play=<slug>`」，並依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase、Cloudflare R2 (`pixer-assets`) 與 Workers。
+## 建議下一階段任務（Wave 3 / Phase 6B）
+1. **收斂建置與過場字幕 HUD 實機驗證**：
+   - 解耦 `src/ui/PwaBridge.ts` 的 `@capacitor/core` 靜態匯入並細分 `vite.config.ts` 的 `ecs-workbench` chunk（目前 `510.77 kB`，壓至 `< 500 kB` 達 0 build warning）。
+   - 驗證並補實 `EcsCinematicDirector` 的 `splashTitle` / `subtitle` 字幕橫幅於 `hd2d_3d` 模式 Pass 1B 上層正確顯示（實機截圖確認 21:9 letterbox 正常，但標題字幕橫幅尚未出現於畫布），並重跑本機瀏覽器驗證。
+2. **架構定案與雲端發佈（可選）**：
+   - 處理 V1 遺留子引擎（`GenreControllers` / `CardDeckEngine` / `FighterFrameEngine` / `src/core/editor/*`）去留；或在工作站頂欄接入 `CloudSyncClient` 提供登入與「一鍵發佈複製 `?play=<slug>`」並依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建雲端資源。

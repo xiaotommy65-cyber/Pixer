@@ -75,9 +75,9 @@ flowchart LR
   - `WebGl2Backend.ts` (881L) + `WebGl2Shaders.ts` (1,035L) — GLSL ES 3.00 parity backend.
   - `Canvas2DBackend.ts` (517L) — Guaranteed software fallback.
   - `GpuTypes.ts` (194L) — Viewport presets (`1280×720`), `AtlasPoolStats`, PBR structs.
-- **`src/core/ecs/` (16 prod files, 10,595L)** *(100% DOM-free; zero `*.test.ts` inside `src/`)*
-  - Core primitives: `EntityManager.ts` (163L), `ComponentStore.ts` (556L), `EcsCoreWorld.ts` (208L), `EcsWorld.ts` (465L).
-  - Schema & authoring: `EcsProjectSchema.ts` (668L), `EcsTilemapTypes.ts` (579L), `EcsStudioSession.ts` (1,242L), `EcsCustomSpriteCompiler.ts` (567L).
+- **`src/core/ecs/` (17 prod files)** *(100% DOM-free; zero `*.test.ts` inside `src/`; 0 circular deps)*
+  - Core primitives: `EntityManager.ts`, `ComponentStore.ts`, `EcsCoreWorld.ts`, `EcsWorld.ts`.
+  - Schema & authoring: `EcsCutsceneSchema.ts` (pure cutscene DSL + `validateCutsceneDef`), `EcsProjectSchema.ts`, `EcsTilemapTypes.ts`, `EcsStudioSession.ts` (`42/42` catalog parity), `EcsCustomSpriteCompiler.ts`.
   - Runtime, projection, director & scripting: `EcsCinematicDirector.ts` (1,003L, Auteur Actor-Relative DSL + Toric Two-Shot Solver + 3-Phase Spring Handback + 21:9 Cinema HUD), `EcsCartridgeRuntime.ts` (1,177L, integrates `CameraRigDirector` & `GameFlowController`), `EcsSnapshotProjector.ts` (787L, Zero-GC snapshot/light/HUD/FP-wall projector), `EcsWorldMapController.ts` (1,511L, integrates Zero-GC `GridPathfinder` A* + `Visibility2D` LOS/FOV + `EcsCinematicDirector`), `EcsActionPhysicsSystems.ts` (799L), `SandboxScriptVm.ts` (478L), `EcsEventGraph.ts` (471L), `index.ts` (13L).
   - Unit tests live in `scripts/sim/EcsCore.test.ts` (1,328L), enforced by `ArchitectureTests.ts`.
 - **`src/core/runtime/` (17 files, 5,243L)** *(100% DOM-free, 100% Wired)*
@@ -96,7 +96,7 @@ flowchart LR
 - **`src/core/input/` (5 files, 889L)** & **`src/core/hal/` (2 files, 513L)** *(100% DOM-free)*
   - Input DSP: `InputPipeline.ts`, `InputMap.ts`, `DpadClusterMath.ts`, `StickShaper.ts`, `WebGamepadSampler.ts`.
   - HAL: `SystemHal.ts`, `HapticEngine.ts`.
-- **`src/core/types/` (5 files, 754L)**: `WorldTypes.ts` barrel → `SceneTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `CartridgeTypes.ts`.
+- **`src/core/types/` (6 files)**: `WorldTypes.ts` barrel → `CartridgeId.ts` (shared ID leaf breaking type cycle), `SceneTypes.ts`, `HudTypes.ts`, `InputTypes.ts`, `CartridgeTypes.ts`.
 - **`src/core/sim/` (21 files, 14,501L)** & **`src/core/editor/` (3 files, 1,622L)** *(Data Runtime + Shared Primitives + Multi-Genre Arsenal)*
   - Core & Genre Sub-Engines: `DataCartridgeRuntime.ts` (1,452L coordinator), `DataRuntimePlatformer.ts` (1,026L platformer/grapple/dual-perspective), `DataRuntimeSnapshot.ts` (998L Zero-GC ping-pong snapshot & HUD projector), `DataRuntimeShmup.ts` (1,111L), `CardDeckEngine.ts` (975L roguelike deckbuilder sub-engine), `FighterFrameEngine.ts` (790L 60fps frame-data 2D fighter sub-engine), `GenreControllers.ts` (1,488L fighter/card/topdown/grid puzzle & HUD pool), `CartridgeSchema.ts` (987L), `GridPathfinder.ts` (522L, Zero-GC Binary-Heap A* & Flow-Field wired into `EcsWorldMapController`), `TilemapGrid.ts`, `SoaEntityPool.ts`, `EventActionVm.ts`, `JuiceSystem.ts`, `DualPerspectiveRuntime.ts`, `PerspectiveProjector.ts`, `ProceduralStageCompiler.ts`, `ProceduralVisualRig.ts`, `OrthogonalArt.ts`, `AnimationStateMachine.ts`, `BehaviorTree.ts`, `TweenSystem.ts`.
   - `src/core/editor/`: `StudioSession.ts` (231L), `StudioCommands.ts` (1,012L), `StudioPlaytestDiag.ts` (379L).
@@ -110,7 +110,8 @@ flowchart LR
 - **Workstation (`EcsWorkbench`)**: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (868L coordinator), `EcsWorkbenchShellBuilder.ts` (408L DOM layout), `EcsWorkbenchCatalog.ts` (305L registries/diagnostics), `EcsWorkbenchLiveMutator.ts` (183L live preview), `EcsWorkbenchMapCanvasController.ts` (366L 2D/3D map pointer/overlay), `EcsWorkbenchHierarchyPanels.ts` (274L), `EcsWorkbenchEntityInspector.ts` (772L), `EcsWorkbenchSceneInspector.ts` (250L), `EcsWorkbenchPrefabInspector.ts` (346L), `EcsWorkbenchAtlasPanel.ts` (259L), `EcsWorldRulesInspectorPanel.ts` (770L), `EcsMapDesignerPanel.ts` (664L), `EventGraphEditorView.ts` (1,148L), `ExternalImportModalView.ts` (560L), `InteropWorkerClient.ts` (149L), `SpriteAtelierView.ts` (1,313L), `SpriteAtelierPixelOps.ts` (494L).
 - **Arcade Shell (`ConsoleView`)**: `ConsoleView.ts` (664L), `ConsoleSpatialController.ts` (150L), `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`, `HomeLobbyView.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts` (356L), `DioramaPalette.ts` (266L), `DioramaSceneRenderer.ts` (617L), `BootBlinkOverlay.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `ShmupOverlayView.ts`, `CardArt.ts`, `ProceduralSurfaceTextures.ts`, `MomoMascot.ts`, `TransitionMascot.ts`.
 - **Input / Settings / Native**: `VirtualGamepadInput.ts`, `GamepadHardwareBridge.ts`, `TouchControlsBuilder.ts`, `TouchStateMerger.ts`, `SystemSettingsDrawerView.ts`, `SettingsDrawerTypes.ts`, `SystemLogPanelView.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `BrowserAssetLoader.ts`, `PixelIcons.ts`, `dom.ts`.
-- **Styles**: `switch.css` (2,100L), `lobby.css` (1,928L), `atelier.css` (1,847L), `studio7.css` (1,702L).
+- **Styles**: `switch.css` (2,100L), `lobby.css` (1,856L), `studio7.css` (1,686L), `atelier.css` (1,192L).
+- **Read-Only Audit Suite (`scripts/`)**: `scripts/pixer-audit.ts` (`bun run audit` / `audit:status` / `audit:math` / `audit:perf` / `audit:json` / `--strict`) → `scripts/audit/{AuditTypes,StatusReport,MathScanner,PerfAndArchScanner}.ts`.
 
 ---
 
