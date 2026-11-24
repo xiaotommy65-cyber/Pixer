@@ -1097,6 +1097,8 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
     const queue: number[] = [];
     for (const [sc, sr] of seeds) {
       if (sc < 0 || sr < 0 || sc >= room.cols || sr >= room.rows) continue;
+      if (isRoomCellSolid(room, sc, sr, globals, wm.tileDefs)) continue;
+      if (isRoomCellHazard(room, sc, sr, wm.tileDefs)) continue;
       const idx = sr * room.cols + sc;
       if (!vis[idx]) {
         vis[idx] = 1;
@@ -1127,6 +1129,22 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
     return vis;
   };
 
+  const isCellVisited = (roomId: string, col: number, row: number): boolean => {
+    const room = roomMap.get(roomId);
+    const vis = visitedByRoom.get(roomId);
+    if (!room || !vis || col < 0 || row < 0 || col >= room.cols || row >= room.rows) return false;
+    return vis[row * room.cols + col] === 1;
+  };
+
+  const hasVisitedCells = (roomId: string): boolean => {
+    const vis = visitedByRoom.get(roomId);
+    if (!vis) return false;
+    for (let i = 0; i < vis.length; i++) {
+      if (vis[i] === 1) return true;
+    }
+    return false;
+  };
+
   const isCellOrNeighborVisited = (roomId: string, col: number, row: number): boolean => {
     const room = roomMap.get(roomId);
     const vis = visitedByRoom.get(roomId);
@@ -1148,8 +1166,31 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
     return false;
   };
 
+  const canInteractAtCell = (room: (typeof wm.rooms)[number], col: number, row: number): boolean => {
+    if (isCellVisited(room.id, col, row)) return true;
+    if (isRoomCellSolid(room, col, row, globals, wm.tileDefs)) return false;
+    return isCellOrNeighborVisited(room.id, col, row);
+  };
+
+  const canEnterPortal = (p: (typeof wm.portals)[number], fromRoom: (typeof wm.rooms)[number]): boolean => {
+    for (let rr = p.row; rr < p.row + p.rows; rr++) {
+      for (let cc = p.col; cc < p.col + p.cols; cc++) {
+        if (isCellVisited(p.fromRoomId, cc, rr)) return true;
+        if (
+          !isRoomCellSolid(fromRoom, cc, rr, globals, wm.tileDefs) &&
+          !isRoomCellHazard(fromRoom, cc, rr, wm.tileDefs) &&
+          isCellOrNeighborVisited(p.fromRoomId, cc, rr)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   // Fixed-point progression loop (handles chained keys -> portals -> switches -> sealed gates)
-  for (let passIdx = 0; passIdx < 16; passIdx++) {
+  const maxPasses = Math.max(32, wm.rooms.length * 4 + wm.portals.length * 2 + 16);
+  for (let passIdx = 0; passIdx < maxPasses; passIdx++) {
     let progressed = false;
 
     for (const roomId of roomSeeds.keys()) {
@@ -1167,7 +1208,7 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
       if (!room) continue;
       const col = Math.max(0, Math.min(room.cols - 1, Math.floor((c.transform.x + (c.transform.w ?? ts) * 0.5) / ts)));
       const row = Math.max(0, Math.min(room.rows - 1, Math.floor((c.transform.y + (c.transform.h ?? ts) * 0.5) / ts)));
-      if (!isCellOrNeighborVisited(rId, col, row)) continue;
+      if (!canInteractAtCell(room, col, row)) continue;
 
       triggeredInteractions.add(ent.id);
       progressed = true;
@@ -1193,15 +1234,7 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
       if (!fromRoom || !toRoom) continue;
       const unlocked = !p.requiresGlobal || (globals[p.requiresGlobal] ?? 0) >= 1;
       if (!unlocked) continue;
-      let portalTouched = false;
-      for (let rr = p.row; rr < p.row + p.rows && !portalTouched; rr++) {
-        for (let cc = p.col; cc < p.col + p.cols && !portalTouched; cc++) {
-          if (isCellOrNeighborVisited(p.fromRoomId, cc, rr)) {
-            portalTouched = true;
-          }
-        }
-      }
-      if (!portalTouched) continue;
+      if (!canEnterPortal(p, fromRoom)) continue;
       const tc = Math.max(0, Math.min(toRoom.cols - 1, Math.floor(p.targetX / ts)));
       const tr = Math.max(0, Math.min(toRoom.rows - 1, Math.floor(p.targetY / ts)));
       const existing = roomSeeds.get(p.toRoomId) ?? [];
@@ -1220,14 +1253,39 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
     visitedByRoom.set(roomId, floodRoom(roomId));
   }
 
-  const reachableRoomIds = wm.rooms.filter((r) => visitedByRoom.has(r.id)).map((r) => r.id);
-  const unreachableRoomIds = wm.rooms.filter((r) => !visitedByRoom.has(r.id)).map((r) => r.id);
+  const reachableRoomIds = wm.rooms.filter((r) => hasVisitedCells(r.id)).map((r) => r.id);
+  const unreachableRoomIds = wm.rooms.filter((r) => !hasVisitedCells(r.id)).map((r) => r.id);
   const reachableInteractionIds: string[] = [];
   const unreachableInteractionIds: string[] = [];
   const reachableBossIds: string[] = [];
   const unreachableBossIds: string[] = [];
   const softLockRisks: string[] = [];
   const diagnostics: string[] = [];
+
+  if (
+    isRoomCellSolid(startRoom, startCol, startRow, globals, wm.tileDefs) ||
+    isRoomCellHazard(startRoom, startCol, startRow, wm.tileDefs)
+  ) {
+    softLockRisks.push(
+      `Hero spawn cell (${startCol},${startRow}) in start room "${startRoom.id}" is solid or hazardous`,
+    );
+  }
+
+  const hasWinScript = (scriptRefs: readonly string[] | undefined): boolean => {
+    if (!scriptRefs || scriptRefs.length === 0) return false;
+    for (const sid of scriptRefs) {
+      const s = project.scripts[sid];
+      if (!s) continue;
+      for (const rule of s.rules) {
+        for (const op of rule.ops) {
+          if (op.op === 'set_status' && op.status === 'won') return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const bossOrVictoryRoomIds = new Set<string>();
 
   for (const ent of project.entities) {
     const c = resolveEntityComponents(ent, project.prefabs);
@@ -1237,7 +1295,7 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
     if (!room) continue;
     const col = Math.max(0, Math.min(room.cols - 1, Math.floor((c.transform.x + (c.transform.w ?? ts) * 0.5) / ts)));
     const row = Math.max(0, Math.min(room.rows - 1, Math.floor((c.transform.y + (c.transform.h ?? ts) * 0.5) / ts)));
-    const reached = isCellOrNeighborVisited(rId, col, row);
+    const reached = canInteractAtCell(room, col, row);
 
     if (rulesByTag.has(tag)) {
       if (reached) reachableInteractionIds.push(ent.id);
@@ -1247,15 +1305,26 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
       }
     }
     if (aiProfiles[tag]?.isBoss) {
-      if (reached) reachableBossIds.push(ent.id);
-      else {
+      if (reached) {
+        reachableBossIds.push(ent.id);
+        bossOrVictoryRoomIds.add(rId);
+      } else {
         unreachableBossIds.push(ent.id);
         softLockRisks.push(`Boss "${ent.id}" in room "${rId}" (${col},${row}) is unreachable`);
       }
+    } else if (
+      reached &&
+      (aiProfiles[tag]?.winOnDefeat ||
+        tag === 'goal' ||
+        tag === 'victory' ||
+        hasWinScript(c.scripts))
+    ) {
+      bossOrVictoryRoomIds.add(rId);
     }
   }
 
   const lockedPortals: EcsWorldMapReachabilityReport['lockedPortals'] = [];
+  const roomsWithOutgoingUnlockedPortal = new Set<string>();
   for (const p of wm.portals) {
     if (p.requiresGlobal && (globals[p.requiresGlobal] ?? 0) < 1) {
       lockedPortals.push({
@@ -1265,12 +1334,34 @@ export function analyzeWorldMapReachability(project: EcsProjectV2): EcsWorldMapR
         requiresGlobal: p.requiresGlobal,
       });
       softLockRisks.push(`Portal "${p.id}" requires global "${p.requiresGlobal}" which can never be unlocked`);
+      continue;
+    }
+    const fromRoom = roomMap.get(p.fromRoomId);
+    if (fromRoom && hasVisitedCells(p.fromRoomId)) {
+      if (!canEnterPortal(p, fromRoom)) {
+        softLockRisks.push(
+          `Portal "${p.id}" in room "${p.fromRoomId}" (${p.col},${p.row}) is solid-walled or unreachable`,
+        );
+      } else if (p.toRoomId !== p.fromRoomId && roomMap.has(p.toRoomId)) {
+        roomsWithOutgoingUnlockedPortal.add(p.fromRoomId);
+      }
     }
   }
 
   for (const ur of unreachableRoomIds) {
     softLockRisks.push(`Room "${ur}" is unreachable from startRoom "${startRoom.id}"`);
   }
+
+  // One-way dead-end room detection: reachable non-start room with no outgoing unlocked portal back to another room and no boss/victory trigger
+  for (const rId of reachableRoomIds) {
+    if (rId === startRoom.id) continue;
+    if (!roomsWithOutgoingUnlockedPortal.has(rId) && !bossOrVictoryRoomIds.has(rId)) {
+      softLockRisks.push(
+        `One-way dead-end room "${rId}": reachable room has no outgoing unlocked portal to another room and no boss/victory trigger`,
+      );
+    }
+  }
+
   for (const risk of softLockRisks) diagnostics.push(risk);
 
   return {
