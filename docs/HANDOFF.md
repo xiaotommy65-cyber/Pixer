@@ -7,7 +7,7 @@
 ## 1. 目前 Git 分支與交付進度
 
 - **`main` 基線**：PR #1 → #12（`12269ae`，Phase 0 → Phase 5 Complete + `.agents/` 本機工作流整備）。
-- **目前推進分支：`feat/swarm-p0-p1-hardening`**（本機已全數提交驗收，待本機互動登入 GitHub 後執行 `git push -u origin feat/swarm-p0-p1-hardening` 並開 PR 合入 `main`）：
+- **目前推進分支：`feat/swarm-p0-p1-hardening`**（已合入 `origin/main@49b069c` 並修復其 `WindowDioramaView.ts` / `switch.css` 殘留衝突標記且全門檻驗收通過；請推送後開 PR 合入 `main`）：
   - **唯讀審計底座與主計畫（`83d3cd7`）**：新增 [`scripts/pixer-audit.ts`](../scripts/pixer-audit.ts) 與 [`scripts/audit/`](../scripts/audit)（狀態/數學/Shader/Zero-GC/死 CSS/指令目錄 100% 唯讀掃描），並建立 [`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 四大史詩藍圖與防停滯四鐵律。
   - **Wave 1｜P0–P1 引擎加固（`21e43a4`、`940b84b`、`864f1b5`、`1e42791`）**：
     - **核心數學與 Zero-Box**：`NoiseMath` 32-bit Murmur3 混洗與 `fbm2D` 正交旋轉；`ColorMath` 嚴格 hex 驗證、超色域防塌陷與單態 `writeVec3` 消除 V8 `HeapNumber` 裝箱（50k Oklab mix `13.68ms / 1391–5412KB` → **`2.23–2.46ms / 0–13KB`**）；`SpringDynamics` 60Hz 歸一化 Verlet 阻尼與等長 IK 防護；`Visibility2D` 單位化 DDA 角落法線與對角穿縫保護；`SpatialHash` 半開區間 `ceil - 1` 消除 4× 桶膨脹。
