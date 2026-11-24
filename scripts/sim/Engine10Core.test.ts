@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { zipSync, zlibSync } from 'fflate';
 import { createMcpFrameReader } from '../pixer-mcp.ts';
+import { critiqueCutsceneAesthetics } from '../../src/core/ai/EcsCinematicOracle.ts';
 import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { ExternalAudioBank, isSafeAudioUrl } from '../../src/core/audio/ExternalAudioBank.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
+import { validateCutsceneDef } from '../../src/core/ecs/EcsCutsceneSchema.ts';
 import { decodeZlibB64ToRgba, uint8ToBase64 } from '../../src/core/ecs/EcsCustomSpriteCompiler.ts';
 import { CASTLE_TILE_IDS, setRoomTile } from '../../src/core/ecs/EcsTilemapTypes.ts';
 import { StudioSession } from '../../src/core/editor/StudioSession.ts';
@@ -20,6 +22,7 @@ import {
 } from '../../src/core/runtime/GameFlowController.ts';
 import { DataCartridgeRuntime } from '../../src/core/sim/DataCartridgeRuntime.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../../src/core/types/WorldTypes.ts';
+import { EMERALD_RUINS_PROJECT } from '../../src/game/emeraldRuins/EmeraldRuinsProject.ts';
 import { OBSIDIAN_CITADEL_PROJECT } from '../../src/game/obsidianCitadel/ObsidianCitadelProject.ts';
 
 test('CameraRigDirector converges 6DoF poses, projects 3D points accurately, and enforces static gameplay lock', () => {
@@ -295,6 +298,7 @@ test('True ECS Arsenal Wiring: EcsWorldMapController wall-bypassing A* + FOV/LOS
 
 test('Phase 5 Cinematic Director & Aesthetic Oracle: Auteur DSL, Toric Two-Shot, 3-Phase Spring Handback & MCP Critique', () => {
   const proj = structuredClone(OBSIDIAN_CITADEL_PROJECT);
+  const initialCutsceneCount = proj.cutscenes?.length ?? 0;
   const mcp = new PixerMcpSession(proj);
 
   // 1. Author a 3-shot throne room PV cutscene via transactional MCP upsert_cutscene
@@ -414,9 +418,9 @@ test('Phase 5 Cinematic Director & Aesthetic Oracle: Auteur DSL, Toric Two-Shot,
 
   // 4. Undo/Redo transactional verification for upsert_cutscene
   assert.equal(mcp.invokeTool('undo').isError, false);
-  assert.equal((mcp.session.getProject().cutscenes ?? []).length, 0);
+  assert.equal((mcp.session.getProject().cutscenes ?? []).length, initialCutsceneCount);
   assert.equal(mcp.invokeTool('redo').isError, false);
-  assert.equal((mcp.session.getProject().cutscenes ?? []).length, 1);
+  assert.equal((mcp.session.getProject().cutscenes ?? []).length, initialCutsceneCount + 1);
 });
 
 test('EcsCinematicDirector end-to-end wiring: live lead-room framing, bullet-time timeScale, HD-2D pitch/tiltShift, zoom clampAxis & moving-hero handback', () => {
@@ -603,6 +607,159 @@ test('EcsCinematicDirector end-to-end wiring: live lead-room framing, bullet-tim
       ewsCenterY - ewsEffH * 0.5 >= -0.5 &&
       ewsCenterY + ewsEffH * 0.5 <= roomH + 0.5,
     `EWS must clamp inside room bounds [0..${roomW}, 0..${roomH}] without exposing void`,
+  );
+});
+
+test('PA-14 & PA-15 Flagship Cutscenes pass schema + Aesthetic Oracle (>=80, 0 occlusion) & Oracle catches multi-frame / 3D actorB occlusion', () => {
+  // 1. Validate & audit all 4 flagship cutscenes across PA-14 & PA-15
+  const checks: Array<{ proj: typeof OBSIDIAN_CITADEL_PROJECT; ids: readonly string[]; bossRoom: string; bossCutscene: string }> = [
+    {
+      proj: OBSIDIAN_CITADEL_PROJECT,
+      ids: ['citadel_gate_intro', 'malakor_awakening'],
+      bossRoom: 'throne_sanctum',
+      bossCutscene: 'malakor_awakening',
+    },
+    {
+      proj: EMERALD_RUINS_PROJECT,
+      ids: ['grove_arrival', 'warden_awakening'],
+      bossRoom: 'sanctum_altar',
+      bossCutscene: 'warden_awakening',
+    },
+  ];
+
+  for (const entry of checks) {
+    for (const id of entry.ids) {
+      const def = entry.proj.cutscenes?.find((c) => c.id === id);
+      assert.ok(def, `Missing cutscene '${id}' in ${entry.proj.meta.id}`);
+      const schemaErrs = validateCutsceneDef(def);
+      assert.deepEqual(schemaErrs, [], `Schema errors for '${id}': ${schemaErrs.join('; ')}`);
+
+      const report = critiqueCutsceneAesthetics(entry.proj, id);
+      assert.equal(report.ok, true);
+      assert.equal(report.pass, true, `Cutscene '${id}' failed aesthetic oracle: ${report.suggestions.join('; ')}`);
+      assert.ok(report.overallScore >= 80, `Expected '${id}' overallScore >= 80, got ${report.overallScore}`);
+      for (const shot of report.shots) {
+        assert.equal(shot.occlusionScore, 100, `Shot '${shot.shotId}' in '${id}' must have 0 wall occlusion`);
+      }
+    }
+
+    // Verify start room keeps input unblocked on boot while boss room triggers on_room_enter automatically
+    const rt = new EcsCartridgeRuntime(entry.proj);
+    assert.equal(rt.getCinematicDirector().isCutscenePlaying(), false);
+    assert.equal(rt.switchRoomForEditor(entry.bossRoom), true);
+    assert.equal(rt.getCinematicDirector().isCutscenePlaying(), true);
+    assert.equal(rt.getCinematicDirector().getActiveCutsceneId(), entry.bossCutscene);
+  }
+
+  // 2. Negative test: 3-point multi-frame sampling catches wall occlusion occurring at 85% while clear at 55% mid-shot
+  const multiFrameProj = structuredClone(OBSIDIAN_CITADEL_PROJECT);
+  const mfRoom = multiFrameProj.worldMap!.rooms[0];
+  const ts = multiFrameProj.worldMap!.tileSize;
+  for (let r = 4; r <= 12; r++) {
+    for (let c = 3; c <= 14; c++) {
+      setRoomTile(mfRoom, 'ground', c, r, CASTLE_TILE_IDS.STONE_FLOOR);
+      setRoomTile(mfRoom, 'wall', c, r, 0);
+    }
+  }
+  // Single extruded south wall at col 8, row 9 (x=256..288, y=288)
+  setRoomTile(mfRoom, 'wall', 8, 9, CASTLE_TILE_IDS.WALL_GOTHIC);
+  multiFrameProj.entities = [
+    {
+      id: 'hero',
+      name: 'Hero',
+      roomId: mfRoom.id,
+      prefabId: 'castle_hero',
+      components: { transform: { x: 8 * ts, y: 5 * ts, w: 24, h: 24 }, tag: 'hero' },
+    },
+    {
+      id: 'moving_scout',
+      name: 'Moving Scout',
+      roomId: mfRoom.id,
+      components: {
+        // Starts at cx=144, moves +160px/s -> at 55% (0.55s) cx=232 (clear of x>=250), at 85% (0.85s) cx=280 (occluded behind wall at col 8, row 9!)
+        transform: { x: 132, y: 256, w: 24, h: 24 },
+        body2d: { vx: 160, vy: 0, gravityScale: 0, drag: 0 },
+        sprite: { sprite: 'castle_sentinel' },
+        tag: 'scout',
+      },
+    },
+  ];
+  multiFrameProj.cutscenes = [
+    {
+      id: 'late_occlusion_test',
+      name: 'Late Occlusion Shot',
+      trigger: 'manual',
+      roomId: mfRoom.id,
+      shots: [
+        {
+          id: 'track_scout',
+          durationSec: 1.0,
+          subject: 'moving_scout',
+          shotSize: 'MS',
+          anchor: 'center',
+          motion: 'spring',
+          motivation: 'track_moving_scout',
+        },
+      ],
+    },
+  ];
+  const mfReport = critiqueCutsceneAesthetics(multiFrameProj, 'late_occlusion_test');
+  assert.equal(mfReport.pass, false, 'Multi-frame oracle must fail when 85% sample is occluded behind extruded wall');
+  assert.ok(mfReport.shots[0].occlusionScore < 65, `Expected occlusionScore < 65, got ${mfReport.shots[0].occlusionScore}`);
+  assert.ok(
+    mfReport.shots[0].issues.some((iss) => iss.includes('occluded by extruded south wall')),
+    `Expected south-wall occlusion issue, got: ${mfReport.shots[0].issues.join('; ')}`,
+  );
+
+  // 3. Negative test: hd2d_3d pitchDeg/wallHeightScale reach catches secondary subject actorB occlusion in two_shot
+  const actorBProj = structuredClone(multiFrameProj);
+  actorBProj.projection = { ...actorBProj.projection!, mode: 'hd2d_3d', pitchDeg: 30, wallHeightScale: 1.5 };
+  // Place actorB 42px north of wall row 9 (y=288): reach = 28 * 1.5 / tan(30°) ≈ 72.7px (> 42px in 3D, > 28px in 2D)
+  actorBProj.entities = [
+    {
+      id: 'hero',
+      name: 'Hero',
+      roomId: mfRoom.id,
+      prefabId: 'castle_hero',
+      components: { transform: { x: 4 * ts, y: 7 * ts, w: 24, h: 24 }, tag: 'hero' },
+    },
+    {
+      id: 'ally_b',
+      name: 'Ally B',
+      roomId: mfRoom.id,
+      components: {
+        transform: { x: 8 * ts, y: 288 - 42 - 12, w: 24, h: 24 },
+        sprite: { sprite: 'castle_sentinel' },
+        tag: 'ally',
+      },
+    },
+  ];
+  actorBProj.cutscenes = [
+    {
+      id: 'actor_b_3d_occlusion',
+      name: 'Actor B 3D Occlusion',
+      trigger: 'manual',
+      roomId: mfRoom.id,
+      shots: [
+        {
+          id: 'two_shot_3d_check',
+          durationSec: 0.8,
+          subject: 'hero',
+          secondarySubject: 'ally_b',
+          shotSize: 'MS',
+          anchor: 'two_shot',
+          motion: 'spring',
+          motivation: 'confrontation',
+        },
+      ],
+    },
+  ];
+  const actorBReport = critiqueCutsceneAesthetics(actorBProj, 'actor_b_3d_occlusion');
+  assert.equal(actorBReport.pass, false, 'Oracle must fail when secondary actorB is occluded under hd2d_3d projected wall reach');
+  assert.ok(actorBReport.shots[0].occlusionScore < 65);
+  assert.ok(
+    actorBReport.shots[0].issues.some((iss) => iss.includes('Secondary subject is partially occluded')),
+    `Expected Secondary subject occlusion issue, got: ${actorBReport.shots[0].issues.join('; ')}`,
   );
 });
 

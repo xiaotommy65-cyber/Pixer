@@ -526,7 +526,22 @@ test('AI-Native MCP Dogfooding: AI builds, verifies, detects soft-lock, undoes, 
           rows: 1,
           toRoomId: 'obsidian_vault',
           targetX: 5 * 32 + 16,
-          targetY: 7 * 32,
+          targetY: 2 * 32,
+        },
+      },
+      {
+        type: 'upsert_portal',
+        portal: {
+          id: 'portal_vault_to_courtyard',
+          name: '秘庫歸路 → 城門外庭',
+          fromRoomId: 'obsidian_vault',
+          col: 5,
+          row: 8,
+          cols: 2,
+          rows: 1,
+          toRoomId: 'courtyard',
+          targetX: 13 * 32 + 16,
+          targetY: 14 * 32,
         },
       },
       {
@@ -961,6 +976,21 @@ test('M1 AI-Native MCP Proof: Author a 2-room Sci-Fi Orbital Deck purely via MCP
         },
       },
       {
+        type: 'upsert_portal',
+        portal: {
+          id: 'from_reactor',
+          name: '返回氣閘裝卸艙',
+          fromRoomId: 'reactor_core',
+          col: 5,
+          row: 5,
+          cols: 2,
+          rows: 1,
+          toRoomId: 'room_main',
+          targetX: 5 * 32 + 16,
+          targetY: 2 * 32,
+        },
+      },
+      {
         type: 'set_world_map_config',
         startRoomId: 'room_main',
         heroConfig: { walkSpriteA: 'sf_pilot', walkSpriteB: 'sf_pilot', slashSprite: 'sf_pilot' },
@@ -1143,4 +1173,123 @@ test('ECS_COMMAND_CATALOG documents 100% of EcsStudioCommand union members witho
   const extra = catalogTypes.filter((t) => !declaredTypes.includes(t));
   assert.deepEqual(missing, [], `Missing EcsStudioCommand entries in ECS_COMMAND_CATALOG: ${missing.join(', ')}`);
   assert.deepEqual(extra, [], `Stale entries in ECS_COMMAND_CATALOG: ${extra.join(', ')}`);
+});
+
+test('EcsSpatialOracle catches one-way dead-end rooms, walled-in portals, solid hero spawn & >16-hop chains', () => {
+  // 1. Both flagship projects PA-14 & PA-15 remain 100% reachable with 0 soft-locks
+  assert.equal(analyzeWorldMapReachability(OBSIDIAN_CITADEL_PROJECT).pass, true);
+  assert.equal(analyzeWorldMapReachability(EMERALD_RUINS_PROJECT).pass, true);
+
+  // 2. One-way dead-end room (no outgoing unlocked portal and no boss/victory trigger) MUST fail
+  const baseProj: EcsProjectV2 = structuredClone(OBSIDIAN_CITADEL_PROJECT);
+  const deadRoom = createEmptyRoom('dead_end_cellar', '死胡同地窖', 10, 8, CASTLE_TILE_IDS.STONE_FLOOR);
+  baseProj.worldMap!.rooms = [createEmptyRoom('courtyard', 'Start', 10, 8, CASTLE_TILE_IDS.STONE_FLOOR), deadRoom];
+  baseProj.worldMap!.startRoomId = 'courtyard';
+  baseProj.worldMap!.portals = [
+    {
+      id: 'to_dead_end',
+      name: 'One-Way Trap',
+      fromRoomId: 'courtyard',
+      col: 4,
+      row: 1,
+      cols: 2,
+      rows: 1,
+      toRoomId: 'dead_end_cellar',
+      targetX: 5 * 32,
+      targetY: 4 * 32,
+    },
+  ];
+  baseProj.entities = [
+    {
+      id: 'hero',
+      name: 'Hero',
+      roomId: 'courtyard',
+      components: { transform: { x: 4 * 32, y: 4 * 32, w: 32, h: 32 }, tag: 'hero' },
+    },
+  ];
+  const deadEndReach = analyzeWorldMapReachability(baseProj);
+  assert.equal(deadEndReach.pass, false, 'One-way dead-end room must fail reachability');
+  assert.ok(
+    deadEndReach.softLockRisks.some((r) => r.includes('dead_end_cellar') && r.includes('dead-end')),
+    `Expected one-way dead-end diagnostic, got: ${deadEndReach.softLockRisks.join('; ')}`,
+  );
+
+  // 3. Walled-in portal placed on solid wall without unlockGlobal must NOT be marked traversable
+  const walledPortalProj = structuredClone(baseProj);
+  setRoomTile(walledPortalProj.worldMap!.rooms[0], 'wall', 4, 0, CASTLE_TILE_IDS.WALL_GOTHIC);
+  setRoomTile(walledPortalProj.worldMap!.rooms[0], 'wall', 5, 0, CASTLE_TILE_IDS.WALL_GOTHIC);
+  walledPortalProj.worldMap!.portals = [
+    {
+      id: 'walled_portal',
+      name: 'Sealed Wall Portal',
+      fromRoomId: 'courtyard',
+      col: 4,
+      row: 0,
+      cols: 2,
+      rows: 1,
+      toRoomId: 'dead_end_cellar',
+      targetX: 5 * 32,
+      targetY: 4 * 32,
+    },
+  ];
+  const walledReach = analyzeWorldMapReachability(walledPortalProj);
+  assert.equal(walledReach.pass, false);
+  assert.ok(walledReach.unreachableRoomIds.includes('dead_end_cellar'), 'Walled-in portal must not traverse to target room');
+
+  // 4. Solid hero spawn cell must fail reachability
+  const solidHeroProj = structuredClone(baseProj);
+  setRoomTile(solidHeroProj.worldMap!.rooms[0], 'wall', 4, 4, CASTLE_TILE_IDS.WALL_BRICK);
+  const solidHeroReach = analyzeWorldMapReachability(solidHeroProj);
+  assert.equal(solidHeroReach.pass, false);
+  assert.ok(solidHeroReach.softLockRisks.some((r) => r.includes('Hero spawn cell')));
+
+  // 5. Long 20-room chain (> old 16 pass cap) with return portal to start must pass cleanly
+  const chainProj = structuredClone(baseProj);
+  chainProj.worldMap!.rooms = [];
+  chainProj.worldMap!.portals = [];
+  for (let i = 0; i < 20; i++) {
+    chainProj.worldMap!.rooms.push(
+      createEmptyRoom(`chain_${i}`, `Room ${i}`, 10, 8, CASTLE_TILE_IDS.STONE_FLOOR),
+    );
+    chainProj.worldMap!.portals.push({
+      id: `p_${i}`,
+      name: `Portal ${i}`,
+      fromRoomId: `chain_${i}`,
+      col: 4,
+      row: 2,
+      cols: 1,
+      rows: 1,
+      toRoomId: `chain_${(i + 1) % 20}`,
+      targetX: 4 * 32 + 16,
+      targetY: 4 * 32 + 16,
+    });
+  }
+  chainProj.worldMap!.startRoomId = 'chain_0';
+  chainProj.entities = [
+    {
+      id: 'hero',
+      name: 'Hero',
+      roomId: 'chain_0',
+      components: { transform: { x: 4 * 32, y: 4 * 32, w: 32, h: 32 }, tag: 'hero' },
+    },
+  ];
+  const chainReach = analyzeWorldMapReachability(chainProj);
+  assert.equal(chainReach.pass, true, `20-room chain should pass dynamic fixed-point limit: ${chainReach.softLockRisks.join('; ')}`);
+  assert.equal(chainReach.reachableRoomIds.length, 20);
+
+  // 6. Boss placed inside a solid wall cell adjacent to walkable floor must be flagged unreachable
+  const walledBossProj = structuredClone(baseProj);
+  walledBossProj.worldMap!.rooms = [createEmptyRoom('courtyard', 'Start', 10, 8, CASTLE_TILE_IDS.STONE_FLOOR)];
+  walledBossProj.worldMap!.portals = [];
+  setRoomTile(walledBossProj.worldMap!.rooms[0], 'wall', 6, 4, CASTLE_TILE_IDS.WALL_BRICK);
+  walledBossProj.entities.push({
+    id: 'walled_boss',
+    name: 'Walled Boss',
+    roomId: 'courtyard',
+    prefabId: 'demon_lord',
+    components: { transform: { x: 6 * 32, y: 4 * 32, w: 32, h: 32 }, tag: 'boss' },
+  });
+  const walledBossReach = analyzeWorldMapReachability(walledBossProj);
+  assert.equal(walledBossReach.pass, false);
+  assert.ok(walledBossReach.unreachableBossIds.includes('walled_boss'));
 });
