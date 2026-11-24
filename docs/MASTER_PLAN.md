@@ -58,5 +58,9 @@
 ---
 
 ## 5. Wave 1 Verification Log
-*(To be updated by Coordinator after merging all 4 worker branches)*
-- Pending merge & integrated verification.
+- **Status**: `PASSED` on `feat/swarm-p0-p1-hardening`
+- **`bun run audit -- --strict`**: `critical=0` (down from `6`), `warn=11` (down from `24`, 10 file-size + 1 Wave 2 `PERF-NO-CODE-SPLIT`), `circularDepsCount=0` (down from `2`), `probesFailed=0` (down from `4`), `snapshotArrayResets=0` (down from `11`), `ecsCommandTypes=42 / catalogEntries=42`, `totalDeadClasses=8` (down from `82`), `srcCssLoc=6816` (down from `7577`).
+- **`bun run lint`**: `0` TypeScript errors (`tsc --noEmit`).
+- **`bun run sim`**: `[SIM ALL PASSED]` — `ColorMath 50k Oklab mix: 2.23ms (heapDelta=0KB)`, `240f Snapshot Zero-GC: EcsCartridgeRuntime=0.58ms (heapDelta=48.5KB), ChunkedRuntime=2.10ms (heapDelta=26.7KB)`.
+- **`npm run test`**: `62 pass / 0 fail` (up from `58`).
+- **`bun run build` + `bun run clean`**: `210` modules built in `264ms` (`index.css` `123.60 kB -> 111.46 kB`, 0 chunk warnings), `dist/` cleaned.

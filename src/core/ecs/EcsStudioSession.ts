@@ -212,22 +212,31 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'upsert_hud_gauge', category: 'rules', fields: 'gauge: {kind,x,y,label,globalKey?,color,w?,h?,maxVal?}', note: 'Add or update a global-bound HUD indicator.' },
   { type: 'remove_hud_gauge', category: 'rules', fields: 'label', note: 'Remove a HUD gauge by label.' },
   { type: 'create_prefab', category: 'prefab', fields: 'prefab: EcsPrefabDef', note: 'Register a reusable entity blueprint.' },
+  { type: 'update_prefab', category: 'prefab', fields: 'prefabId, name?, category?, patch?, attachComponent?, detachComponent?', note: 'Update a Prefab blueprint name, category, or components in-place.' },
+  { type: 'delete_prefab', category: 'prefab', fields: 'prefabId, mode?: "unlink"|"remove_instances"', note: 'Delete a Prefab blueprint and either bake/unlink instances or remove them.' },
+  { type: 'save_entity_as_prefab', category: 'prefab', fields: 'entityId, prefabId, name?, category?, linkSourceEntity?', note: 'Promote an entity into a reusable Prefab blueprint and optionally link it.' },
   { type: 'instantiate_prefab', category: 'prefab', fields: 'prefabId, entityId?, name?, x?, y?, roomId?, overrides?', note: 'Spawn a linked prefab instance in a room.' },
+  { type: 'revert_prefab_overrides', category: 'prefab', fields: 'entityId, keepPosition?', note: 'Reset sparse component overrides on a Prefab instance back to blueprint defaults.' },
+  { type: 'unlink_prefab', category: 'prefab', fields: 'entityId', note: 'Bake resolved Prefab components onto an entity and break its Prefab link.' },
   { type: 'spawn_entity', category: 'entity', fields: 'entity: EcsEntityInitDef', note: 'Spawn a standalone ECS entity.' },
   { type: 'patch_entity', category: 'entity', fields: 'entityId, patch: EcsComponentOverrides', note: 'Patch entity transform/sprite/health/light/etc.' },
   { type: 'remove_entity', category: 'entity', fields: 'entityId', note: 'Remove an entity.' },
   { type: 'attach_component', category: 'entity', fields: 'entityId, component, value', note: 'Attach any dynamic ECS component.' },
+  { type: 'detach_component', category: 'entity', fields: 'entityId, component', note: 'Detach an ECS component from an entity (tracking detached prefab overrides).' },
   { type: 'upsert_custom_sprite', category: 'assets', fields: 'sprite: {id, name?, width, height, kind: "grid"|"procedural"|"rgba_b64", palette?, paletteRow?, pixels?, rgbaB64?, recipe?: {pattern, baseHex, secondaryHex?, accentHex?, outlineHex?, seed?, dither?, bevel?, emissiveCore?, frameBorder?}}', note: 'Create or update a project-embedded custom pixel sprite (grid, Oklab procedural, or lossless zlib RGBA from Aseprite/LDtk/Tiled) hot-compiled into TextureAtlas.' },
   { type: 'remove_custom_sprite', category: 'assets', fields: 'spriteId', note: 'Delete a project-embedded custom sprite and recycle its dynamic atlas slot.' },
   { type: 'upsert_animation', category: 'assets', fields: 'animation: {id, initialState, clips: [{name, frames[], fps, loop?, events?}], transitions: [{from, to, param, op, value, priority?}]}', note: 'Create or update a multi-frame AnimationStateMachineDef (bind via components.animatorId on entities or prefabs).' },
   { type: 'remove_animation', category: 'assets', fields: 'animationId', note: 'Remove an AnimationStateMachineDef by ID.' },
+  { type: 'load_project', category: 'scene', fields: 'project: EcsProjectV2', note: 'Validate and load a full EcsProjectV2 document, replacing the active project.' },
+  { type: 'set_viewport', category: 'scene', fields: 'preset?, width?, height?', note: 'Switch canvas viewport resolution via preset or explicit width/height.' },
   { type: 'upsert_cutscene', category: 'scene', fields: 'cutscene: {id, name, trigger?, roomId?, triggerGlobal?, handbackDurationSec?, skippable?, shots: [{id, durationSec, subject?, secondarySubject?, shotSize?: "EWS"|"WS"|"MS"|"CU"|"ECU", anchor?: "center"|"left_third"|"right_third"|"upper_third"|"lower_third"|"lead_room"|"two_shot", motion?: "cut"|"spring"|"push_in"|"pull_out"|"pan_smooth"|"impact_zoom", timeScale?, holdBeatSec?, motivation?, speaker?, subtitle?, splashTitle?, splashSubtitle?}]}', note: 'Create or update an Actor-Relative & Toric Space multi-shot cutscene / PV sequence with 3-Phase Seamless Spring Handback.' },
   { type: 'remove_cutscene', category: 'scene', fields: 'cutsceneId', note: 'Remove a cutscene / PV sequence by ID.' },
   { type: 'set_atmosphere', category: 'scene', fields: 'patch: {skyTop?, skyBottom?, ambientDarkness?, waterLevelNorm?, waterTint?, shadowOcclusion?, shadowStrength?, shadowSoftness?, tiltShiftBlur?, tiltShiftFocusY?, ambientParticles?: "none"|"embers"|"fireflies"|"dust"|"snow", ambientParticleDensity?, juiceScale?}', note: 'Configure HD-2D sky, 2D raymarched wall shadow occlusion, Tilt-Shift DoF, ambient GPU particles, and combat hitstop/shake juice scale.' },
   { type: 'set_global', category: 'scene', fields: 'key, value', note: 'Set initial project global variable.' },
   { type: 'set_projection', category: 'scene', fields: 'patch: {mode?: "ortho_2d"|"hd2d_iso"|"hd2d_3d"|"first_person_25d", pitchDeg?, fovDeg?, wallHeightScale?, billboardTiltDeg?, obliqueShadowAlpha?, elevationScale?, perspectiveSkew?, activeDimensionMask?, allowDimensionShift?}', note: 'Switch between True 3D HD-2D Perspective (hd2d_3d), 3/4 Strong-Volume 2.5D (hd2d_iso), ortho_2d, or first_person_25d.' },
   { type: 'upsert_script', category: 'script', fields: 'script: EcsScriptDef, graphLayout?', note: 'Upsert sandbox VM script / EventGraph.' },
-];
+  { type: 'remove_script', category: 'script', fields: 'scriptId', note: 'Delete a script and graph layout, and detach it from all entities.' },
+] as const;
 
 export interface EcsCommandResult {
   ok: boolean;

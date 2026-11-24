@@ -4,13 +4,15 @@ import type {
   OrthogonalFacing,
   OrthogonalPose,
 } from '../sim/OrthogonalArt.ts';
-import type { CartridgeId } from './CartridgeTypes.ts';
+import type { CartridgeId } from './CartridgeId.ts';
 import type {
   ChronicleHudSnapshot,
   RpgHudSnapshot,
   ShmupHudSnapshot,
   StageProgressInfo,
 } from './HudTypes.ts';
+
+export type { CartridgeId };
 
 export type WallMaterialKind = 'stone' | 'earth' | 'timber' | 'astral';
 

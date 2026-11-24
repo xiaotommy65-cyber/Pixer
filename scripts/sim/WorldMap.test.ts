@@ -22,7 +22,7 @@ import {
   validateEcsProjectV2,
   type EcsProjectV2,
 } from '../../src/core/ecs/EcsProjectSchema.ts';
-import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
+import { ECS_COMMAND_CATALOG, EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
 import {
   CASTLE_TILE_IDS,
   computeWallAutoTileMask,
@@ -1125,4 +1125,22 @@ test('M2 World Rules Inspector Parity: portals, interactions, AI profiles, heroC
     assert.equal(session.redo().ok, true);
     assert.ok(session.getProject().worldMap!.portals.some((p) => p.id === 'm2_test_portal'));
   }
+});
+
+test('ECS_COMMAND_CATALOG documents 100% of EcsStudioCommand union members without drift or duplicates', () => {
+  const src = readFileSync(resolve(process.cwd(), 'src/core/ecs/EcsStudioSession.ts'), 'utf8');
+  const cmdBlock = src.match(/export\s+type\s+EcsStudioCommand\s*=([\s\S]*?);\s*\r?\n\s*export\s+const\s+ECS_COMMAND_CATALOG/);
+  assert.ok(cmdBlock, 'EcsStudioCommand union block must exist in EcsStudioSession.ts');
+  const declaredTypes = [...cmdBlock[1].matchAll(/type:\s*'([a-z0-9_]+)'/g)].map((m) => m[1]);
+  assert.ok(declaredTypes.length >= 42, `Expected >=42 EcsStudioCommand variants, got ${declaredTypes.length}`);
+  assert.equal(new Set(declaredTypes).size, declaredTypes.length, 'EcsStudioCommand types must be unique');
+
+  const catalogTypes = ECS_COMMAND_CATALOG.map((entry) => entry.type);
+  const catalogSet = new Set<string>(catalogTypes);
+  assert.equal(catalogSet.size, catalogTypes.length, 'ECS_COMMAND_CATALOG must not contain duplicate command types');
+
+  const missing = declaredTypes.filter((t) => !catalogSet.has(t));
+  const extra = catalogTypes.filter((t) => !declaredTypes.includes(t));
+  assert.deepEqual(missing, [], `Missing EcsStudioCommand entries in ECS_COMMAND_CATALOG: ${missing.join(', ')}`);
+  assert.deepEqual(extra, [], `Stale entries in ECS_COMMAND_CATALOG: ${extra.join(', ')}`);
 });

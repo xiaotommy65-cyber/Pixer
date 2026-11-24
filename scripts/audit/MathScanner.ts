@@ -8,6 +8,8 @@ import {
   findAllMatchingLines,
   findFirstLine,
   readTextSafe,
+  relPosix,
+  walkFiles,
   type AuditFinding,
   type AuditOptions,
   type AuditSectionReport,
@@ -74,19 +76,19 @@ function runLiveMathProbes(findings: AuditFinding[]): Record<string, string | nu
     });
   }
 
-  // 4. GameFlowController truthy string trap check
+  // 4. GameFlowController return contract sanity (expected 'none' | 'intro_complete')
   probesRun++;
   const gfc = new GameFlowController();
   const stepRet = gfc.step(1 / 60);
-  if (Boolean(stepRet) && stepRet === 'none') {
+  if (stepRet !== 'none' && stepRet !== 'intro_complete') {
     probesFailed++;
     findings.push({
-      id: 'WIRING-GAMEFLOW-TRUTHY',
+      id: 'WIRING-GAMEFLOW-CONTRACT',
       severity: 'critical',
       category: 'arch',
       file: 'src/core/runtime/GameFlowController.ts',
       line: 187,
-      message: 'GameFlowController.step() returns truthy `"none"`, causing `if (transitionedToPlay)` callers to fire every frame.',
+      message: `Unexpected GameFlowController.step() return value: "${String(stepRet)}".`,
     });
   }
 
@@ -146,6 +148,29 @@ function scanMathAndShaderSources(rootDir: string, findings: AuditFinding[]): nu
       line: findFirstLine(runtimeSrc, /if\s*\(\s*transitionedToPlay\s*\)/),
       message: '`if (transitionedToPlay)` is always truthy (`"none"`/`"intro_complete"`), resetting cameraRig every frame.',
     });
+  }
+
+  // Scan all src/*.ts callers of gameFlow.step(...) for unguarded bare boolean checks `if (var)`
+  checks++;
+  for (const abs of walkFiles(rootDir, 'src', ['.ts'])) {
+    const srcText = readTextSafe(abs);
+    const assignRe = /const\s+(\w+)\s*=\s*[\w.]*gameFlow\.step\s*\(/g;
+    let m: RegExpExecArray | null = assignRe.exec(srcText);
+    while (m !== null) {
+      const varName = m[1];
+      const bareIfRe = new RegExp(`if\\s*\\(\\s*${varName}\\s*\\)`);
+      if (bareIfRe.test(srcText)) {
+        findings.push({
+          id: 'WIRING-GAMEFLOW-TRUTHY',
+          severity: 'critical',
+          category: 'arch',
+          file: relPosix(rootDir, abs),
+          line: findFirstLine(srcText, bareIfRe),
+          message: `Caller checks \`if (${varName})\` on \`gameFlow.step()\` which returns truthy \`"none"\`; compare \`=== 'intro_complete'\`.`,
+        });
+      }
+      m = assignRe.exec(srcText);
+    }
   }
 
   const worldMapSrc = readTextSafe(path.join(rootDir, 'src/core/ecs/EcsWorldMapController.ts'));

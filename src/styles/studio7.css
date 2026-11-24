@@ -40,11 +40,6 @@
   box-sizing: border-box;
 }
 
-/* Standalone Immersive Game Mode: hide developer workstation topbar */
-.atelier-shell.is-standalone-game .p7-topbar {
-  display: none;
-}
-
 .p7-brand {
   font-size: 18px;
   font-weight: 800;
@@ -129,10 +124,6 @@
 .atelier-shell.has-p7-topbar .window-status-chip {
   top: calc(var(--p7-topbar-h) + 12px) !important;
   z-index: 97;
-}
-
-.atelier-shell.has-p7-topbar .desk-world-stage {
-  padding-top: var(--p7-topbar-h);
 }
 
 /* Studio Workstation Root (Mode A — Primary Creative Surface) */
@@ -789,31 +780,6 @@
   color: var(--p7-text-muted);
   margin: 0;
   line-height: 1.5;
-}
-
-/* Legacy Pack On-Demand Loader Banner in Arcade Mode */
-.p7-legacy-btn {
-  appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 999px;
-  padding: 6px 12px;
-  background: rgba(15, 23, 42, 0.78);
-  color: #f8fafc;
-  font-family: var(--p7-font-sans);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  backdrop-filter: blur(8px);
-}
-
-.p7-legacy-btn:hover {
-  background: rgba(30, 41, 59, 0.92);
-}
-
-.p7-legacy-btn.is-loaded {
-  border-color: rgba(74, 222, 128, 0.5);
-  color: #86efac;
 }
 
 /* Full-width Select & Pixer 9.0 Batch 9.5 Visual Script Event Graph Editor */

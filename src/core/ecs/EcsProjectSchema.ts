@@ -7,9 +7,10 @@ import {
   type EcsCameraMotionKind,
   type EcsCutsceneDef,
   type EcsCutsceneShotDef,
+  type EcsCutsceneTrigger,
   type EcsScreenAnchor,
   type EcsShotSize,
-} from './EcsCinematicDirector.ts';
+} from './EcsCutsceneSchema.ts';
 import type { EcsWorldMapDef } from './EcsTilemapTypes.ts';
 
 export {
@@ -17,6 +18,7 @@ export {
   type EcsCameraMotionKind,
   type EcsCutsceneDef,
   type EcsCutsceneShotDef,
+  type EcsCutsceneTrigger,
   type EcsScreenAnchor,
   type EcsShotSize,
 };
