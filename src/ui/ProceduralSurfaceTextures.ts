@@ -405,12 +405,18 @@ export function renderTrayFeltTextureUrl(): string {
 }
 
 /**
- * Generates a soft edge-feathered architectural sunlight / hearth glow overlay (128x96)
- * with smooth falloff at all 4 borders so no rectangular edge ever appears.
+ * Generates a soft edge-feathered architectural sunlight / moonlight beam & hearth glow overlay (128x96)
+ * radiating cleanly from `sunNormX` with smooth 4-edge falloff so no rectangular cut ever appears.
  */
-export function renderWindowLightBeamUrl(warmTintHex: string, fireIntensity: number): string {
+export function renderWindowLightBeamUrl(
+  warmTintHex: string,
+  fireIntensity: number,
+  sunNormX = 0.42,
+): string {
+  const safeSunX = clamp01(sunNormX);
   const fireBucket = Math.round(clamp01(fireIntensity) * 4);
-  const key = `beam2:${warmTintHex}:${fireBucket}`;
+  const sunBucket = Math.round(safeSunX * 10);
+  const key = `beam3:${warmTintHex}:${fireBucket}:${sunBucket}`;
   const hit = URL_CACHE.get(key);
   if (hit) return hit;
 
@@ -426,33 +432,49 @@ export function renderWindowLightBeamUrl(warmTintHex: string, fireIntensity: num
 
   const data = surf.img.data;
   const isNightSpill = fireIntensity >= 0.65;
+  const beamSlope = (0.5 - safeSunX) * 0.44;
   for (let y = 0; y < h; y++) {
     const ny = y / (h - 1);
     const edgeY = Math.sin(ny * Math.PI);
+    const vFade = edgeY * (0.45 + 0.55 * Math.sin(clamp01(ny * 0.92) * Math.PI));
     for (let x = 0; x < w; x++) {
       const nx = x / (w - 1);
       const edgeX = Math.sin(nx * Math.PI);
-      const edgeMask = edgeX * edgeX * edgeY;
+      const edgeMask = edgeX * edgeX * vFade;
 
+      let outR = tr;
+      let outG = tg;
+      let outB = tb;
       let intensity = 0;
       if (isNightSpill) {
-        const dx = (nx - 0.54) * 1.4;
-        const dy = (ny - 0.36) * 1.5;
-        const radial = Math.max(0, 1 - Math.hypot(dx, dy) * 1.45);
-        intensity = radial * radial * edgeMask * 0.28;
+        const dx = (nx - safeSunX * 0.95) * 1.4;
+        const dy = (ny - 0.24) * 1.5;
+        const moonSpill = Math.pow(Math.max(0, 1 - Math.hypot(dx, dy) * 1.35), 2) * edgeMask * 0.22;
+        const hx = (nx - 0.34) * 1.35;
+        const hy = (ny - 0.58) * 1.35;
+        const hearth = Math.pow(Math.max(0, 1 - Math.hypot(hx, hy) * 1.4), 2) * edgeMask * 0.26;
+        const total = moonSpill + hearth;
+        if (total > 0.001) {
+          const wMoon = moonSpill / total;
+          outR = Math.round(166 * wMoon + tr * (1 - wMoon));
+          outG = Math.round(206 * wMoon + tg * (1 - wMoon));
+          outB = Math.round(255 * wMoon + tb * (1 - wMoon));
+          intensity = Math.min(0.32, total);
+        }
       } else {
-        const shiftX = nx - ny * 0.24;
-        const paneLeft = Math.max(0, 1 - Math.abs(shiftX - 0.36) * 5.2);
-        const paneRight = Math.max(0, 1 - Math.abs(shiftX - 0.62) * 5.2);
-        const beam = Math.max(paneLeft, paneRight);
-        const gentleWave = 0.92 + 0.08 * simplex2D(nx * 3, ny * 3, 29);
-        intensity = beam * beam * edgeMask * gentleWave * 0.24;
+        const shiftX = nx - ny * beamSlope - safeSunX;
+        const paneA = Math.max(0, 1 - Math.abs(shiftX + 0.16) * 5.8);
+        const paneB = Math.max(0, 1 - Math.abs(shiftX) * 4.8);
+        const paneC = Math.max(0, 1 - Math.abs(shiftX - 0.17) * 5.8);
+        const beam = Math.max(paneA * 0.82, paneB, paneC * 0.78);
+        const gentleWave = 0.9 + 0.1 * simplex2D(nx * 3.2, ny * 2.8, 29);
+        intensity = beam * beam * edgeMask * gentleWave * 0.34;
       }
 
       const dst = (y * w + x) * 4;
-      data[dst] = tr;
-      data[dst + 1] = tg;
-      data[dst + 2] = tb;
+      data[dst] = outR;
+      data[dst + 1] = outG;
+      data[dst + 2] = outB;
       data[dst + 3] = Math.round(clamp01(intensity) * 255);
     }
   }

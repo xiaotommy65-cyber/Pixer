@@ -54,13 +54,13 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  padding-bottom: clamp(10px, 2.2vh, 24px);
+  padding-bottom: clamp(44px, 8.8vh, 92px);
   gap: 0;
 }
 
 .atelier-shell.is-os-locked .switch-console {
   width: 100%;
-  margin-top: clamp(148px, 23vh, 210px);
+  margin-top: clamp(48px, 7.5vh, 92px);
 }
 
 .atelier-shell.is-os-locked .switch-stage[data-shell-phase='IN_GAME'] {
@@ -69,7 +69,7 @@ body {
 }
 
 .atelier-shell.is-os-locked .switch-stage[data-shell-phase='IN_GAME'] .switch-console {
-  margin-top: clamp(32px, 4.5vh, 46px);
+  margin-top: clamp(18px, 2.8vh, 36px);
 }
 
 .console-os-utility-bar {
@@ -1044,23 +1044,69 @@ body[data-perf='eco'] .lobby-lower-dock {
 
 /* ---------- 2.5D Hardware Glass Sheen, Inner Recess & Clean Lobby Telemetry ---------- */
 .screen-frame {
-  box-shadow: inset 0 4px 10px rgba(0, 0, 0, 0.22);
+  box-shadow:
+    inset 0 1.5px 0 color-mix(in srgb, var(--env-rim-color, #fff8e2) 48%, transparent),
+    inset 0 6px 14px rgba(0, 0, 0, 0.28),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.2);
 }
 
 .glass-sheen {
   position: absolute;
-  inset: -12%;
+  inset: 0;
   z-index: 8;
+  overflow: hidden;
   pointer-events: none;
-  background: linear-gradient(
-    118deg,
-    transparent 24%,
-    rgba(255, 255, 255, 0.16) 38%,
-    rgba(255, 255, 255, 0.04) 48%,
-    transparent 62%
+  border-radius: 10px;
+  transition: opacity 260ms ease;
+}
+
+.glass-sheen::before {
+  content: '';
+  position: absolute;
+  inset: -18%;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 56% 32% at var(--env-light-x, 42%) 4%,
+      color-mix(in srgb, var(--env-light-color, #ffecc2) 22%, transparent) 0%,
+      transparent 72%
+    ),
+    linear-gradient(
+      var(--env-glass-angle, 118deg),
+      transparent 20%,
+      color-mix(in srgb, var(--env-light-color, #fff6dc) 20%, rgba(255, 255, 255, 0.16)) 31%,
+      rgba(255, 255, 255, 0.05) 38%,
+      transparent 43%,
+      color-mix(in srgb, var(--env-rim-color, #fff8e2) 26%, rgba(255, 255, 255, 0.18)) 46%,
+      rgba(255, 255, 255, 0.04) 51%,
+      transparent 60%
+    );
+  transform: translate3d(
+    calc(var(--px, 0) * 26px + var(--env-light-dir, -0.16) * 14px),
+    calc(var(--py, 0) * 16px),
+    0
   );
-  transform: translate3d(calc(var(--px, 0) * 24px), calc(var(--py, 0) * 16px), 0);
-  transition: transform 120ms ease-out;
+  transition: transform 140ms ease-out, opacity 260ms ease;
+}
+
+.glass-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 10px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--env-rim-color, #fff8e2) 52%, transparent),
+    inset 1px 0 0 rgba(255, 255, 255, 0.14),
+    inset 0 -8px 18px rgba(8, 12, 22, 0.16);
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .glass-sheen {
+  opacity: 0.42;
+}
+
+.switch-stage[data-shell-phase='IN_GAME'] .glass-sheen::before {
+  opacity: 0.55;
 }
 
 .console-body.is-lobby-clean .screen-topbar .metric-tag {
@@ -1101,15 +1147,22 @@ body[data-perf='eco'] .lobby-lower-dock {
 .diorama-lamp-glow {
   position: absolute;
   inset: 0;
+  z-index: 2;
+  pointer-events: none;
   background:
     radial-gradient(
-      ellipse 56% 40% at 50% 22%,
-      color-mix(in srgb, var(--diorama-warm-glow, #ffd88a) 22%, transparent) 0%,
+      ellipse 56% 42% at var(--env-light-x, 42%) 18%,
+      color-mix(in srgb, var(--env-light-color, #ffecc2) 28%, transparent) 0%,
       transparent 72%
     ),
     radial-gradient(
+      circle at 14% 38%,
+      color-mix(in srgb, var(--diorama-warm-glow, #ff9a52) calc(var(--env-fire, 0) * 26%), transparent) 0%,
+      transparent 46%
+    ),
+    radial-gradient(
       circle at 82% 76%,
-      rgba(255, 210, 146, 0.16) 0%,
+      color-mix(in srgb, var(--diorama-warm-glow, #ffd292) 18%, transparent) 0%,
       transparent 44%
     );
   transition: background 600ms ease;
@@ -1117,20 +1170,22 @@ body[data-perf='eco'] .lobby-lower-dock {
 
 .diorama-light-shaft {
   position: absolute;
-  top: clamp(72px, 14vh, 130px);
-  left: 50%;
-  width: min(860px, 98vw);
-  height: clamp(220px, 44vh, 420px);
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: 100%;
+  height: clamp(340px, 78dvh, 760px);
   transform: translate3d(
-    calc(-50% + var(--px, 0) * -5px),
-    calc(var(--py, 0) * -3px),
+    calc(var(--px, 0) * -6px),
+    calc(var(--py, 0) * -4px),
     0
   );
   background-image: var(--tex-beam, none);
   background-size: 100% 100%;
   background-repeat: no-repeat;
+  mix-blend-mode: screen;
   pointer-events: none;
-  opacity: 0.85;
+  opacity: calc(0.72 * var(--env-light-strength, 0.9));
   transition: opacity 420ms ease;
 }
 
@@ -1236,18 +1291,28 @@ body[data-perf='eco'] .lobby-lower-dock {
   right: -1%;
   bottom: 0;
   z-index: 1;
-  height: clamp(86px, 14vh, 128px);
+  height: clamp(116px, 19vh, 174px);
   border-top: 3px solid var(--ink);
   border-radius: 16px 16px 0 0;
   background-color: #f5e8d4;
   background-image:
-    linear-gradient(180deg, rgba(255, 252, 246, 0.28) 0%, rgba(56, 40, 32, 0.04) 100%),
+    radial-gradient(
+      ellipse 56% 44% at calc(50% + var(--env-light-dir, -0.16) * -10%), 32%,
+      rgba(16, 12, 22, 0.24) 0%,
+      transparent 74%
+    ),
+    radial-gradient(
+      ellipse 60% 62% at var(--env-light-x, 42%) 10%,
+      color-mix(in srgb, var(--env-light-color, #ffecc2) 34%, transparent) 0%,
+      transparent 70%
+    ),
+    linear-gradient(180deg, rgba(255, 252, 246, 0.28) 0%, rgba(56, 40, 32, 0.06) 100%),
     var(--tex-fg, none);
-  background-size: 100% 100%, 128px 128px;
-  background-repeat: no-repeat, repeat;
+  background-size: 100% 100%, 100% 100%, 100% 100%, 128px 128px;
+  background-repeat: no-repeat, no-repeat, no-repeat, repeat;
   image-rendering: pixelated;
   box-shadow:
-    inset 0 5px 0 rgba(255, 252, 246, 0.52),
+    inset 0 5px 0 color-mix(in srgb, var(--env-rim-color, #fffdf8) 56%, rgba(255, 252, 246, 0.5)),
     0 -6px 22px rgba(16, 12, 24, 0.28);
   transition: border-radius 280ms ease, background-color 420ms ease, box-shadow 280ms ease;
 }
@@ -1255,10 +1320,10 @@ body[data-perf='eco'] .lobby-lower-dock {
 .diorama-bed-ledge[data-surface='oak'] {
   border-radius: 14px 14px 0 0;
   background-color: #e2be92;
-  background-size: 100% 100%, 192px 96px;
+  background-size: 100% 100%, 100% 100%, 100% 100%, 192px 96px;
   box-shadow:
-    inset 0 5px 0 rgba(255, 240, 216, 0.5),
-    0 -4px 18px rgba(56, 36, 18, 0.1);
+    inset 0 5px 0 color-mix(in srgb, var(--env-rim-color, #fff0d8) 54%, rgba(255, 240, 216, 0.48)),
+    0 -4px 18px rgba(56, 36, 18, 0.14);
 }
 
 .diorama-bed-ledge[data-surface='mat'] {
@@ -1266,11 +1331,21 @@ body[data-perf='eco'] .lobby-lower-dock {
   border-top: 3px solid #2b423b;
   background-color: #5d8579;
   background-image:
+    radial-gradient(
+      ellipse 56% 44% at calc(50% + var(--env-light-dir, -0.16) * -10%), 32%,
+      rgba(12, 20, 18, 0.26) 0%,
+      transparent 74%
+    ),
+    radial-gradient(
+      ellipse 58% 60% at var(--env-light-x, 42%) 10%,
+      color-mix(in srgb, var(--env-light-color, #ffecc2) 24%, transparent) 0%,
+      transparent 70%
+    ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(16, 26, 23, 0.14) 100%),
     var(--tex-fg, none);
-  background-size: 100% 100%, 128px 128px;
+  background-size: 100% 100%, 100% 100%, 100% 100%, 128px 128px;
   box-shadow:
-    inset 0 4px 0 rgba(212, 244, 234, 0.34),
+    inset 0 4px 0 color-mix(in srgb, var(--env-rim-color, #d4f4ea) 42%, rgba(212, 244, 234, 0.34)),
     0 -5px 0 #d4ab7c,
     0 -8px 0 var(--ink);
 }
@@ -1507,8 +1582,9 @@ body[data-perf='eco'] .lobby-lower-dock {
   border-radius: 16px;
   padding: 9px 10px;
   box-shadow:
-    inset 0 2px 0 rgba(255, 255, 255, 0.84),
-    0 5px 0 var(--ink);
+    inset 0 2px 0 color-mix(in srgb, var(--env-rim-color, #ffffff) 68%, #ffffff),
+    0 5px 0 var(--ink),
+    calc(var(--env-shadow-x, 6px) * 0.45) 12px 18px rgba(24, 16, 22, 0.2);
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -1679,6 +1755,10 @@ body[data-perf='eco'] .lobby-lower-dock {
 
 /* Mobile Portrait: NDS Split Console (center) + 3-page native scroll-snap desk */
 @media (max-width: 760px) and (orientation: portrait) {
+  .atelier-shell.is-os-locked .switch-stage {
+    padding-bottom: clamp(12px, 2.6vh, 24px);
+  }
+
   .desk-spatial-track {
     display: flex;
     flex-direction: row;
@@ -1893,6 +1973,8 @@ body[data-perf='eco'] .lobby-lower-dock {
 }
 
 body[data-perf='eco'] .glass-sheen,
+body[data-perf='eco'] .glass-sheen::before,
+body[data-perf='eco'] .glass-sheen::after,
 body[data-perf='eco'] .desk-world-bg,
 body[data-perf='eco'] .diorama-room-backdrop,
 body[data-perf='eco'] .diorama-light-shaft,
@@ -1913,6 +1995,8 @@ body[data-perf='eco'] .switch-stage[data-shell-phase='IN_GAME'] .diorama-room-ba
   .switch-console,
   .boot-pickup-hands,
   .glass-sheen,
+  .glass-sheen::before,
+  .glass-sheen::after,
   .desk-world-bg,
   .diorama-room-backdrop,
   .diorama-light-shaft,
