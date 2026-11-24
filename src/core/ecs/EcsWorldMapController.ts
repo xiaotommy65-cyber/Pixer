@@ -120,6 +120,29 @@ export class EcsWorldMapController {
   private prevJump = false;
 
   private readonly scratchPos: [number, number] = [0, 0];
+  private readonly toDestroyScratch: number[] = [];
+  private toDestroyCount = 0;
+  private readonly cachedAmbientLights: LightDesc[] = [];
+  private cachedAmbientLightCount = 0;
+  private readonly slashVisualScratch: {
+    active: boolean;
+    sprite: SpriteId | null;
+    color: string;
+    x: number;
+    y: number;
+    rot: number;
+    alpha: number;
+  } = {
+    active: false,
+    sprite: null,
+    color: '#fef08a',
+    x: 0,
+    y: 0,
+    rot: 0,
+    alpha: 0,
+  };
+  private readonly heroHpScratch = { hp: 0, maxHp: 10 };
+  private readonly bossInfoScratch = { name: '', hp: 0, maxHp: 0 };
   private readonly pathWorkspace = createPathfinderWorkspace(OCCLUSION_GRID_MAX * OCCLUSION_GRID_MAX);
   private readonly fovScratch = createSymmetricFovScratch(512);
   private currentGlobalsRef: ReadonlyMap<string, number> | null = null;
@@ -229,11 +252,16 @@ export class EcsWorldMapController {
   }
 
   public getBossInfo(): { name: string; hp: number; maxHp: number } {
-    return { name: this.bossName, hp: this.bossHp, maxHp: this.bossMaxHp };
+    this.bossInfoScratch.name = this.bossName;
+    this.bossInfoScratch.hp = this.bossHp;
+    this.bossInfoScratch.maxHp = this.bossMaxHp;
+    return this.bossInfoScratch;
   }
 
   public getHeroHp(): { hp: number; maxHp: number } {
-    return { hp: Math.max(0, this.heroHpCarry), maxHp: this.heroMaxHpCarry };
+    this.heroHpScratch.hp = Math.max(0, this.heroHpCarry);
+    this.heroHpScratch.maxHp = this.heroMaxHpCarry;
+    return this.heroHpScratch;
   }
 
   public getSlashVisual(): {
@@ -246,15 +274,15 @@ export class EcsWorldMapController {
     alpha: number;
   } {
     const hc = this.project.worldMap?.heroConfig;
-    return {
-      active: this.slashActiveTimer > 0 && Boolean(hc?.slashSprite),
-      sprite: hc?.slashSprite ?? null,
-      color: hc?.slashColor ?? '#fef08a',
-      x: this.slashX,
-      y: this.slashY,
-      rot: Math.atan2(this.facingY, this.facingX),
-      alpha: Math.min(1, this.slashActiveTimer / 0.14),
-    };
+    const s = this.slashVisualScratch;
+    s.active = this.slashActiveTimer > 0 && Boolean(hc?.slashSprite);
+    s.sprite = hc?.slashSprite ?? null;
+    s.color = hc?.slashColor ?? '#fef08a';
+    s.x = this.slashX;
+    s.y = this.slashY;
+    s.rot = Math.atan2(this.facingY, this.facingX);
+    s.alpha = Math.min(1, this.slashActiveTimer / 0.14);
+    return s;
   }
 
   public setEditorCamera(x: number, y: number): void {
@@ -301,6 +329,7 @@ export class EcsWorldMapController {
       this.activeRoom = null;
       this.activeRoomId = '';
       this.outTiles.length = 0;
+      this.cachedAmbientLightCount = 0;
       this.cameraX = 0;
       this.cameraY = 0;
       return;
@@ -338,6 +367,7 @@ export class EcsWorldMapController {
     if (!wm || wm.rooms.length === 0) {
       this.activeRoom = null;
       this.activeRoomId = '';
+      this.cachedAmbientLightCount = 0;
       return;
     }
 
@@ -495,10 +525,15 @@ export class EcsWorldMapController {
     if (!this.editorCamOverride) {
       this.snapCameraTo(heroFoundX, heroFoundY, vpW, vpH);
     } else {
-      this.clampCamera(vpW, vpH);
+      this.clampCamera(vpW, vpH, 1.0);
     }
-    this.director.cameraX = this.cameraX;
-    this.director.cameraY = this.cameraY;
+    this.director.syncLivePose(
+      this.cameraX,
+      this.cameraY,
+      1.0,
+      this.project.atmosphere.tiltShiftBlur ?? 0,
+      this.project.atmosphere.tiltShiftFocusY ?? 0.52,
+    );
 
     this.roomBannerText = room.name;
     this.roomBannerTimer = 2.6;
@@ -529,15 +564,20 @@ export class EcsWorldMapController {
   }
 
   /**
-   * Rebuilds the pooled `TileDesc[]` array for the active room (ground + decor + HD-2D extruded walls).
+   * Rebuilds the pooled `TileDesc[]` array for the active room (ground + decor + HD-2D extruded walls)
+   * and caches static ambient tile lights so 60Hz snapshots never rescan the wall grid.
    */
   public rebuildTiles(globals: ReadonlyMap<string, number>): void {
-    this.outTiles.length = 0;
     const room = this.activeRoom;
     const wm = this.project.worldMap;
-    if (!room || !wm) return;
+    if (!room || !wm) {
+      this.outTiles.length = 0;
+      this.cachedAmbientLightCount = 0;
+      return;
+    }
 
     let count = 0;
+    this.cachedAmbientLightCount = 0;
     const ts = wm.tileSize;
     const cols = room.cols;
     const rows = room.rows;
@@ -552,7 +592,7 @@ export class EcsWorldMapController {
         if (tid <= 0) continue;
         const def = getCastleTileDef(tid, customDefs);
         if (!def) continue;
-        const slot = this.acquireTile(count++);
+        const slot = this.acquireTile(count);
         slot.sprite = def.sprite;
         slot.x = c * ts;
         slot.y = wy;
@@ -566,7 +606,7 @@ export class EcsWorldMapController {
         slot.autoMask = 0;
         slot.sortY = -1000;
         slot.castShadow = false;
-        this.outTiles.push(slot);
+        this.outTiles[count++] = slot;
       }
     }
 
@@ -580,7 +620,7 @@ export class EcsWorldMapController {
         if (!def) continue;
         const rh = def.renderH ?? ts;
         const isTall = rh > ts;
-        const slot = this.acquireTile(count++);
+        const slot = this.acquireTile(count);
         slot.sprite = def.sprite;
         slot.x = c * ts;
         slot.y = isTall ? wy - (rh - ts) : wy;
@@ -594,7 +634,7 @@ export class EcsWorldMapController {
         slot.autoMask = 0;
         slot.sortY = isTall ? wy + ts + 2 : -900;
         slot.castShadow = isTall;
-        this.outTiles.push(slot);
+        this.outTiles[count++] = slot;
       }
     }
 
@@ -609,7 +649,7 @@ export class EcsWorldMapController {
       return (nDef.extrudeH ?? defaultExtrude) > 4;
     };
 
-    // 3. Wall Layer (HD-2D extruded walls & dynamic global-gated doors)
+    // 3. Wall Layer (HD-2D extruded walls & dynamic global-gated doors + cached ambient tile lights)
     for (let r = 0; r < rows; r++) {
       const wy = r * ts;
       for (let c = 0; c < cols; c++) {
@@ -626,7 +666,7 @@ export class EcsWorldMapController {
           if (isExtrudedWallCell(c, r + 1)) mask |= 4; // South
           if (isExtrudedWallCell(c - 1, r)) mask |= 8; // West
         }
-        const slot = this.acquireTile(count++);
+        const slot = this.acquireTile(count);
         slot.sprite = sprite;
         slot.x = c * ts;
         slot.y = wy;
@@ -640,8 +680,25 @@ export class EcsWorldMapController {
         slot.autoMask = mask;
         slot.sortY = wy + ts;
         slot.castShadow = !isUnlocked;
-        this.outTiles.push(slot);
+        this.outTiles[count++] = slot;
+
+        if (def.ambientLight && this.cachedAmbientLightCount < 22) {
+          let light = this.cachedAmbientLights[this.cachedAmbientLightCount];
+          if (!light) {
+            light = { x: 0, y: 0, radius: 24, color: '#ffffff', intensity: 0.5 };
+            this.cachedAmbientLights[this.cachedAmbientLightCount] = light;
+          }
+          light.x = c * ts + ts * 0.5;
+          light.y = wy + ts * 1.1;
+          light.radius = def.ambientLight.radius;
+          light.color = def.ambientLight.color;
+          light.intensity = def.ambientLight.intensity;
+          this.cachedAmbientLightCount++;
+        }
       }
+    }
+    if (this.outTiles.length > count) {
+      this.outTiles.length = count;
     }
 
     // 4. Rebuild GPU 2D Wall Shadow Occlusion Grid (64x64 R8, only uploaded on version bump)
@@ -682,22 +739,78 @@ export class EcsWorldMapController {
     return mask;
   }
 
-  private clampCamera(vpW: number, vpH: number): void {
+  private clampCamera(vpW: number, vpH: number, zoom = 1.0): void {
     const room = this.activeRoom;
     const wm = this.project.worldMap;
     if (!room || !wm) return;
     const worldW = room.cols * wm.tileSize;
     const worldH = room.rows * wm.tileSize;
-    const maxX = Math.max(0, worldW - vpW);
-    const maxY = Math.max(0, worldH - vpH);
-    this.cameraX = Math.max(0, Math.min(maxX, this.cameraX));
-    this.cameraY = Math.max(0, Math.min(maxY, this.cameraY));
+    const safeZoom = Math.max(0.25, zoom);
+    const effW = vpW / safeZoom;
+    const effH = vpH / safeZoom;
+    if (effW >= worldW) {
+      this.cameraX = (worldW - vpW) * 0.5;
+    } else {
+      const minX = (effW - vpW) * 0.5;
+      const maxX = worldW - (vpW + effW) * 0.5;
+      this.cameraX = Math.max(minX, Math.min(maxX, this.cameraX));
+    }
+    if (effH >= worldH) {
+      this.cameraY = (worldH - vpH) * 0.5;
+    } else {
+      const minY = (effH - vpH) * 0.5;
+      const maxY = worldH - (vpH + effH) * 0.5;
+      this.cameraY = Math.max(minY, Math.min(maxY, this.cameraY));
+    }
   }
 
   private snapCameraTo(targetX: number, targetY: number, vpW: number, vpH: number): void {
     this.cameraX = targetX - vpW * 0.5;
     this.cameraY = targetY - vpH * 0.5;
-    this.clampCamera(vpW, vpH);
+    this.clampCamera(vpW, vpH, 1.0);
+  }
+
+  private isBoxCollidingAt(
+    tx: number,
+    ty: number,
+    w: number,
+    h: number,
+    padX: number,
+    footTop: number,
+    footBot: number,
+    ts: number,
+    room: EcsMapRoomDef,
+    tileDefs: NonNullable<EcsProjectV2['worldMap']>['tileDefs'],
+    world: EcsWorld,
+  ): boolean {
+    const left = tx + padX;
+    const right = tx + w - padX;
+    const top = ty + footTop;
+    const bottom = ty + footBot;
+    const c0 = Math.floor(left / ts);
+    const c1 = Math.floor(right / ts);
+    const r0 = Math.floor(top / ts);
+    const r1 = Math.floor(bottom / ts);
+    for (let rr = r0; rr <= r1; rr++) {
+      for (let cc = c0; cc <= c1; cc++) {
+        if (isRoomCellSolid(room, cc, rr, world.globals, tileDefs)) return true;
+      }
+    }
+    const core = world.core;
+    const colStore = core.getStore(core.components.Collider);
+    const cx = tx + w * 0.5;
+    const cy = ty + h * 0.72;
+    for (let i = 0; i < colStore.size(); i++) {
+      const col = colStore.getDenseDataAt(i);
+      if (!col.isSolid) continue;
+      const eh = colStore.getDenseEntityAt(i);
+      const etr = core.getComponent(eh, core.components.Transform2D);
+      if (!etr) continue;
+      const ex = etr.x + etr.w * 0.5;
+      const ey = etr.y + etr.h * 0.78;
+      if (Math.hypot(cx - ex, cy - ey) < col.radius + 8) return true;
+    }
+    return false;
   }
 
   /**
@@ -725,44 +838,12 @@ export class EcsWorldMapController {
     const footTop = h * 0.48;
     const footBot = h - 3;
 
-    const core = world.core;
-    const colStore = core.getStore(core.components.Collider);
-
-    const collides = (tx: number, ty: number): boolean => {
-      const left = tx + padX;
-      const right = tx + w - padX;
-      const top = ty + footTop;
-      const bottom = ty + footBot;
-      const c0 = Math.floor(left / ts);
-      const c1 = Math.floor(right / ts);
-      const r0 = Math.floor(top / ts);
-      const r1 = Math.floor(bottom / ts);
-      for (let rr = r0; rr <= r1; rr++) {
-        for (let cc = c0; cc <= c1; cc++) {
-          if (isRoomCellSolid(room, cc, rr, world.globals, wm.tileDefs)) return true;
-        }
-      }
-      const cx = tx + w * 0.5;
-      const cy = ty + h * 0.72;
-      for (let i = 0; i < colStore.size(); i++) {
-        const col = colStore.getDenseDataAt(i);
-        if (!col.isSolid) continue;
-        const eh = colStore.getDenseEntityAt(i);
-        const etr = core.getComponent(eh, core.components.Transform2D);
-        if (!etr) continue;
-        const ex = etr.x + etr.w * 0.5;
-        const ey = etr.y + etr.h * 0.78;
-        if (Math.hypot(cx - ex, cy - ey) < col.radius + 8) return true;
-      }
-      return false;
-    };
-
     let nx = x;
     let ny = y;
-    if (dx !== 0 && !collides(nx + dx, ny)) {
+    if (dx !== 0 && !this.isBoxCollidingAt(nx + dx, ny, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world)) {
       nx += dx;
     }
-    if (dy !== 0 && !collides(nx, ny + dy)) {
+    if (dy !== 0 && !this.isBoxCollidingAt(nx, ny + dy, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world)) {
       ny += dy;
     }
     outPos[0] = nx;
@@ -781,6 +862,7 @@ export class EcsWorldMapController {
     vpH: number,
     eventsOut: SimEvent[],
     cb: WorldMapStepCallbacks,
+    directorDt = dt,
   ): void {
     const room = this.activeRoom;
     const wm = this.project.worldMap;
@@ -792,7 +874,7 @@ export class EcsWorldMapController {
       this.rebuildTiles(world.globals);
     }
 
-    if (this.roomBannerTimer > 0) this.roomBannerTimer = Math.max(0, this.roomBannerTimer - dt);
+    if (this.roomBannerTimer > 0) this.roomBannerTimer = Math.max(0, this.roomBannerTimer - directorDt);
     if (this.dashTimer > 0) this.dashTimer = Math.max(0, this.dashTimer - dt);
     if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - dt);
     if (this.slashCooldown > 0) this.slashCooldown = Math.max(0, this.slashCooldown - dt);
@@ -829,7 +911,8 @@ export class EcsWorldMapController {
 
     const roomWorldW = room.cols * wm.tileSize;
     const roomWorldH = room.rows * wm.tileSize;
-    const baseBlur = this.project.atmosphere.tiltShiftBlur ?? 0.34;
+    const baseBlur = this.project.atmosphere.tiltShiftBlur ?? 0;
+    const baseFocusY = this.project.atmosphere.tiltShiftFocusY ?? 0.52;
 
     if (heroHandle) {
       const hTr = core.getComponent(heroHandle, c.Transform2D);
@@ -849,7 +932,7 @@ export class EcsWorldMapController {
             hAnim.runtime.setParam('attacking', 0);
           }
           this.director.step(
-            dt,
+            directorDt,
             world,
             heroCx,
             heroCy,
@@ -863,11 +946,13 @@ export class EcsWorldMapController {
             roomWorldW,
             roomWorldH,
             baseBlur,
+            undefined,
+            baseFocusY,
           );
           if (!this.editorCamOverride) {
             this.cameraX = this.director.cameraX;
             this.cameraY = this.director.cameraY;
-            this.clampCamera(vpW, vpH);
+            this.clampCamera(vpW, vpH, this.director.cameraZoom);
           }
         } else {
           // 1. 8-Directional Movement + Dash
@@ -954,10 +1039,9 @@ export class EcsWorldMapController {
           // 5. Data-Driven Enemy & Boss AI + Hostile Projectiles
           this.stepAiEntities(dt, world, heroCx, heroCy, heroHandle, hHp, eventsOut, cb);
 
-          // 6. Clamped Follow Camera & Phase-3 Seamless Director Handback
-          const inHandback = this.director.getPhase() === 'handback';
+          // 6. Director-Driven Live Framing (Lead-Room Look-Ahead, Toric Boss Framing) & Phase-3 Seamless Handback
           this.director.step(
-            dt,
+            directorDt,
             world,
             heroCx,
             heroCy,
@@ -971,24 +1055,17 @@ export class EcsWorldMapController {
             roomWorldW,
             roomWorldH,
             baseBlur,
+            undefined,
+            baseFocusY,
           );
           if (this.editorCamOverride) {
             this.cameraX = this.editorCamX;
             this.cameraY = this.editorCamY;
-            this.clampCamera(vpW, vpH);
-          } else if (inHandback) {
+            this.clampCamera(vpW, vpH, 1.0);
+          } else {
             this.cameraX = this.director.cameraX;
             this.cameraY = this.director.cameraY;
-            this.clampCamera(vpW, vpH);
-          } else {
-            const targetCamX = heroCx - vpW * 0.5;
-            const targetCamY = heroCy - vpH * 0.5;
-            const lerp = Math.min(1, dt * 8.5);
-            this.cameraX += (targetCamX - this.cameraX) * lerp;
-            this.cameraY += (targetCamY - this.cameraY) * lerp;
-            this.clampCamera(vpW, vpH);
-            this.director.cameraX = this.cameraX;
-            this.director.cameraY = this.cameraY;
+            this.clampCamera(vpW, vpH, this.director.cameraZoom);
           }
 
           // 7. Room Portal Traversal
@@ -1067,6 +1144,10 @@ export class EcsWorldMapController {
     }
   }
 
+  private queueDestroy(eh: number): void {
+    this.toDestroyScratch[this.toDestroyCount++] = eh;
+  }
+
   private executeInteractionRule(
     rule: EcsMapInteractionRule,
     world: EcsWorld,
@@ -1077,7 +1158,6 @@ export class EcsWorldMapController {
     hHp: { hp: number; maxHp: number; hitFlash: number } | undefined,
     eventsOut: SimEvent[],
     cb: WorldMapStepCallbacks,
-    toDestroy: number[],
   ): void {
     if (rule.oneShot) {
       this.clearedEntityIds.add(entityId);
@@ -1087,7 +1167,7 @@ export class EcsWorldMapController {
       if (mat) mat.spriteId = rule.swapSprite;
     }
     if (rule.destroyOnUse) {
-      toDestroy.push(eh);
+      this.queueDestroy(eh);
     }
     if (rule.healAmount && hHp) {
       hHp.hp = Math.min(hHp.maxHp, hHp.hp + rule.healAmount);
@@ -1145,7 +1225,7 @@ export class EcsWorldMapController {
     const core = world.core;
     const c = core.components;
     const tagStore = core.getStore(c.Tag);
-    const toDestroy: number[] = [];
+    this.toDestroyCount = 0;
     const baseReach = this.project.worldMap?.heroConfig?.slashReach ?? 34;
 
     for (let i = 0; i < tagStore.size(); i++) {
@@ -1221,7 +1301,7 @@ export class EcsWorldMapController {
 
         if (killed) {
           this.clearedEntityIds.add(td.entityId);
-          toDestroy.push(eh);
+          this.queueDestroy(eh);
           if (aiProfile.scoreOnDefeat) cb.onScoreDelta(aiProfile.scoreOnDefeat);
           if (aiProfile.defeatPopup) cb.onPopup(aiProfile.defeatPopup, ex, ey - 24, '#fef08a');
           if (aiProfile.winOnDefeat) {
@@ -1241,13 +1321,14 @@ export class EcsWorldMapController {
         !this.clearedEntityIds.has(td.entityId) &&
         Math.hypot(ex - this.slashX, ey - this.slashY) <= baseReach
       ) {
-        this.executeInteractionRule(rule, world, eh, td.entityId, ex, ey, hHp, eventsOut, cb, toDestroy);
+        this.executeInteractionRule(rule, world, eh, td.entityId, ex, ey, hHp, eventsOut, cb);
       }
     }
 
-    for (let i = 0; i < toDestroy.length; i++) {
-      core.destroyEntity(toDestroy[i]);
+    for (let i = 0; i < this.toDestroyCount; i++) {
+      core.destroyEntity(this.toDestroyScratch[i]);
     }
+    this.toDestroyCount = 0;
   }
 
   private stepInteractions(
@@ -1264,7 +1345,7 @@ export class EcsWorldMapController {
     const core = world.core;
     const c = core.components;
     const tagStore = core.getStore(c.Tag);
-    const toDestroy: number[] = [];
+    this.toDestroyCount = 0;
 
     for (let i = 0; i < tagStore.size(); i++) {
       const eh = tagStore.getDenseEntityAt(i);
@@ -1277,13 +1358,14 @@ export class EcsWorldMapController {
       const ex = etr.x + etr.w * 0.5;
       const ey = etr.y + etr.h * 0.5;
       if (Math.hypot(heroCx - ex, heroCy - ey) < rule.radius) {
-        this.executeInteractionRule(rule, world, eh, td.entityId, ex, ey, hHp, eventsOut, cb, toDestroy);
+        this.executeInteractionRule(rule, world, eh, td.entityId, ex, ey, hHp, eventsOut, cb);
       }
     }
 
-    for (let i = 0; i < toDestroy.length; i++) {
-      core.destroyEntity(toDestroy[i]);
+    for (let i = 0; i < this.toDestroyCount; i++) {
+      core.destroyEntity(this.toDestroyScratch[i]);
     }
+    this.toDestroyCount = 0;
   }
 
   private stepAiEntities(
@@ -1299,7 +1381,7 @@ export class EcsWorldMapController {
     const core = world.core;
     const c = core.components;
     const tagStore = core.getStore(c.Tag);
-    const toDestroy: number[] = [];
+    this.toDestroyCount = 0;
     const projTag = this.project.worldMap?.hostileProjectileTag ?? 'enemy_orb';
 
     for (let i = 0; i < tagStore.size(); i++) {
@@ -1471,7 +1553,7 @@ export class EcsWorldMapController {
       } else if (td.tag === projTag) {
         if (dist < 18) {
           this.damageHero(hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
-          toDestroy.push(eh);
+          this.queueDestroy(eh);
         } else if (this.activeRoom && this.project.worldMap) {
           const ts = this.project.worldMap.tileSize;
           if (
@@ -1483,15 +1565,16 @@ export class EcsWorldMapController {
               this.project.worldMap.tileDefs,
             )
           ) {
-            toDestroy.push(eh);
+            this.queueDestroy(eh);
           }
         }
       }
     }
 
-    for (let i = 0; i < toDestroy.length; i++) {
-      core.destroyEntity(toDestroy[i]);
+    for (let i = 0; i < this.toDestroyCount; i++) {
+      core.destroyEntity(this.toDestroyScratch[i]);
     }
+    this.toDestroyCount = 0;
   }
 
   private findTriggeredPortal(heroCx: number, heroCy: number, ts: number): EcsMapPortalDef | null {
@@ -1512,7 +1595,7 @@ export class EcsWorldMapController {
   }
 
   /**
-   * Emits subtle ambient light pools defined declaratively by `EcsTileDef.ambientLight`.
+   * Emits subtle ambient light pools cached from `EcsTileDef.ambientLight` during `rebuildTiles()`.
    */
   public appendAmbientTileLights(
     acquireLight: (idx: number) => LightDesc,
@@ -1520,26 +1603,16 @@ export class EcsWorldMapController {
     startIdx: number,
   ): number {
     let idx = startIdx;
-    const room = this.activeRoom;
-    const wm = this.project.worldMap;
-    if (!room || !wm) return idx;
-    const ts = wm.tileSize;
-    const customDefs = wm.tileDefs;
-
-    for (let r = 0; r < room.rows && idx < 22; r++) {
-      for (let c = 0; c < room.cols && idx < 22; c++) {
-        const tid = room.wall[r * room.cols + c] ?? 0;
-        if (tid <= 0) continue;
-        const def = getCastleTileDef(tid, customDefs);
-        if (!def?.ambientLight) continue;
-        const l = acquireLight(idx++);
-        l.x = c * ts + ts * 0.5;
-        l.y = r * ts + ts * 1.1;
-        l.radius = def.ambientLight.radius;
-        l.color = def.ambientLight.color;
-        l.intensity = def.ambientLight.intensity;
-        outLights.push(l);
-      }
+    for (let i = 0; i < this.cachedAmbientLightCount && idx < 22; i++) {
+      const src = this.cachedAmbientLights[i];
+      const l = acquireLight(idx);
+      l.x = src.x;
+      l.y = src.y;
+      l.radius = src.radius;
+      l.color = src.color;
+      l.intensity = src.intensity;
+      l.falloffPower = undefined;
+      outLights[idx++] = l;
     }
     return idx;
   }

@@ -271,6 +271,26 @@ test('True ECS Arsenal Wiring: EcsWorldMapController wall-bypassing A* + FOV/LOS
   assert.equal(runtime.gameFlow.getScene(), 'playing');
   assert.equal(runtime.cameraRig.getActiveShot(), 'PLAY_STANDARD');
   assert.ok(Number.isFinite(runtime.cameraRig.viewProjMatrix[0]));
+
+  // Verify GameFlowController.step() returning 'none' does not reset cameraRig every frame
+  runtime.cameraRig.setShot('PLAY_OVERDRIVE', 8.0);
+  for (let i = 0; i < 15; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  assert.equal(
+    runtime.cameraRig.getActiveShot(),
+    'PLAY_OVERDRIVE',
+    'cameraRig shot must persist across runtime.step() frames instead of resetting on truthy "none"',
+  );
+
+  // Verify 'intro_complete' still promotes cameraRig cleanly back to PLAY_STANDARD
+  runtime.gameFlow.startStageIntro(0.25);
+  runtime.cameraRig.setShot('STAGE_FLYIN', 10.0);
+  for (let i = 0; i < 40; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  assert.equal(runtime.gameFlow.getScene(), 'playing');
+  assert.equal(runtime.cameraRig.getActiveShot(), 'PLAY_STANDARD');
 });
 
 test('Phase 5 Cinematic Director & Aesthetic Oracle: Auteur DSL, Toric Two-Shot, 3-Phase Spring Handback & MCP Critique', () => {
@@ -397,6 +417,193 @@ test('Phase 5 Cinematic Director & Aesthetic Oracle: Auteur DSL, Toric Two-Shot,
   assert.equal((mcp.session.getProject().cutscenes ?? []).length, 0);
   assert.equal(mcp.invokeTool('redo').isError, false);
   assert.equal((mcp.session.getProject().cutscenes ?? []).length, 1);
+});
+
+test('EcsCinematicDirector end-to-end wiring: live lead-room framing, bullet-time timeScale, HD-2D pitch/tiltShift, zoom clampAxis & moving-hero handback', () => {
+  const proj = structuredClone(OBSIDIAN_CITADEL_PROJECT);
+  const room = proj.worldMap!.rooms[0];
+  const ts = proj.worldMap!.tileSize;
+  const roomW = room.cols * ts;
+  const roomH = room.rows * ts;
+  const vpW = proj.viewport.width;
+  const vpH = proj.viewport.height;
+
+  // Clear central courtyard floor and isolate hero away from walls/enemies for clean framing checks
+  for (let r = 4; r <= 14; r++) {
+    for (let c = 4; c <= 22; c++) {
+      setRoomTile(room, 'ground', c, r, CASTLE_TILE_IDS.STONE_FLOOR);
+      setRoomTile(room, 'wall', c, r, 0);
+    }
+  }
+  proj.entities = [
+    {
+      id: 'hero',
+      name: 'Hero',
+      roomId: room.id,
+      prefabId: 'castle_hero',
+      components: { transform: { x: 12 * ts, y: 9 * ts, w: 24, h: 24 }, tag: 'hero' },
+    },
+  ];
+  proj.cutscenes = [
+    {
+      id: 'director_wiring_test',
+      name: 'Director Wiring Test',
+      trigger: 'manual',
+      roomId: room.id,
+      handbackDurationSec: 0.3,
+      shots: [
+        {
+          id: 'slow_ecu',
+          durationSec: 0.6,
+          subject: 'hero',
+          shotSize: 'ECU',
+          anchor: 'upper_third',
+          motion: 'cut',
+          timeScale: 0.25,
+          pitchDegOverride: 28,
+          tiltShiftBlurOverride: 0.74,
+        },
+      ],
+    },
+    {
+      id: 'edge_ecu_test',
+      name: 'Edge ECU Test',
+      trigger: 'manual',
+      roomId: room.id,
+      shots: [
+        {
+          id: 'ecu_corner',
+          durationSec: 0.5,
+          subject: 'hero',
+          shotSize: 'ECU',
+          anchor: 'center',
+          motion: 'cut',
+        },
+      ],
+    },
+    {
+      id: 'edge_ews_test',
+      name: 'Edge EWS Test',
+      trigger: 'manual',
+      roomId: room.id,
+      shots: [
+        {
+          id: 'ews_corner',
+          durationSec: 0.5,
+          subject: 'hero',
+          shotSize: 'EWS',
+          anchor: 'center',
+          motion: 'cut',
+        },
+      ],
+    },
+  ];
+
+  const runtime = new EcsCartridgeRuntime(proj);
+  const wm = runtime.getWorldMapController();
+  const dir = runtime.getCinematicDirector();
+  const core = runtime.world.core;
+
+  // 1. Live framing: moving right engages director lead-room look-ahead without EcsWorldMapController clobbering it
+  const moveRight = { ...createEmptyInputState(), right: true };
+  for (let i = 0; i < 25; i++) {
+    runtime.step(1 / 60, moveRight, DEFAULT_RUNTIME_PARAMS);
+  }
+  const tagStore = core.getStore(core.components.Tag);
+  let heroTr: { x: number; y: number; w: number; h: number } | undefined;
+  for (let i = 0; i < tagStore.size(); i++) {
+    if (tagStore.getDenseDataAt(i).tag === 'hero') {
+      heroTr = core.getComponent(tagStore.getDenseEntityAt(i), core.components.Transform2D);
+    }
+  }
+  assert.ok(heroTr, 'Hero Transform2D must exist');
+  const rawHeroCamX = heroTr!.x + heroTr!.w * 0.5 - vpW * 0.5;
+  const liveSnap = runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.ok(
+    liveSnap.cameraX > rawHeroCamX + 8,
+    `Director lead-room look-ahead must drive cameraX ahead of raw hero center (${liveSnap.cameraX.toFixed(1)} vs ${rawHeroCamX.toFixed(1)})`,
+  );
+  assert.ok(Math.abs(liveSnap.cameraX - wm.cameraX) < 0.01);
+  assert.ok(Math.abs(liveSnap.cameraX - dir.cameraX) < 0.01);
+
+  // 2. Cutscene timeScale, pitchDeltaDeg, tiltShiftBlur & zoom-aware tiltShiftFocusY propagation
+  const elapsedBefore = liveSnap.elapsedSec;
+  assert.equal(runtime.playCutscene('director_wiring_test'), true);
+  for (let i = 0; i < 15; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  const cutSnap = runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const elapsedDelta = cutSnap.elapsedSec - elapsedBefore;
+  assert.ok(
+    elapsedDelta > 0.03 && elapsedDelta < 0.12,
+    `Bullet-time timeScale=0.25 must scale simDt (0.25s real -> expected ~0.0625s sim, got ${elapsedDelta.toFixed(4)}s)`,
+  );
+  assert.ok(cutSnap.hd2dDepth, 'hd2dDepth must exist');
+  assert.ok(
+    Math.abs(cutSnap.hd2dDepth!.pitchDeg! - 28) < 0.5,
+    `Cutscene pitchDeltaDeg must propagate to hd2dDepth.pitchDeg (got ${cutSnap.hd2dDepth!.pitchDeg})`,
+  );
+  assert.ok(
+    Math.abs(cutSnap.hd2dDepth!.tiltShiftBlur! - 0.74) < 0.01,
+    `Cutscene tiltShiftBlur must propagate to hd2dDepth (got ${cutSnap.hd2dDepth!.tiltShiftBlur})`,
+  );
+  assert.ok(
+    (cutSnap.hd2dDepth!.tiltShiftFocusY ?? 0.52) < 0.45,
+    `Zoom-aware upper_third tiltShiftFocusY must shift upward (<0.45, got ${cutSnap.hd2dDepth!.tiltShiftFocusY})`,
+  );
+  assert.ok((cutSnap.cameraZoom ?? 1) > 1.5, 'ECU shot zoom must propagate to snapshot');
+
+  // 3. Handback smoothstep (no multiplicative collapse) & safe completion even while hero sprints
+  for (let i = 0; i < 23; i++) {
+    runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  }
+  assert.equal(dir.getPhase(), 'handback', 'Shot should transition cleanly into handback');
+  runtime.step(1 / 60, moveRight, DEFAULT_RUNTIME_PARAMS);
+  assert.ok(
+    Math.abs(dir.pitchDeltaDeg) > 10,
+    `Handback must interpolate monotonically without multiplicative collapse on early frames (got ${dir.pitchDeltaDeg})`,
+  );
+  for (let i = 0; i < 45; i++) {
+    runtime.step(1 / 60, moveRight, DEFAULT_RUNTIME_PARAMS);
+  }
+  assert.equal(dir.getPhase(), 'idle', 'Moving hero must not remain trapped in handback');
+  assert.equal(dir.timeScale, 1.0);
+  const afterHandbackSnap = runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(afterHandbackSnap.hd2dDepth!.pitchDeg, proj.projection!.pitchDeg);
+  assert.equal(afterHandbackSnap.hd2dDepth!.tiltShiftBlur, proj.atmosphere.tiltShiftBlur);
+
+  // 4. Zoom-aware clampAxis: ECU near corner keeps subject in frame; EWS near corner keeps viewport inside [0, roomSpan]
+  heroTr!.x = 40;
+  heroTr!.y = 40;
+  assert.equal(runtime.playCutscene('edge_ecu_test'), true);
+  runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  const ecuCenterX = dir.cameraX + vpW * 0.5;
+  const ecuCenterY = dir.cameraY + vpH * 0.5;
+  const ecuEffW = vpW / dir.cameraZoom;
+  const ecuEffH = vpH / dir.cameraZoom;
+  const heroU = 0.5 + (heroTr!.x + heroTr!.w * 0.5 - ecuCenterX) / ecuEffW;
+  const heroV = 0.5 + (heroTr!.y + heroTr!.h * 0.5 - ecuCenterY) / ecuEffH;
+  assert.ok(
+    heroU >= 0.05 && heroU <= 0.95 && heroV >= 0.05 && heroV <= 0.95,
+    `ECU near corner must not crop subject (u=${heroU.toFixed(3)}, v=${heroV.toFixed(3)})`,
+  );
+
+  dir.reset(true);
+  assert.equal(runtime.playCutscene('edge_ews_test'), true);
+  runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  runtime.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  const ewsCenterX = dir.cameraX + vpW * 0.5;
+  const ewsCenterY = dir.cameraY + vpH * 0.5;
+  const ewsEffW = vpW / dir.cameraZoom;
+  const ewsEffH = vpH / dir.cameraZoom;
+  assert.ok(
+    ewsCenterX - ewsEffW * 0.5 >= -0.5 &&
+      ewsCenterX + ewsEffW * 0.5 <= roomW + 0.5 &&
+      ewsCenterY - ewsEffH * 0.5 >= -0.5 &&
+      ewsCenterY + ewsEffH * 0.5 <= roomH + 0.5,
+    `EWS must clamp inside room bounds [0..${roomW}, 0..${roomH}] without exposing void`,
+  );
 });
 
 

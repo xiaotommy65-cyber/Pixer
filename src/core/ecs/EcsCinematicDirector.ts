@@ -1,170 +1,27 @@
 import { stepSpringInto } from '../math/SpringDynamics.ts';
-import type { BgmTheme, HudPrimitiveDesc } from '../types/WorldTypes.ts';
+import type { HudPrimitiveDesc } from '../types/WorldTypes.ts';
+import {
+  SHOT_SIZE_PRESETS,
+  validateCutsceneDef,
+  type EcsCameraMotionKind,
+  type EcsCutsceneDef,
+  type EcsCutsceneShotDef,
+  type EcsCutsceneTrigger,
+  type EcsScreenAnchor,
+  type EcsShotSize,
+} from './EcsCutsceneSchema.ts';
 import type { EcsWorld } from './EcsWorld.ts';
 
-/**
- * Auteur Actor-Relative Shot Size Presets:
- * - EWS: Extreme Wide Shot (panoramic arena / room overview)
- * - WS:  Wide Shot (establishing framing)
- * - MS:  Medium Shot (standard narrative framing)
- * - CU:  Close-Up (character expression / combat stance detail + medium Tilt-Shift DoF)
- * - ECU: Extreme Close-Up (dramatic cut-in / relic / blade detail + strong Tilt-Shift DoF)
- */
-export type EcsShotSize = 'EWS' | 'WS' | 'MS' | 'CU' | 'ECU';
-
-/**
- * Rule-of-Thirds & Toric Space Screen Composition Anchors:
- * - center:      (0.50, 0.50) dead-center symmetry
- * - left_third:  (0.333, 0.50) subject on left vertical third line (looking right)
- * - right_third: (0.667, 0.50) subject on right vertical third line (looking left)
- * - upper_third: (0.50, 0.36) subject on upper horizontal third line
- * - lower_third: (0.50, 0.64) subject on lower horizontal third line
- * - lead_room:   dynamic offset in front of subject's facing vector
- * - two_shot:    Toric 2-target algebraic framing keeping both subjects on golden thirds & 180-deg axis
- */
-export type EcsScreenAnchor =
-  | 'center'
-  | 'left_third'
-  | 'right_third'
-  | 'upper_third'
-  | 'lower_third'
-  | 'lead_room'
-  | 'two_shot';
-
-export type EcsCameraMotionKind =
-  | 'cut'
-  | 'spring'
-  | 'push_in'
-  | 'pull_out'
-  | 'pan_smooth'
-  | 'impact_zoom';
-
-/**
- * Murch Dramaturgy 14-Field Shot Card in Actor-Relative DSL.
- */
-export interface EcsCutsceneShotDef {
-  id: string;
-  durationSec: number;
-  /** Primary subject entity ID or tag (e.g., 'hero', 'boss') or 'point' for world coordinates. */
-  subject?: string;
-  /** Secondary subject entity ID or tag for 'two_shot' Toric framing. */
-  secondarySubject?: string;
-  /** Optional world-space focus X (or offset X when subject is an entity). */
-  focusX?: number;
-  /** Optional world-space focus Y (or offset Y when subject is an entity). */
-  focusY?: number;
-  shotSize?: EcsShotSize;
-  anchor?: EcsScreenAnchor;
-  motion?: EcsCameraMotionKind;
-  zoomOverride?: number;
-  pitchDegOverride?: number;
-  tiltShiftBlurOverride?: number;
-  /** Time dilation factor during this shot (0.08..2.0, default 1.0; < 1.0 = Bullet-Time slow-mo). */
-  timeScale?: number;
-  /** Murch Half-Beat Hold duration at end of shot (seconds). */
-  holdBeatSec?: number;
-  /** Explicit dramaturgical motivation for the camera move (e.g., 'gate_unsealed', 'boss_awakening'). */
-  motivation?: string;
-  /** Dialogue speaker badge label. */
-  speaker?: string;
-  /** Typewriter subtitle line. */
-  subtitle?: string;
-  /** Large act/boss introduction splash banner title. */
-  splashTitle?: string;
-  /** Splash banner subtitle. */
-  splashSubtitle?: string;
-  /** 21:9 Cinema Letterbox bar normalized height (0..1, default 1.0 during cutscenes). */
-  letterbox?: number;
-  /** Extra ambient darkness (0..0.75) to spotlight the framed subject. */
-  spotlightDarkness?: number;
-  /** Camera trauma shake impulse triggered at the start of this shot (0..1). */
-  shakeTrauma?: number;
-  /** Optional BGM cue on shot entry. */
-  bgmTheme?: BgmTheme;
-}
-
-export interface EcsCutsceneDef {
-  id: string;
-  name: string;
-  trigger?: 'manual' | 'on_room_enter' | 'on_global_set' | 'on_boss_phase';
-  roomId?: string;
-  triggerGlobal?: string;
-  /** 3-Phase Seamless Handback spring duration in seconds (default 0.45). */
-  handbackDurationSec?: number;
-  skippable?: boolean;
-  shots: EcsCutsceneShotDef[];
-}
-
-export const SHOT_SIZE_PRESETS: Readonly<
-  Record<EcsShotSize, { zoom: number; tiltShiftBlur: number; pitchDeltaDeg: number }>
-> = {
-  EWS: { zoom: 0.80, tiltShiftBlur: 0.14, pitchDeltaDeg: 5 },
-  WS: { zoom: 0.92, tiltShiftBlur: 0.22, pitchDeltaDeg: 2 },
-  MS: { zoom: 1.08, tiltShiftBlur: 0.34, pitchDeltaDeg: 0 },
-  CU: { zoom: 1.35, tiltShiftBlur: 0.52, pitchDeltaDeg: -4 },
-  ECU: { zoom: 1.62, tiltShiftBlur: 0.68, pitchDeltaDeg: -7 },
+export {
+  SHOT_SIZE_PRESETS,
+  validateCutsceneDef,
+  type EcsCameraMotionKind,
+  type EcsCutsceneDef,
+  type EcsCutsceneShotDef,
+  type EcsCutsceneTrigger,
+  type EcsScreenAnchor,
+  type EcsShotSize,
 };
-
-const VALID_SHOT_SIZES: ReadonlySet<string> = new Set(['EWS', 'WS', 'MS', 'CU', 'ECU']);
-const VALID_ANCHORS: ReadonlySet<string> = new Set([
-  'center',
-  'left_third',
-  'right_third',
-  'upper_third',
-  'lower_third',
-  'lead_room',
-  'two_shot',
-]);
-const VALID_MOTIONS: ReadonlySet<string> = new Set([
-  'cut',
-  'spring',
-  'push_in',
-  'pull_out',
-  'pan_smooth',
-  'impact_zoom',
-]);
-
-export function validateCutsceneDef(def: unknown, keyHint = 'cutscene'): string[] {
-  const errors: string[] = [];
-  if (!def || typeof def !== 'object') {
-    return [`${keyHint} must be an object`];
-  }
-  const c = def as Partial<EcsCutsceneDef>;
-  if (!c.id || typeof c.id !== 'string' || !/^[a-zA-Z0-9_-]{2,64}$/.test(c.id)) {
-    errors.push(`${keyHint}.id must match /^[a-zA-Z0-9_-]{2,64}$/`);
-  }
-  if (!c.name || typeof c.name !== 'string') {
-    errors.push(`${keyHint}.name must be a non-empty string`);
-  }
-  if (!Array.isArray(c.shots) || c.shots.length === 0) {
-    errors.push(`${keyHint}.shots must be a non-empty array`);
-    return errors;
-  }
-  for (let i = 0; i < c.shots.length; i++) {
-    const s = c.shots[i];
-    const sLabel = `${keyHint}.shots[${i}]`;
-    if (!s || typeof s !== 'object') {
-      errors.push(`${sLabel} must be an object`);
-      continue;
-    }
-    if (!s.id || typeof s.id !== 'string') {
-      errors.push(`${sLabel}.id is required`);
-    }
-    if (!Number.isFinite(s.durationSec) || s.durationSec < 0.1 || s.durationSec > 60) {
-      errors.push(`${sLabel}.durationSec must be in 0.1..60`);
-    }
-    if (s.shotSize !== undefined && !VALID_SHOT_SIZES.has(s.shotSize)) {
-      errors.push(`${sLabel}.shotSize '${String(s.shotSize)}' is invalid`);
-    }
-    if (s.anchor !== undefined && !VALID_ANCHORS.has(s.anchor)) {
-      errors.push(`${sLabel}.anchor '${String(s.anchor)}' is invalid`);
-    }
-    if (s.motion !== undefined && !VALID_MOTIONS.has(s.motion)) {
-      errors.push(`${sLabel}.motion '${String(s.motion)}' is invalid`);
-    }
-  }
-  return errors;
-}
 
 export interface ToricTwoShotSolution {
   centerX: number;
@@ -271,6 +128,13 @@ export class EcsCinematicDirector {
   private shotElapsedSec = 0;
   private handbackElapsedSec = 0;
   private handbackDurationSec = 0.45;
+  private handbackStartPitchDeg = 0;
+  private handbackStartBlur = 0.34;
+  private handbackStartFocusY = 0.52;
+  private handbackStartDarkness = 0;
+  private prevGameplayCamX = 0;
+  private prevGameplayCamY = 0;
+  private hasPrevGameplayCam = false;
   private readonly completedCutsceneIds = new Set<string>();
 
   // Peek camera override (for gate unlock / distant event reveal)
@@ -358,8 +222,43 @@ export class EcsCinematicDirector {
     this.springLeadX[1] = 0;
     this.springLeadY[0] = 0;
     this.springLeadY[1] = 0;
+    this.handbackStartPitchDeg = 0;
+    this.handbackStartDarkness = 0;
+    this.prevGameplayCamX = 0;
+    this.prevGameplayCamY = 0;
+    this.hasPrevGameplayCam = false;
     if (clearCompleted) {
       this.completedCutsceneIds.clear();
+    }
+  }
+
+  /** Synchronizes camera & atmosphere baselines after room spawn or live atmosphere edits without spring lag. */
+  public syncLivePose(
+    camX: number,
+    camY: number,
+    zoom = 1.0,
+    tiltShiftBlur = this.tiltShiftBlur,
+    tiltShiftFocusY = this.tiltShiftFocusY,
+  ): void {
+    this.cameraX = camX;
+    this.cameraY = camY;
+    this.cameraZoom = zoom;
+    this.springCamX[0] = camX;
+    this.springCamX[1] = 0;
+    this.springCamY[0] = camY;
+    this.springCamY[1] = 0;
+    this.springZoom[0] = zoom;
+    this.springZoom[1] = 0;
+    this.springLeadX[0] = 0;
+    this.springLeadX[1] = 0;
+    this.springLeadY[0] = 0;
+    this.springLeadY[1] = 0;
+    this.prevGameplayCamX = camX;
+    this.prevGameplayCamY = camY;
+    this.hasPrevGameplayCam = false;
+    if (this.phase === 'idle') {
+      this.tiltShiftBlur = tiltShiftBlur;
+      this.tiltShiftFocusY = tiltShiftFocusY;
     }
   }
 
@@ -513,8 +412,15 @@ export class EcsCinematicDirector {
     this.splashTimerSec = durationSec;
   }
 
-  private advanceCritSpring(state: Float64Array, target: number, freqHz: number, dt: number): void {
-    stepSpringInto(state[0], state[1], target, target, freqHz, 1.0, 0, dt, state);
+  private advanceCritSpring(
+    state: Float64Array,
+    target: number,
+    freqHz: number,
+    dt: number,
+    prevTarget = target,
+    response = 0,
+  ): void {
+    stepSpringInto(state[0], state[1], target, prevTarget, freqHz, 1.0, response, dt, state);
   }
 
   private enterShot(index: number, onShotStart?: (shot: EcsCutsceneShotDef) => void): void {
@@ -538,6 +444,11 @@ export class EcsCinematicDirector {
     this.phase = 'handback';
     this.handbackElapsedSec = 0;
     this.handbackDurationSec = Math.max(0.15, durationSec);
+    this.handbackStartPitchDeg = this.pitchDeltaDeg;
+    this.handbackStartBlur = this.tiltShiftBlur;
+    this.handbackStartFocusY = this.tiltShiftFocusY;
+    this.handbackStartDarkness = this.spotlightDarkness;
+    this.hasPrevGameplayCam = false;
     this.activeSpeaker = '';
     this.activeSubtitle = '';
   }
@@ -599,6 +510,7 @@ export class EcsCinematicDirector {
     roomWorldH: number,
     baseTiltShiftBlur: number,
     onShotStart?: (shot: EcsCutsceneShotDef) => void,
+    baseTiltShiftFocusY = 0.52,
   ): void {
     const dt = Math.max(0.0001, Math.min(0.1, realDt));
 
@@ -658,8 +570,8 @@ export class EcsCinematicDirector {
       }
     }
 
-    const gameplayCamX = this.clampAxis(gameplayCenterX - vpW * 0.5, vpW, roomWorldW);
-    const gameplayCamY = this.clampAxis(gameplayCenterY - vpH * 0.5, vpH, roomWorldH);
+    const gameplayCamX = this.clampAxis(gameplayCenterX - vpW * 0.5, vpW, roomWorldW, gameplayZoom);
+    const gameplayCamY = this.clampAxis(gameplayCenterY - vpH * 0.5, vpH, roomWorldH, gameplayZoom);
 
     // 2. Branch by Director Phase
     if (this.phase === 'playing_shots' && this.activeCutscene) {
@@ -725,8 +637,8 @@ export class EcsCinematicDirector {
       } else {
         resolveScreenAnchorNorm(anchor, subFx, subFy, this.scratchUv);
         // Place subject at normalized screen coordinate (u, v) by shifting camera center
-        const effW = vpW / Math.max(0.5, targetZoom);
-        const effH = vpH / Math.max(0.5, targetZoom);
+        const effW = vpW / Math.max(0.25, targetZoom);
+        const effH = vpH / Math.max(0.25, targetZoom);
         targetCenterX = subAx - (this.scratchUv[0] - 0.5) * effW;
         targetCenterY = subAy - (this.scratchUv[1] - 0.5) * effH;
       }
@@ -742,8 +654,8 @@ export class EcsCinematicDirector {
         targetZoom *= 1.0 + 0.22 * pulse;
       }
 
-      const targetCamX = this.clampAxis(targetCenterX - vpW * 0.5, vpW, roomWorldW);
-      const targetCamY = this.clampAxis(targetCenterY - vpH * 0.5, vpH, roomWorldH);
+      const targetCamX = this.clampAxis(targetCenterX - vpW * 0.5, vpW, roomWorldW, targetZoom);
+      const targetCamY = this.clampAxis(targetCenterY - vpH * 0.5, vpH, roomWorldH, targetZoom);
 
       if (motion === 'cut' && this.shotElapsedSec <= dt * 1.5) {
         this.cameraX = targetCamX;
@@ -771,7 +683,11 @@ export class EcsCinematicDirector {
 
       this.pitchDeltaDeg = shot.pitchDegOverride !== undefined ? shot.pitchDegOverride - 42 : sizePreset.pitchDeltaDeg;
       this.tiltShiftBlur = shot.tiltShiftBlurOverride ?? sizePreset.tiltShiftBlur;
-      this.tiltShiftFocusY = Math.max(0.15, Math.min(0.85, (subAy - this.cameraY) / Math.max(1, vpH)));
+      const shotEffH = Math.max(1, vpH / Math.max(0.25, this.cameraZoom));
+      this.tiltShiftFocusY = Math.max(
+        0.15,
+        Math.min(0.85, 0.5 + (subAy - (this.cameraY + vpH * 0.5)) / shotEffH),
+      );
       this.spotlightDarkness = Math.max(0, Math.min(0.75, shot.spotlightDarkness ?? 0.12));
       this.timeScale = Math.max(0.05, Math.min(2.0, shot.timeScale ?? 1.0));
 
@@ -789,8 +705,8 @@ export class EcsCinematicDirector {
 
     if (this.phase === 'peek') {
       this.peekRemainingSec -= dt;
-      const targetCamX = this.clampAxis(this.peekTargetX - vpW * 0.5, vpW, roomWorldW);
-      const targetCamY = this.clampAxis(this.peekTargetY - vpH * 0.5, vpH, roomWorldH);
+      const targetCamX = this.clampAxis(this.peekTargetX - vpW * 0.5, vpW, roomWorldW, this.peekZoom);
+      const targetCamY = this.clampAxis(this.peekTargetY - vpH * 0.5, vpH, roomWorldH, this.peekZoom);
       this.advanceCritSpring(this.springCamX, targetCamX, 2.4, dt);
       this.advanceCritSpring(this.springCamY, targetCamY, 2.4, dt);
       this.advanceCritSpring(this.springZoom, this.peekZoom, 2.4, dt);
@@ -800,7 +716,11 @@ export class EcsCinematicDirector {
       this.cameraZoom = this.springZoom[0];
       this.letterboxRatio = Math.max(0, Math.min(1, this.springLetterbox[0]));
       this.tiltShiftBlur = Math.max(baseTiltShiftBlur, 0.42);
-      this.tiltShiftFocusY = 0.5;
+      const peekEffH = Math.max(1, vpH / Math.max(0.25, this.cameraZoom));
+      this.tiltShiftFocusY = Math.max(
+        0.15,
+        Math.min(0.85, 0.5 + (this.peekTargetY - (this.cameraY + vpH * 0.5)) / peekEffH),
+      );
       this.timeScale = 1.0;
       if (this.peekRemainingSec <= 0) {
         this.enterHandback(0.38);
@@ -811,8 +731,14 @@ export class EcsCinematicDirector {
     if (this.phase === 'handback') {
       this.handbackElapsedSec += dt;
       const freqHz = 1.65 / Math.max(0.15, this.handbackDurationSec);
-      this.advanceCritSpring(this.springCamX, gameplayCamX, freqHz, dt);
-      this.advanceCritSpring(this.springCamY, gameplayCamY, freqHz, dt);
+      const prevCamX = this.hasPrevGameplayCam ? this.prevGameplayCamX : gameplayCamX;
+      const prevCamY = this.hasPrevGameplayCam ? this.prevGameplayCamY : gameplayCamY;
+      this.prevGameplayCamX = gameplayCamX;
+      this.prevGameplayCamY = gameplayCamY;
+      this.hasPrevGameplayCam = true;
+
+      this.advanceCritSpring(this.springCamX, gameplayCamX, freqHz, dt, prevCamX, 1.0);
+      this.advanceCritSpring(this.springCamY, gameplayCamY, freqHz, dt, prevCamY, 1.0);
       this.advanceCritSpring(this.springZoom, gameplayZoom, freqHz, dt);
       this.advanceCritSpring(this.springLetterbox, 0, freqHz * 1.25, dt);
 
@@ -821,45 +747,63 @@ export class EcsCinematicDirector {
       this.cameraZoom = this.springZoom[0];
       this.letterboxRatio = Math.max(0, Math.min(1, this.springLetterbox[0]));
 
-      const t = Math.min(1, this.handbackElapsedSec / this.handbackDurationSec);
-      this.pitchDeltaDeg *= 1 - t;
-      this.tiltShiftBlur = this.tiltShiftBlur * (1 - t) + baseTiltShiftBlur * t;
-      this.tiltShiftFocusY = this.tiltShiftFocusY * (1 - t) + 0.52 * t;
-      this.spotlightDarkness *= 1 - t;
+      const rawT = Math.max(0, Math.min(1, this.handbackElapsedSec / this.handbackDurationSec));
+      const s = rawT * rawT * (3 - 2 * rawT);
+      this.pitchDeltaDeg = this.handbackStartPitchDeg * (1 - s);
+      this.tiltShiftBlur = this.handbackStartBlur + (baseTiltShiftBlur - this.handbackStartBlur) * s;
+      this.tiltShiftFocusY = this.handbackStartFocusY + (baseTiltShiftFocusY - this.handbackStartFocusY) * s;
+      this.spotlightDarkness = this.handbackStartDarkness * (1 - s);
       this.timeScale = 1.0;
 
       const posErr = Math.hypot(this.cameraX - gameplayCamX, this.cameraY - gameplayCamY);
       const zoomErr = Math.abs(this.cameraZoom - gameplayZoom);
-      if (this.handbackElapsedSec >= this.handbackDurationSec && posErr < 1.5 && zoomErr < 0.02) {
+      const timedOut = this.handbackElapsedSec >= this.handbackDurationSec * 1.6;
+      if (
+        timedOut ||
+        (this.handbackElapsedSec >= this.handbackDurationSec && posErr < 1.5 && zoomErr < 0.02)
+      ) {
         this.phase = 'idle';
         this.activeCutscene = null;
         this.cameraX = gameplayCamX;
         this.cameraY = gameplayCamY;
         this.cameraZoom = gameplayZoom;
+        this.springCamX[0] = gameplayCamX;
+        this.springCamX[1] = 0;
+        this.springCamY[0] = gameplayCamY;
+        this.springCamY[1] = 0;
+        this.springZoom[0] = gameplayZoom;
+        this.springZoom[1] = 0;
         this.letterboxRatio = 0;
         this.pitchDeltaDeg = 0;
+        this.tiltShiftBlur = baseTiltShiftBlur;
+        this.tiltShiftFocusY = baseTiltShiftFocusY;
         this.spotlightDarkness = 0;
       }
       return;
     }
 
     // 3. Default Phase ('idle'): Live Gameplay Framing with Critically Damped Spring Follow
+    this.advanceCritSpring(this.springZoom, gameplayZoom, 2.8, dt);
+    this.cameraZoom = this.springZoom[0];
+
     const followRate = 1 - Math.exp(-10 * dt);
     this.cameraX += (gameplayCamX - this.cameraX) * followRate;
     this.cameraY += (gameplayCamY - this.cameraY) * followRate;
-    this.cameraX = this.clampAxis(this.cameraX, vpW, roomWorldW);
-    this.cameraY = this.clampAxis(this.cameraY, vpH, roomWorldH);
+    this.cameraX = this.clampAxis(this.cameraX, vpW, roomWorldW, this.cameraZoom);
+    this.cameraY = this.clampAxis(this.cameraY, vpH, roomWorldH, this.cameraZoom);
 
-    this.advanceCritSpring(this.springZoom, gameplayZoom, 2.8, dt);
-    this.cameraZoom = this.springZoom[0];
     this.letterboxRatio = 0;
     this.pitchDeltaDeg = 0;
     this.spotlightDarkness = this.impactTimerSec > 0 ? Math.min(0.28, this.impactBlurBoost * 0.7) : 0;
     this.tiltShiftBlur = Math.min(0.85, baseTiltShiftBlur + this.impactBlurBoost);
+    const idleEffH = Math.max(1, vpH / Math.max(0.25, this.cameraZoom));
     this.tiltShiftFocusY =
       this.impactTimerSec > 0
-        ? Math.max(0.18, Math.min(0.82, (this.impactFocusY - this.cameraY) / Math.max(1, vpH)))
-        : 0.52;
+        ? Math.max(
+            0.18,
+            Math.min(0.82, 0.5 + (this.impactFocusY - (this.cameraY + vpH * 0.5)) / idleEffH),
+          )
+        : baseTiltShiftFocusY;
     this.timeScale = this.impactTimeScale;
   }
 
@@ -881,7 +825,7 @@ export class EcsCinematicDirector {
     if (this.letterboxRatio > 0.01) {
       const barH = Math.round(vpH * 0.115 * this.letterboxRatio);
       if (barH > 0) {
-        const topBar = acquireHud(hCount++);
+        const topBar = acquireHud(hCount);
         topBar.kind = 'box';
         topBar.x = 0;
         topBar.y = 0;
@@ -890,9 +834,9 @@ export class EcsCinematicDirector {
         topBar.color = '#020617';
         topBar.alpha = 0.94;
         topBar.worldSpace = false;
-        outHud.push(topBar);
+        outHud[hCount++] = topBar;
 
-        const botBar = acquireHud(hCount++);
+        const botBar = acquireHud(hCount);
         botBar.kind = 'box';
         botBar.x = 0;
         botBar.y = vpH - barH;
@@ -901,7 +845,7 @@ export class EcsCinematicDirector {
         botBar.color = '#020617';
         botBar.alpha = 0.94;
         botBar.worldSpace = false;
-        outHud.push(botBar);
+        outHud[hCount++] = botBar;
       }
     }
 
@@ -909,7 +853,7 @@ export class EcsCinematicDirector {
     if (this.activeSplashTitle && this.splashTimerSec > 0) {
       const alpha = Math.min(1, this.splashTimerSec * 2.5);
       const cardY = Math.round(vpH * 0.24);
-      const plate = acquireHud(hCount++);
+      const plate = acquireHud(hCount);
       plate.kind = 'box';
       plate.x = Math.round(vpW * 0.18);
       plate.y = cardY - 6;
@@ -918,9 +862,9 @@ export class EcsCinematicDirector {
       plate.color = '#090d16';
       plate.alpha = 0.78 * alpha;
       plate.worldSpace = false;
-      outHud.push(plate);
+      outHud[hCount++] = plate;
 
-      const rule = acquireHud(hCount++);
+      const rule = acquireHud(hCount);
       rule.kind = 'box';
       rule.x = Math.round(vpW * 0.25);
       rule.y = cardY + (this.activeSplashSubtitle ? 18 : 19);
@@ -929,9 +873,9 @@ export class EcsCinematicDirector {
       rule.color = accentHex;
       rule.alpha = 0.92 * alpha;
       rule.worldSpace = false;
-      outHud.push(rule);
+      outHud[hCount++] = rule;
 
-      const title = acquireHud(hCount++);
+      const title = acquireHud(hCount);
       title.kind = 'text';
       title.x = Math.round(vpW * 0.5);
       title.y = cardY;
@@ -944,10 +888,10 @@ export class EcsCinematicDirector {
       title.shadowColor = '#020617';
       title.alpha = alpha;
       title.worldSpace = false;
-      outHud.push(title);
+      outHud[hCount++] = title;
 
       if (this.activeSplashSubtitle) {
-        const sub = acquireHud(hCount++);
+        const sub = acquireHud(hCount);
         sub.kind = 'text';
         sub.x = Math.round(vpW * 0.5);
         sub.y = cardY + 23;
@@ -960,7 +904,7 @@ export class EcsCinematicDirector {
         sub.shadowColor = '#020617';
         sub.alpha = 0.92 * alpha;
         sub.worldSpace = false;
-        outHud.push(sub);
+        outHud[hCount++] = sub;
       }
     }
 
@@ -971,7 +915,7 @@ export class EcsCinematicDirector {
       const visibleText = this.activeSubtitle.slice(0, this.subtitleProgressChars);
       const fullLine = this.activeSpeaker ? `${this.activeSpeaker}: ${visibleText}` : visibleText;
 
-      const txt = acquireHud(hCount++);
+      const txt = acquireHud(hCount);
       txt.kind = 'text';
       txt.x = Math.round(vpW * 0.5);
       txt.y = subY;
@@ -984,15 +928,20 @@ export class EcsCinematicDirector {
       txt.shadowColor = '#020617';
       txt.alpha = 0.98;
       txt.worldSpace = false;
-      outHud.push(txt);
+      outHud[hCount++] = txt;
     }
 
     return hCount;
   }
 
-  private clampAxis(pos: number, viewSpan: number, worldSpan: number): number {
-    const maxPos = Math.max(0, worldSpan - viewSpan);
-    return Math.max(0, Math.min(maxPos, pos));
+  private clampAxis(pos: number, viewSpan: number, worldSpan: number, zoom = 1.0): number {
+    const effSpan = viewSpan / Math.max(0.25, zoom);
+    if (effSpan >= worldSpan) {
+      return (worldSpan - viewSpan) * 0.5;
+    }
+    const minPos = (effSpan - viewSpan) * 0.5;
+    const maxPos = worldSpan - (viewSpan + effSpan) * 0.5;
+    return Math.max(minPos, Math.min(maxPos, pos));
   }
 
   private easeCubicInOut(t: number): number {

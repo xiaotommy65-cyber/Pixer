@@ -71,6 +71,9 @@ export interface FloatingTextSlot {
   color: string;
 }
 
+const CLIFF_MASK_SPRITES: readonly SpriteId[] = Array.from({ length: 16 }, (_, m) => `cliff_m${m}` as SpriteId);
+const GRASS_MASK_SPRITES: readonly SpriteId[] = Array.from({ length: 16 }, (_, m) => `grass_m${m}` as SpriteId);
+
 export interface RuntimeSnapshotBank {
   snapshot: RenderSceneSnapshot;
   stageInfo: StageProgressInfo;
@@ -88,6 +91,10 @@ export interface RuntimeSnapshotBank {
   lights: LightDesc[];
   debugRects: DebugRectDesc[];
   hudPrimitives: HudPrimitiveDesc[];
+  entitySink: EntityDesc[];
+  hudSink: HudPrimitiveDesc[];
+  debugSink: DebugRectDesc[];
+  particleSink: ParticleDesc[];
 }
 
 export function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): RuntimeSnapshotBank {
@@ -116,6 +123,10 @@ export function createRuntimeBank(cartridgeId: string, vp: LogicalViewport): Run
     lights,
     debugRects,
     hudPrimitives,
+    entitySink: [],
+    hudSink: [],
+    debugSink: [],
+    particleSink: [],
     snapshot: {
       cartridgeId,
       skyTop: '#76c7ff',
@@ -266,10 +277,6 @@ export function projectDataCartridgeSnapshot(
   const outFgTiles = bank.fgTiles;
   const outEntities = bank.entities;
   const outLights = bank.lights;
-  outTiles.length = 0;
-  outFgTiles.length = 0;
-  outEntities.length = 0;
-  outLights.length = 0;
 
   const st = ctx.def.stages[ctx.stageIdx];
   const t = ctx.juice.visualTime;
@@ -311,17 +318,17 @@ export function projectDataCartridgeSnapshot(
         const col = baseCol + lc;
         const x = col * TILE_SIZE;
         if (x + TILE_SIZE < visMinX || x > visMaxX) continue;
-        const dst = acquireTileSlot(bank.tileSlots, tileSlotCount++);
+        const dst = acquireTileSlot(bank.tileSlots, tileSlotCount);
         let sprite = ctx.tileSpriteLut[tid] ?? 'stone';
         let autoMask: number | undefined;
         if (autoTileEnabled) {
           if (sprite === 'stone') {
-            const mask = ctx.tilemap.getAutoMask(col, row);
-            sprite = `cliff_m${mask}`;
+            const mask = ctx.tilemap.getAutoMask(col, row) & 15;
+            sprite = CLIFF_MASK_SPRITES[mask];
             autoMask = mask;
           } else if (sprite === 'grass') {
-            const mask = ctx.tilemap.getAutoMask(col, row);
-            sprite = `grass_m${mask}`;
+            const mask = ctx.tilemap.getAutoMask(col, row) & 15;
+            sprite = GRASS_MASK_SPRITES[mask];
             autoMask = mask;
           }
         }
@@ -344,7 +351,7 @@ export function projectDataCartridgeSnapshot(
         dst.autoMask = autoMask;
         dst.variant = undefined;
         dst.windSway = undefined;
-        outTiles.push(dst);
+        outTiles[tileSlotCount++] = dst;
       }
     }
   }
@@ -367,7 +374,7 @@ export function projectDataCartridgeSnapshot(
           if (ftid === 0) continue;
           const x = (baseCol + lc) * TILE_SIZE;
           if (x + TILE_SIZE < visMinX || x > visMaxX) continue;
-          const dst = acquireTileSlot(bank.fgTileSlots, fgSlotCount++);
+          const dst = acquireTileSlot(bank.fgTileSlots, fgSlotCount);
           dst.sprite = ctx.fgSpriteLut[ftid] ?? 'tree_canopy';
           dst.x = x;
           dst.y = y;
@@ -384,7 +391,7 @@ export function projectDataCartridgeSnapshot(
           dst.castShadow = false;
           dst.alpha = ctx.fgAlphaLut[ftid];
           dst.flipX = undefined;
-          outFgTiles.push(dst);
+          outFgTiles[fgSlotCount++] = dst;
         }
       }
     }
@@ -392,7 +399,7 @@ export function projectDataCartridgeSnapshot(
   for (let i = 0; i < ctx.fgExtraTiles.length; i++) {
     const ft = ctx.fgExtraTiles[i];
     if (ft.x + ft.w < visMinX || ft.x > visMaxX || ft.y + ft.h < visMinY || ft.y > visMaxY) continue;
-    const dst = acquireTileSlot(bank.fgTileSlots, fgSlotCount++);
+    const dst = acquireTileSlot(bank.fgTileSlots, fgSlotCount);
     dst.sprite = ft.sprite;
     dst.x = ft.x;
     dst.y = ft.y;
@@ -409,8 +416,9 @@ export function projectDataCartridgeSnapshot(
     dst.castShadow = false;
     dst.alpha = ft.alpha;
     dst.flipX = ft.flipX;
-    outFgTiles.push(dst);
+    outFgTiles[fgSlotCount++] = dst;
   }
+  if (outFgTiles.length > fgSlotCount) outFgTiles.length = fgSlotCount;
 
   let bossHp = 0;
   let bossMaxHp = 0;
@@ -435,7 +443,7 @@ export function projectDataCartridgeSnapshot(
     if ((ctx.pool.behaviorMask[s] & BM_MOVING_PLATFORM) !== 0) {
       if (rx + ew < visMinX || rx > visMaxX || ry + 20 < visMinY || ry > visMaxY) continue;
       for (let tx = 0; tx < ew; tx += TILE_SIZE) {
-        const dst = acquireTileSlot(bank.tileSlots, tileSlotCount++);
+        const dst = acquireTileSlot(bank.tileSlots, tileSlotCount);
         dst.sprite = 'moving_plat';
         dst.x = rx + tx;
         dst.y = ry;
@@ -452,7 +460,7 @@ export function projectDataCartridgeSnapshot(
         dst.castShadow = undefined;
         dst.alpha = undefined;
         dst.flipX = undefined;
-        outTiles.push(dst);
+        outTiles[tileSlotCount++] = dst;
       }
       continue;
     }
@@ -493,9 +501,17 @@ export function projectDataCartridgeSnapshot(
       }
       ctx.lastHeroSprite = sprite;
 
-      entSlotCount = ctx.visualRig.emitPreHeroEntities(outEntities, bank.entitySlots, entSlotCount);
+      if (ctx.visualRig.hasVerletRig() || ctx.visualRig.hasAfterimage()) {
+        const prevEntIdx = entSlotCount;
+        const eSink = bank.entitySink;
+        while (eSink.length > 0) eSink.pop();
+        entSlotCount = ctx.visualRig.emitPreHeroEntities(eSink, bank.entitySlots, entSlotCount);
+        for (let k = 0; k < eSink.length; k++) {
+          outEntities[prevEntIdx + k] = eSink[k];
+        }
+      }
 
-      const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+      const dst = acquireEntitySlot(bank.entitySlots, entSlotCount);
       dst.id = isShmup ? 'ship' : 'hero';
       dst.sprite = sprite;
       dst.x = rx;
@@ -525,20 +541,28 @@ export function projectDataCartridgeSnapshot(
       dst.yawRad = undefined;
       dst.billboardScale = undefined;
       dst.hideInFirstPerson = ctx.dualPerspective.isEnabled() ? true : undefined;
-      outEntities.push(dst);
+      outEntities[entSlotCount++] = dst;
 
-      entSlotCount = ctx.visualRig.emitPostHeroEntities(outEntities, bank.entitySlots, entSlotCount);
+      if (ctx.visualRig.hasIkRig()) {
+        const prevPostIdx = entSlotCount;
+        const eSink = bank.entitySink;
+        while (eSink.length > 0) eSink.pop();
+        entSlotCount = ctx.visualRig.emitPostHeroEntities(eSink, bank.entitySlots, entSlotCount);
+        for (let k = 0; k < eSink.length; k++) {
+          outEntities[prevPostIdx + k] = eSink[k];
+        }
+      }
 
       if (glow > 0.05) {
         const isDark = (st.ambientDarkness ?? 0) > 0.16;
-        const l = acquireLightSlot(bank.lightSlots, lightSlotCount++);
+        const l = acquireLightSlot(bank.lightSlots, lightSlotCount);
         l.x = rx + 8;
         l.y = ry + 8;
         l.radius = isShmup ? 24 : isDark ? 42 : 22;
         l.color = loadout?.accentHex ?? '#ffe8a8';
         l.intensity = (isShmup ? 0.18 : isDark ? 0.42 : 0.09) * glow;
         l.falloffPower = undefined;
-        outLights.push(l);
+        outLights[lightSlotCount++] = l;
       }
       continue;
     }
@@ -578,7 +602,7 @@ export function projectDataCartridgeSnapshot(
       }
 
       const crumbleShakeX = (f & EF_CRUMBLE_TILE) !== 0 && ctx.pool.aiState[s] === 1 ? Math.sin(t * 58) * 1.4 : 0;
-      const dst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+      const dst = acquireEntitySlot(bank.entitySlots, entSlotCount);
       dst.id = ctx.getEntityId(s, archIdx);
       dst.sprite = sprite;
       dst.x = rx + crumbleShakeX;
@@ -608,20 +632,22 @@ export function projectDataCartridgeSnapshot(
       dst.yawRad = undefined;
       dst.billboardScale = undefined;
       dst.hideInFirstPerson = undefined;
-      outEntities.push(dst);
+      outEntities[entSlotCount++] = dst;
     }
 
     if (inLightFrustum && arch?.def.light) {
-      const l = acquireLightSlot(bank.lightSlots, lightSlotCount++);
+      const l = acquireLightSlot(bank.lightSlots, lightSlotCount);
       l.x = rx + ew * 0.5;
       l.y = ry + eh * 0.5;
       l.radius = lr;
       l.color = arch.def.light.color;
       l.intensity = arch.def.light.intensity * glow;
       l.falloffPower = undefined;
-      outLights.push(l);
+      outLights[lightSlotCount++] = l;
     }
   }
+  if (outTiles.length > tileSlotCount) outTiles.length = tileSlotCount;
+  if (outLights.length > lightSlotCount) outLights.length = lightSlotCount;
 
   // Emit runtime grapple rope & aiming reticle when grappleConfig is active
   if (ctx.grappleEnabled && ctx.playerSlot >= 0 && (ctx.pool.flags[ctx.playerSlot] & EF_ALIVE) !== 0) {
@@ -635,7 +661,7 @@ export function projectDataCartridgeSnapshot(
       const ang = Math.atan2(dy, dx);
       for (let k = 0; k < RT_GRAPPLE_LINKS; k++) {
         const u = (k + 1) / (RT_GRAPPLE_LINKS + 1);
-        const lDst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+        const lDst = acquireEntitySlot(bank.entitySlots, entSlotCount);
         lDst.id = ctx.grappleLinkIds[k];
         lDst.sprite = 'grapple_link';
         lDst.x = hx + dx * u - 5;
@@ -659,9 +685,9 @@ export function projectDataCartridgeSnapshot(
         lDst.castShadow = false;
         lDst.shadowRadius = undefined;
         lDst.sortY = undefined;
-        outEntities.push(lDst);
+        outEntities[entSlotCount++] = lDst;
       }
-      const cDst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+      const cDst = acquireEntitySlot(bank.entitySlots, entSlotCount);
       cDst.id = 'rt-grapple-claw';
       cDst.sprite = 'grapple_claw';
       cDst.x = endX - 7;
@@ -685,9 +711,9 @@ export function projectDataCartridgeSnapshot(
       cDst.castShadow = false;
       cDst.shadowRadius = undefined;
       cDst.sortY = undefined;
-      outEntities.push(cDst);
+      outEntities[entSlotCount++] = cDst;
     } else if (ctx.grapplePreviewKind !== 'none') {
-      const rDst = acquireEntitySlot(bank.entitySlots, entSlotCount++);
+      const rDst = acquireEntitySlot(bank.entitySlots, entSlotCount);
       rDst.id = 'rt-grapple-reticle';
       rDst.sprite = 'grapple_reticle';
       rDst.x = ctx.grapplePreviewX - 7;
@@ -711,14 +737,14 @@ export function projectDataCartridgeSnapshot(
       rDst.castShadow = false;
       rDst.shadowRadius = undefined;
       rDst.sortY = undefined;
-      outEntities.push(rDst);
+      outEntities[entSlotCount++] = rDst;
     }
   }
+  if (outEntities.length > entSlotCount) outEntities.length = entSlotCount;
 
   let debugRects: DebugRectDesc[] | undefined;
   if (ctx.debugHitboxes) {
     debugRects = bank.debugRects;
-    debugRects.length = 0;
     let dCount = 0;
     const c0 = Math.max(0, Math.floor(visMinX / TILE_SIZE));
     const c1 = Math.min(ctx.tilemap.cols - 1, Math.floor(visMaxX / TILE_SIZE));
@@ -728,31 +754,42 @@ export function projectDataCartridgeSnapshot(
       for (let c = c0; c <= c1; c++) {
         const colKind = ctx.tilemap.getCollision(c, r);
         if (colKind === COLLISION_EMPTY) continue;
-        const dr = acquireDebugRectSlot(bank.debugRectSlots, dCount++);
+        const dr = acquireDebugRectSlot(bank.debugRectSlots, dCount);
         dr.x = c * TILE_SIZE;
         dr.y = r * TILE_SIZE;
         dr.w = TILE_SIZE;
         dr.h = colKind === COLLISION_CLOUD ? 10 : TILE_SIZE;
         dr.color = colKind === COLLISION_CLOUD ? '#5ec2f7' : '#56d39c';
-        debugRects.push(dr);
+        debugRects[dCount++] = dr;
       }
     }
-    for (let i = 0; i < outEntities.length; i++) {
+    for (let i = 0; i < entSlotCount; i++) {
       const e = outEntities[i];
-      const dr = acquireDebugRectSlot(bank.debugRectSlots, dCount++);
+      const dr = acquireDebugRectSlot(bank.debugRectSlots, dCount);
       dr.x = e.x;
       dr.y = e.y;
       dr.w = e.w;
       dr.h = e.h;
       dr.color = e.id === 'hero' || e.id === 'ship' ? '#ffd447' : '#e0aaff';
-      debugRects.push(dr);
+      debugRects[dCount++] = dr;
     }
+    if (debugRects.length > dCount) debugRects.length = dCount;
   }
 
-  bank.particles.length = 0;
+  let pCount = 0;
   const jp = ctx.juice.particles;
-  for (let i = 0; i < jp.length; i++) bank.particles.push(jp[i]);
-  ctx.visualRig.emitAmbientParticles(bank.particles);
+  for (let i = 0; i < jp.length; i++) {
+    bank.particles[pCount++] = jp[i];
+  }
+  if (ctx.visualRig.getActiveAmbientParticleCount() > 0) {
+    const pSink = bank.particleSink;
+    while (pSink.length > 0) pSink.pop();
+    ctx.visualRig.emitAmbientParticles(pSink);
+    for (let i = 0; i < pSink.length; i++) {
+      bank.particles[pCount++] = pSink[i];
+    }
+  }
+  if (bank.particles.length > pCount) bank.particles.length = pCount;
 
   let totalCollected = 0;
   if (!isShmup) {
@@ -826,15 +863,20 @@ export function projectDataCartridgeSnapshot(
     gh === 'grid';
 
   if (ctx.cardEngine) {
-    outEntities.length = 0;
     const hudOut = bank.hudPrimitives;
-    hudOut.length = 0;
-    ctx.cardEngine.emitSceneAndHud(outEntities, hudOut, bank.viewport.width, bank.viewport.height);
-    let ftIdx = hudOut.length;
+    const eSink = bank.entitySink;
+    const hSink = bank.hudSink;
+    while (eSink.length > 0) eSink.pop();
+    while (hSink.length > 0) hSink.pop();
+    ctx.cardEngine.emitSceneAndHud(eSink, hSink, bank.viewport.width, bank.viewport.height);
+    for (let i = 0; i < eSink.length; i++) outEntities[i] = eSink[i];
+    if (outEntities.length > eSink.length) outEntities.length = eSink.length;
+    let hCount = hSink.length;
+    for (let i = 0; i < hCount; i++) hudOut[i] = hSink[i];
     for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
       const ft = ctx.floatingTexts[i];
       if (!ft.active) continue;
-      const tSlot = acquireHudSlot(bank.hudSlots, ftIdx++);
+      const tSlot = acquireHudSlot(bank.hudSlots, hCount);
       tSlot.kind = 'text';
       tSlot.x = ft.x;
       tSlot.y = ft.y;
@@ -845,21 +887,30 @@ export function projectDataCartridgeSnapshot(
       tSlot.shadowColor = '#120d1e';
       tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
       tSlot.worldSpace = false;
-      hudOut.push(tSlot);
+      hudOut[hCount++] = tSlot;
     }
+    if (hudOut.length > hCount) hudOut.length = hCount;
     snap.hudPrimitives = hudOut;
   } else if (ctx.fighterEngine) {
-    outEntities.length = 0;
     const hudOut = bank.hudPrimitives;
-    hudOut.length = 0;
     const fighterDbg = bank.debugRects;
-    fighterDbg.length = 0;
-    ctx.fighterEngine.emitSceneAndHud(outEntities, hudOut, fighterDbg, bank.viewport.width);
-    let ftIdx = hudOut.length;
+    const eSink = bank.entitySink;
+    const hSink = bank.hudSink;
+    const dSink = bank.debugSink;
+    while (eSink.length > 0) eSink.pop();
+    while (hSink.length > 0) hSink.pop();
+    while (dSink.length > 0) dSink.pop();
+    ctx.fighterEngine.emitSceneAndHud(eSink, hSink, dSink, bank.viewport.width);
+    for (let i = 0; i < eSink.length; i++) outEntities[i] = eSink[i];
+    if (outEntities.length > eSink.length) outEntities.length = eSink.length;
+    let hCount = hSink.length;
+    for (let i = 0; i < hCount; i++) hudOut[i] = hSink[i];
+    for (let i = 0; i < dSink.length; i++) fighterDbg[i] = dSink[i];
+    if (fighterDbg.length > dSink.length) fighterDbg.length = dSink.length;
     for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
       const ft = ctx.floatingTexts[i];
       if (!ft.active) continue;
-      const tSlot = acquireHudSlot(bank.hudSlots, ftIdx++);
+      const tSlot = acquireHudSlot(bank.hudSlots, hCount);
       tSlot.kind = 'text';
       tSlot.x = ft.x;
       tSlot.y = ft.y;
@@ -870,8 +921,9 @@ export function projectDataCartridgeSnapshot(
       tSlot.shadowColor = '#120d1e';
       tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
       tSlot.worldSpace = true;
-      hudOut.push(tSlot);
+      hudOut[hCount++] = tSlot;
     }
+    if (hudOut.length > hCount) hudOut.length = hCount;
     snap.debugRects = fighterDbg.length > 0 ? fighterDbg : undefined;
     snap.hudPrimitives = hudOut;
   } else {
@@ -922,7 +974,6 @@ function buildDataCartridgeHudPrimitives(
   }
 
   const out = bank.hudPrimitives;
-  out.length = 0;
   let count = 0;
   const vw = bank.viewport.width;
   const vh = bank.viewport.height;
@@ -931,7 +982,7 @@ function buildDataCartridgeHudPrimitives(
     const hx = ctx.pool.renderX(ctx.playerSlot, alpha) + ctx.pool.w[ctx.playerSlot] * 0.5;
     const hy = ctx.pool.renderY(ctx.playerSlot, alpha) + ctx.pool.h[ctx.playerSlot] * 0.5;
     const locked = ctx.grapplePreviewKind !== 'none';
-    const slot = acquireHudSlot(bank.hudSlots, count++);
+    const slot = acquireHudSlot(bank.hudSlots, count);
     slot.kind = 'aim_line';
     slot.x = hx;
     slot.y = hy;
@@ -948,12 +999,12 @@ function buildDataCartridgeHudPrimitives(
     slot.color = locked ? '#ffd447' : '#5ec2f7';
     slot.alpha = locked ? 0.85 : 0.45;
     slot.worldSpace = true;
-    out.push(slot);
+    out[count++] = slot;
   }
 
   if (genreHud === 'parkour') {
     const ready = ctx.dashCooldown <= 0 && ctx.grappleState === 'idle';
-    const bar = acquireHudSlot(bank.hudSlots, count++);
+    const bar = acquireHudSlot(bank.hudSlots, count);
     bar.kind = 'bar';
     bar.x = 8;
     bar.y = 8;
@@ -963,21 +1014,33 @@ function buildDataCartridgeHudPrimitives(
     bar.color = ready ? '#ff5d8f' : '#5ec2f7';
     bar.bgColor = '#120e24';
     bar.alpha = 0.9;
-    out.push(bar);
+    out[count++] = bar;
   } else if (genreHud === 'fighter' || genreHud === 'card' || genreHud === 'grid') {
-    count = buildGenreHudPrimitives(ctx, genreHud, out, bank.hudSlots, count, vw, vh, bossHp, bossMaxHp);
+    const prevCount = count;
+    const hSink = bank.hudSink;
+    while (hSink.length > 0) hSink.pop();
+    count = buildGenreHudPrimitives(ctx, genreHud, hSink, bank.hudSlots, count, vw, vh, bossHp, bossMaxHp);
+    for (let i = 0; i < hSink.length; i++) {
+      out[prevCount + i] = hSink[i];
+    }
   }
 
   if (dualOn) {
     const dualTopY = genreHud === 'grid' ? 28 : genreHud === 'parkour' ? 20 : 8;
-    count = ctx.dualPerspective.appendHudIndicators(out, bank.hudSlots, count, vw, dualTopY);
+    const prevCount = count;
+    const hSink = bank.hudSink;
+    while (hSink.length > 0) hSink.pop();
+    count = ctx.dualPerspective.appendHudIndicators(hSink, bank.hudSlots, count, vw, dualTopY);
+    for (let i = 0; i < hSink.length; i++) {
+      out[prevCount + i] = hSink[i];
+    }
   }
 
   // Floating pixel text popups (world-space)
   for (let i = 0; i < MAX_FLOATING_TEXTS; i++) {
     const ft = ctx.floatingTexts[i];
     if (!ft.active) continue;
-    const tSlot = acquireHudSlot(bank.hudSlots, count++);
+    const tSlot = acquireHudSlot(bank.hudSlots, count);
     tSlot.kind = 'text';
     tSlot.x = ft.x;
     tSlot.y = ft.y;
@@ -990,8 +1053,9 @@ function buildDataCartridgeHudPrimitives(
     tSlot.shadowColor = '#120d1e';
     tSlot.alpha = clamp(1 - (ft.life / ft.maxLife) * 0.4, 0.25, 1);
     tSlot.worldSpace = true;
-    out.push(tSlot);
+    out[count++] = tSlot;
   }
 
+  if (out.length > count) out.length = count;
   return count > 0 ? out : undefined;
 }

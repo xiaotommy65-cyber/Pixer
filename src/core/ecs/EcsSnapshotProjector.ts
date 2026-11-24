@@ -57,8 +57,26 @@ export class EcsSnapshotProjector {
   public readonly outLights: LightDesc[] = [];
   private readonly hudPool: HudPrimitiveDesc[] = [];
   public readonly outHud: HudPrimitiveDesc[] = [];
+  private readonly acquireLightBound: (idx: number) => LightDesc;
+  private readonly acquireHudBound: (idx: number) => HudPrimitiveDesc;
+
+  private lastHpVal = -1;
+  private lastMaxHpVal = -1;
+  private cachedHpText = 'HP 0/0';
+  private lastRoomName = '';
+  private cachedRoomUpper = '';
+  private lastBossTitle = '';
+  private lastBossHpVal = -1;
+  private lastBossMaxHpVal = -1;
+  private cachedBossText = '';
+  private readonly hudGaugeLabels: string[] = [];
+  private readonly hudGaugeKeys: string[] = [];
+  private readonly hudGaugeVals: number[] = [];
+  private readonly hudGaugeTexts: string[] = [];
 
   constructor(project: EcsProjectV2, viewW: number, viewH: number) {
+    this.acquireLightBound = (idx: number) => this.acquireLight(idx);
+    this.acquireHudBound = (idx: number) => this.acquireHud(idx);
     this.fpPerspDesc = {
       mode: 'first_person',
       blend01: 1,
@@ -116,10 +134,6 @@ export class EcsSnapshotProjector {
     const vp = snap.viewport!;
     const alpha = st.alpha;
 
-    this.outEntities.length = 0;
-    this.outLights.length = 0;
-    this.outHud.length = 0;
-
     let eCount = 0;
     let lCount = 0;
     let hCount = 0;
@@ -133,23 +147,22 @@ export class EcsSnapshotProjector {
       const isHd2d = projMode === 'hd2d_iso' || projMode === 'hd2d_3d';
       const hasWm = st.worldMapCtrl.hasWorldMap();
       const dir = st.worldMapCtrl.director;
-      const dirActive = hasWm && (dir.isCutscenePlaying() || Math.abs(dir.cameraZoom - 1) > 0.005);
       snap.hd2dDepth.enabled = isHd2d;
       snap.hd2dDepth.mode3d = projMode === 'hd2d_3d';
       snap.hd2dDepth.sortByDepthY = isHd2d;
       snap.hd2dDepth.perspectiveSkew = projMode === 'hd2d_iso' ? (projCfg?.perspectiveSkew ?? 0.055) : 0;
       snap.hd2dDepth.pitchDeg = Math.max(
         20,
-        Math.min(72, (projCfg?.pitchDeg ?? 42) + (dirActive ? dir.pitchDeltaDeg : 0)),
+        Math.min(72, (projCfg?.pitchDeg ?? 42) + (hasWm ? dir.pitchDeltaDeg : 0)),
       );
       snap.hd2dDepth.fovDeg = projCfg?.fovDeg ?? 38;
       snap.hd2dDepth.wallHeightScale = projCfg?.wallHeightScale ?? 1.25;
       snap.hd2dDepth.billboardTiltDeg = projCfg?.billboardTiltDeg ?? 12;
       snap.hd2dDepth.obliqueShadowAlpha = projCfg?.obliqueShadowAlpha ?? 0.42;
-      snap.hd2dDepth.tiltShiftBlur = dirActive
+      snap.hd2dDepth.tiltShiftBlur = hasWm
         ? dir.tiltShiftBlur
         : (st.project.atmosphere.tiltShiftBlur ?? 0);
-      snap.hd2dDepth.tiltShiftFocusY = dirActive
+      snap.hd2dDepth.tiltShiftFocusY = hasWm
         ? dir.tiltShiftFocusY
         : (st.project.atmosphere.tiltShiftFocusY ?? 0.52);
     }
@@ -211,7 +224,7 @@ export class EcsSnapshotProjector {
         }
       }
 
-      const dst = this.acquireEntity(eCount++);
+      const dst = this.acquireEntity(eCount);
       dst.id = tag?.entityId ?? '';
       dst.sprite = mat.spriteId;
       dst.x = rx;
@@ -237,14 +250,14 @@ export class EcsSnapshotProjector {
       dst.emissive = inActiveRealm ? mat.emissive : 0;
       dst.hideInFirstPerson = isHeroTag || !inActiveRealm || core.hasComponent(h, c.RhythmLane);
       dst.sortY = ry + tr.h + tr.zOrder * 1000 + rz * 0.05;
-      this.outEntities.push(dst);
+      this.outEntities[eCount++] = dst;
     }
 
     // 1a2. Active top-down melee slash arc VFX (100% data-driven from worldMap.heroConfig)
     if (st.worldMapCtrl.hasWorldMap()) {
       const slash = st.worldMapCtrl.getSlashVisual();
       if (slash.active && slash.sprite) {
-        const sEnt = this.acquireEntity(eCount++);
+        const sEnt = this.acquireEntity(eCount);
         sEnt.id = '__melee_slash__';
         sEnt.sprite = slash.sprite;
         sEnt.x = slash.x - 22;
@@ -266,7 +279,7 @@ export class EcsSnapshotProjector {
         sEnt.metallic = 0.9;
         sEnt.emissive = 1.35;
         sEnt.sortY = slash.y + 44;
-        this.outEntities.push(sEnt);
+        this.outEntities[eCount++] = sEnt;
       }
       st.onSyncWorldMapRoom();
     }
@@ -288,14 +301,14 @@ export class EcsSnapshotProjector {
       const ry = tr.prevY + (tr.y - tr.prevY) * alpha;
       const rz = sp ? sp.prevZ + (sp.z - sp.prevZ) * alpha : 0;
 
-      const l = this.acquireLight(lCount++);
+      const l = this.acquireLight(lCount);
       l.x = rx + tr.w * 0.5;
       l.y = ry + tr.h * 0.5 - (projMode === 'ortho_2d' ? 0 : rz * elevScale);
       l.radius = ls.radius;
       l.color = ls.color;
       l.intensity = inActiveRealm ? ls.intensity : ls.intensity * 0.15;
       l.falloffPower = ls.falloffPower;
-      this.outLights.push(l);
+      this.outLights[lCount++] = l;
     }
 
     // 1b2. First-Person 2.5D DDA Raycast & Billboard Projection (Zero-GC pre-allocated wallGrid)
@@ -367,7 +380,7 @@ export class EcsSnapshotProjector {
       const rx = tr.prevX + (tr.x - tr.prevX) * alpha;
       const ry = tr.prevY + (tr.y - tr.prevY) * alpha;
 
-      const bar = this.acquireHud(hCount++);
+      const bar = this.acquireHud(hCount);
       bar.kind = 'bar';
       bar.x = rx;
       bar.y = ry - 6;
@@ -378,7 +391,7 @@ export class EcsSnapshotProjector {
       bar.bgColor = '#141026';
       bar.alpha = 0.92;
       bar.worldSpace = true;
-      this.outHud.push(bar);
+      this.outHud[hCount++] = bar;
     }
 
     // 1d. Project VerletChain ropes/capes, GrappleAnchor tethers & TriggerZone overlays
@@ -389,7 +402,7 @@ export class EcsSnapshotProjector {
       if (!chain.initialized) continue;
       const nodes = Math.max(2, Math.min(MAX_VERLET_NODES, Math.round(chain.nodeCount)));
       for (let k = 0; k < nodes - 1; k++) {
-        const seg = this.acquireHud(hCount++);
+        const seg = this.acquireHud(hCount);
         seg.kind = 'aim_line';
         seg.x = chain.posX[k];
         seg.y = chain.posY[k];
@@ -400,7 +413,7 @@ export class EcsSnapshotProjector {
         seg.color = chain.color;
         seg.alpha = 0.92;
         seg.worldSpace = true;
-        this.outHud.push(seg);
+        this.outHud[hCount++] = seg;
       }
     }
 
@@ -414,7 +427,7 @@ export class EcsSnapshotProjector {
       const ax = atr.x + atr.w * 0.5;
       const ay = atr.y + atr.h * 0.5;
 
-      const marker = this.acquireHud(hCount++);
+      const marker = this.acquireHud(hCount);
       marker.kind = 'box';
       marker.x = ax - 4;
       marker.y = ay - 4;
@@ -423,12 +436,12 @@ export class EcsSnapshotProjector {
       marker.color = anchor.activeTargetHandle !== INVALID_ENTITY ? '#fbbf24' : '#38bdf8';
       marker.alpha = anchor.enabled ? 0.72 : 0.25;
       marker.worldSpace = true;
-      this.outHud.push(marker);
+      this.outHud[hCount++] = marker;
 
       if (anchor.activeTargetHandle !== INVALID_ENTITY && core.entities.isAlive(anchor.activeTargetHandle)) {
         const ttr = core.getComponent(anchor.activeTargetHandle, c.Transform2D);
         if (ttr) {
-          const rope = this.acquireHud(hCount++);
+          const rope = this.acquireHud(hCount);
           rope.kind = 'aim_line';
           rope.x = ax;
           rope.y = ay;
@@ -439,7 +452,7 @@ export class EcsSnapshotProjector {
           rope.color = '#fbbf24';
           rope.alpha = 0.95;
           rope.worldSpace = true;
-          this.outHud.push(rope);
+          this.outHud[hCount++] = rope;
         }
       }
     }
@@ -455,7 +468,7 @@ export class EcsSnapshotProjector {
       const zcy = ztr.y + ztr.h * 0.5;
       const zw = zone.shape === 'circle' ? zone.radius * 2 : zone.width > 0 ? zone.width : ztr.w;
       const zhPx = zone.shape === 'circle' ? zone.radius * 2 : zone.height > 0 ? zone.height : ztr.h;
-      const box = this.acquireHud(hCount++);
+      const box = this.acquireHud(hCount);
       box.kind = 'box';
       box.x = zcx - zw * 0.5;
       box.y = zcy - zhPx * 0.5;
@@ -464,7 +477,7 @@ export class EcsSnapshotProjector {
       box.color = zone.overlapCount > 0 ? '#4ade80' : '#38bdf8';
       box.alpha = zone.overlapCount > 0 ? 0.28 : st.debugOverlay ? 0.22 : 0.12;
       box.worldSpace = true;
-      this.outHud.push(box);
+      this.outHud[hCount++] = box;
     }
 
     // 1e. Optional Collider debug overlay
@@ -478,7 +491,7 @@ export class EcsSnapshotProjector {
         const hp = core.getComponent(h, c.Health);
         const rx = tr.prevX + (tr.x - tr.prevX) * alpha;
         const ry = tr.prevY + (tr.y - tr.prevY) * alpha;
-        const dbg = this.acquireHud(hCount++);
+        const dbg = this.acquireHud(hCount);
         dbg.kind = 'box';
         dbg.x = rx;
         dbg.y = ry;
@@ -487,25 +500,27 @@ export class EcsSnapshotProjector {
         dbg.color = hp?.team === 2 ? '#ff5d8f' : '#38bdf8';
         dbg.alpha = 0.25;
         dbg.worldSpace = true;
-        this.outHud.push(dbg);
+        this.outHud[hCount++] = dbg;
       }
     }
 
     // 2. Render Waypoint Paths
-    for (const pts of st.world.paths.values()) {
-      for (let i = 0; i < pts.length - 1; i++) {
-        const seg = this.acquireHud(hCount++);
-        seg.kind = 'aim_line';
-        seg.x = pts[i].x + 8;
-        seg.y = pts[i].y + 8;
-        seg.x2 = pts[i + 1].x + 8;
-        seg.y2 = pts[i + 1].y + 8;
-        seg.w = 2;
-        seg.h = 2;
-        seg.color = st.debugOverlay ? '#f59e0b' : '#475569';
-        seg.alpha = st.debugOverlay ? 0.72 : 0.35;
-        seg.worldSpace = true;
-        this.outHud.push(seg);
+    if (st.world.paths.size > 0) {
+      for (const pts of st.world.paths.values()) {
+        for (let i = 0; i < pts.length - 1; i++) {
+          const seg = this.acquireHud(hCount);
+          seg.kind = 'aim_line';
+          seg.x = pts[i].x + 8;
+          seg.y = pts[i].y + 8;
+          seg.x2 = pts[i + 1].x + 8;
+          seg.y2 = pts[i + 1].y + 8;
+          seg.w = 2;
+          seg.h = 2;
+          seg.color = st.debugOverlay ? '#f59e0b' : '#475569';
+          seg.alpha = st.debugOverlay ? 0.72 : 0.35;
+          seg.worldSpace = true;
+          this.outHud[hCount++] = seg;
+        }
       }
     }
 
@@ -513,7 +528,7 @@ export class EcsSnapshotProjector {
     const rt = st.project.rhythmTrack;
     if (rt?.enabled) {
       const trackH = rt.laneCount * rt.laneSpacing + 14;
-      const bg = this.acquireHud(hCount++);
+      const bg = this.acquireHud(hCount);
       bg.kind = 'box';
       bg.x = 12;
       bg.y = rt.yTop - 8;
@@ -522,11 +537,11 @@ export class EcsSnapshotProjector {
       bg.color = '#0b1120';
       bg.alpha = 0.76;
       bg.worldSpace = false;
-      this.outHud.push(bg);
+      this.outHud[hCount++] = bg;
 
       for (let l = 0; l < rt.laneCount; l++) {
         const ly = rt.yTop + l * rt.laneSpacing;
-        const laneLine = this.acquireHud(hCount++);
+        const laneLine = this.acquireHud(hCount);
         laneLine.kind = 'box';
         laneLine.x = 20;
         laneLine.y = ly + 6;
@@ -535,9 +550,9 @@ export class EcsSnapshotProjector {
         laneLine.color = rt.laneColors[l] ?? '#38bdf8';
         laneLine.alpha = 0.32;
         laneLine.worldSpace = false;
-        this.outHud.push(laneLine);
+        this.outHud[hCount++] = laneLine;
 
-        const ring = this.acquireHud(hCount++);
+        const ring = this.acquireHud(hCount);
         ring.kind = 'box';
         ring.x = rt.judgeX - 7;
         ring.y = ly - 1;
@@ -546,9 +561,9 @@ export class EcsSnapshotProjector {
         ring.color = rt.laneColors[l] ?? '#ffd447';
         ring.alpha = 0.55;
         ring.worldSpace = false;
-        this.outHud.push(ring);
+        this.outHud[hCount++] = ring;
 
-        const lbl = this.acquireHud(hCount++);
+        const lbl = this.acquireHud(hCount);
         lbl.kind = 'text';
         lbl.x = 26;
         lbl.y = ly + 2;
@@ -561,10 +576,10 @@ export class EcsSnapshotProjector {
         lbl.shadowColor = '#090d16';
         lbl.alpha = 0.95;
         lbl.worldSpace = false;
-        this.outHud.push(lbl);
+        this.outHud[hCount++] = lbl;
       }
 
-      const jBar = this.acquireHud(hCount++);
+      const jBar = this.acquireHud(hCount);
       jBar.kind = 'box';
       jBar.x = rt.judgeX - 1;
       jBar.y = rt.yTop - 6;
@@ -573,15 +588,30 @@ export class EcsSnapshotProjector {
       jBar.color = '#ffd447';
       jBar.alpha = 0.9;
       jBar.worldSpace = false;
-      this.outHud.push(jBar);
+      this.outHud[hCount++] = jBar;
     }
 
     // 4. Data-driven HUD Gauges bound to ECS Globals
     for (let i = 0; i < st.project.hud.length; i++) {
       const g = st.project.hud[i];
       const val = g.globalKey ? st.world.getGlobal(g.globalKey) : 0;
+      const roundedVal = Math.round(val);
+      const gk = g.globalKey ?? '';
+      let gaugeText = this.hudGaugeTexts[i];
+      if (
+        gaugeText === undefined ||
+        this.hudGaugeLabels[i] !== g.label ||
+        this.hudGaugeKeys[i] !== gk ||
+        this.hudGaugeVals[i] !== roundedVal
+      ) {
+        this.hudGaugeLabels[i] = g.label;
+        this.hudGaugeKeys[i] = gk;
+        this.hudGaugeVals[i] = roundedVal;
+        gaugeText = gk ? `${g.label} ${roundedVal}` : g.label;
+        this.hudGaugeTexts[i] = gaugeText;
+      }
       if (g.kind === 'bar') {
-        const bar = this.acquireHud(hCount++);
+        const bar = this.acquireHud(hCount);
         bar.kind = 'bar';
         bar.x = g.x;
         bar.y = g.y;
@@ -592,37 +622,37 @@ export class EcsSnapshotProjector {
         bar.bgColor = g.bgColor ?? '#0f172a';
         bar.alpha = 0.92;
         bar.worldSpace = false;
-        this.outHud.push(bar);
+        this.outHud[hCount++] = bar;
 
-        const lbl = this.acquireHud(hCount++);
+        const lbl = this.acquireHud(hCount);
         lbl.kind = 'text';
         lbl.x = g.x;
         lbl.y = g.y - 10;
         lbl.w = 0;
         lbl.h = 0;
-        lbl.text = `${g.label} ${Math.round(val)}`;
+        lbl.text = gaugeText;
         lbl.scale = 1;
         lbl.align = 'left';
         lbl.color = g.color;
         lbl.shadowColor = '#090d16';
         lbl.alpha = 0.95;
         lbl.worldSpace = false;
-        this.outHud.push(lbl);
+        this.outHud[hCount++] = lbl;
       } else {
-        const txt = this.acquireHud(hCount++);
+        const txt = this.acquireHud(hCount);
         txt.kind = 'text';
         txt.x = g.x;
         txt.y = g.y;
         txt.w = 0;
         txt.h = 0;
-        txt.text = g.globalKey ? `${g.label} ${Math.round(val)}` : g.label;
+        txt.text = gaugeText;
         txt.scale = 1;
         txt.align = 'left';
         txt.color = g.color;
         txt.shadowColor = '#090d16';
         txt.alpha = 0.95;
         txt.worldSpace = false;
-        this.outHud.push(txt);
+        this.outHud[hCount++] = txt;
       }
     }
 
@@ -630,7 +660,7 @@ export class EcsSnapshotProjector {
     for (let i = 0; i < st.popups.length; i++) {
       const p = st.popups[i];
       if (!p.active) continue;
-      const slot = this.acquireHud(hCount++);
+      const slot = this.acquireHud(hCount);
       slot.kind = 'text';
       slot.x = p.x;
       slot.y = p.y;
@@ -643,13 +673,13 @@ export class EcsSnapshotProjector {
       slot.shadowColor = '#090d16';
       slot.alpha = Math.min(1, p.timer * 2);
       slot.worldSpace = true;
-      this.outHud.push(slot);
+      this.outHud[hCount++] = slot;
     }
 
     // 5b. Generic Multi-Room Top-Down Adventure HUD
     if (st.worldMapCtrl.hasWorldMap()) {
       lCount = st.worldMapCtrl.appendAmbientTileLights(
-        (idx) => this.acquireLight(idx),
+        this.acquireLightBound,
         this.outLights,
         lCount,
       );
@@ -657,7 +687,7 @@ export class EcsSnapshotProjector {
       snap.hearts = heroHp.hp;
       snap.maxHearts = heroHp.maxHp;
 
-      const hpBar = this.acquireHud(hCount++);
+      const hpBar = this.acquireHud(hCount);
       hpBar.kind = 'bar';
       hpBar.x = 14;
       hpBar.y = 14;
@@ -668,38 +698,47 @@ export class EcsSnapshotProjector {
       hpBar.bgColor = '#1e1b2e';
       hpBar.alpha = 0.95;
       hpBar.worldSpace = false;
-      this.outHud.push(hpBar);
+      this.outHud[hCount++] = hpBar;
 
-      const hpTxt = this.acquireHud(hCount++);
+      if (heroHp.hp !== this.lastHpVal || heroHp.maxHp !== this.lastMaxHpVal) {
+        this.lastHpVal = heroHp.hp;
+        this.lastMaxHpVal = heroHp.maxHp;
+        this.cachedHpText = `HP ${heroHp.hp}/${heroHp.maxHp}`;
+      }
+      const hpTxt = this.acquireHud(hCount);
       hpTxt.kind = 'text';
       hpTxt.x = 126;
       hpTxt.y = 14;
       hpTxt.w = 0;
       hpTxt.h = 0;
       const roomName = st.worldMapCtrl.getActiveRoom()?.name ?? '';
-      hpTxt.text = `HP ${heroHp.hp}/${heroHp.maxHp}`;
+      hpTxt.text = this.cachedHpText;
       hpTxt.scale = 1;
       hpTxt.align = 'left';
       hpTxt.color = '#fde68a';
       hpTxt.shadowColor = '#090d16';
       hpTxt.alpha = 0.95;
       hpTxt.worldSpace = false;
-      this.outHud.push(hpTxt);
+      this.outHud[hCount++] = hpTxt;
 
-      const roomLbl = this.acquireHud(hCount++);
+      if (roomName !== this.lastRoomName) {
+        this.lastRoomName = roomName;
+        this.cachedRoomUpper = roomName.toUpperCase();
+      }
+      const roomLbl = this.acquireHud(hCount);
       roomLbl.kind = 'text';
       roomLbl.x = vp.width - 14;
       roomLbl.y = 14;
       roomLbl.w = 0;
       roomLbl.h = 0;
-      roomLbl.text = roomName.toUpperCase();
+      roomLbl.text = this.cachedRoomUpper;
       roomLbl.scale = 1;
       roomLbl.align = 'right';
       roomLbl.color = '#cbd5e1';
       roomLbl.shadowColor = '#090d16';
       roomLbl.alpha = 0.9;
       roomLbl.worldSpace = false;
-      this.outHud.push(roomLbl);
+      this.outHud[hCount++] = roomLbl;
 
       const boss = st.worldMapCtrl.getBossInfo();
       snap.bossHp = boss.hp;
@@ -707,7 +746,7 @@ export class EcsSnapshotProjector {
       if (boss.maxHp > 0 && boss.hp > 0) {
         const bw = Math.min(280, vp.width - 80);
         const bx = Math.round((vp.width - bw) * 0.5);
-        const bBar = this.acquireHud(hCount++);
+        const bBar = this.acquireHud(hCount);
         bBar.kind = 'bar';
         bBar.x = bx;
         bBar.y = vp.height - 22;
@@ -718,23 +757,33 @@ export class EcsSnapshotProjector {
         bBar.bgColor = '#18101c';
         bBar.alpha = 0.96;
         bBar.worldSpace = false;
-        this.outHud.push(bBar);
+        this.outHud[hCount++] = bBar;
 
-        const bLbl = this.acquireHud(hCount++);
+        const bossTitleRaw = boss.name || 'BOSS';
+        if (
+          bossTitleRaw !== this.lastBossTitle ||
+          boss.hp !== this.lastBossHpVal ||
+          boss.maxHp !== this.lastBossMaxHpVal
+        ) {
+          this.lastBossTitle = bossTitleRaw;
+          this.lastBossHpVal = boss.hp;
+          this.lastBossMaxHpVal = boss.maxHp;
+          this.cachedBossText = `${bossTitleRaw.toUpperCase()}  ${boss.hp}/${boss.maxHp}`;
+        }
+        const bLbl = this.acquireHud(hCount);
         bLbl.kind = 'text';
         bLbl.x = Math.round(vp.width * 0.5);
         bLbl.y = vp.height - 34;
         bLbl.w = 0;
         bLbl.h = 0;
-        const bossTitle = (boss.name || 'BOSS').toUpperCase();
-        bLbl.text = `${bossTitle}  ${boss.hp}/${boss.maxHp}`;
+        bLbl.text = this.cachedBossText;
         bLbl.scale = 1;
         bLbl.align = 'center';
         bLbl.color = '#fbbf24';
         bLbl.shadowColor = '#090d16';
         bLbl.alpha = 0.98;
         bLbl.worldSpace = false;
-        this.outHud.push(bLbl);
+        this.outHud[hCount++] = bLbl;
       }
 
       const activeBanner = st.worldMapCtrl.getRoomBanner();
@@ -753,7 +802,7 @@ export class EcsSnapshotProjector {
 
       hCount = st.worldMapCtrl.director.appendCinemaOverlayHud(
         this.outHud,
-        (idx) => this.acquireHud(idx),
+        this.acquireHudBound,
         hCount,
         vp.width,
         vp.height,
@@ -762,6 +811,10 @@ export class EcsSnapshotProjector {
     } else {
       snap.occlusion = undefined;
     }
+
+    if (this.outEntities.length > eCount) this.outEntities.length = eCount;
+    if (this.outLights.length > lCount) this.outLights.length = lCount;
+    if (this.outHud.length > hCount) this.outHud.length = hCount;
 
     // Apply JuiceSystem camera shake/recoil, director zoom, spotlight darkness & screen flash
     const hasWm = st.worldMapCtrl.hasWorldMap();

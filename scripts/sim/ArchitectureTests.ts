@@ -11,7 +11,7 @@ import {
   resolveLogicalViewport,
   type IGpuBackend,
 } from '../../src/core/gpu/GpuTypes.ts';
-import { InputPipeline } from '../../src/core/input/InputPipeline.ts';
+import { InputPipeline, WebGamepadSampler } from '../../src/core/input/InputPipeline.ts';
 import { AppLogger, appLogger } from '../../src/core/runtime/AppLogger.ts';
 import {
   embedCartridgeIntoPng,
@@ -430,6 +430,15 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       !cleared.shoulderR,
     'InputPipeline.reset() must eliminate all latched, SOCD, prediction, and autofire states',
   );
+
+  // Zero-GC non-aliasing verification for InputPipeline & WebGamepadSampler
+  const rPipeA = pipe.resolve({ ...emptyInput(), right: true }, false);
+  const rPipeB = pipe.resolve({ ...emptyInput(), left: true }, false);
+  check(rPipeA !== rPipeB && rPipeA.right && !rPipeB.right && rPipeB.left, 'InputPipeline.resolve must avoid cross-frame aliasing');
+  const sampler = new WebGamepadSampler({ clock: () => clock, gamepadReader: () => [] });
+  const gpA = sampler.sample();
+  const gpB = sampler.sample();
+  check(gpA !== gpB && gpA.input !== gpB.input && gpA.justPressed !== gpB.justPressed, 'WebGamepadSampler.sample must avoid cross-frame aliasing');
 
   console.log(
     `[SIM OK] Architecture boundaries (${coreFiles.length} core + ${assetFiles.length} assets + ${gameFiles.length} game + ${uiFiles.length} UI), EngineHost facade & InputPipeline reset verified`,
@@ -1367,11 +1376,15 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
   // 4. Pre-warmed 240-Frame Zero-GC Benchmarks (EcsCartridgeRuntime + large-world DataCartridgeRuntime)
   const ecsRt = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
 
-  // Warmup (300 frames to stabilize TurboFan JIT & pool capacities)
+  // Warmup (300 sim+snapshot frames + 1000 snapshot frames to stabilize TurboFan JIT & pool capacities)
   for (let i = 0; i < 300; i++) {
     ecsRt.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
     ecsRt.snapshot(params);
     rtA.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
+    rtA.snapshot(params);
+  }
+  for (let i = 0; i < 1000; i++) {
+    ecsRt.snapshot(params);
     rtA.snapshot(params);
   }
 
@@ -1419,6 +1432,11 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
   const rtMs = performance.now() - rtT0;
   maybeGc?.();
   const rtHeapDeltaKb = (process.memoryUsage().heapUsed - heapBeforeRt) / 1024;
+
+  check(
+    ecsHeapDeltaKb < 768 && rtHeapDeltaKb < 768,
+    `240f Snapshot Zero-GC heapDelta exceeded 768KB budget (ecs=${ecsHeapDeltaKb.toFixed(1)}KB, chunked=${rtHeapDeltaKb.toFixed(1)}KB)`,
+  );
 
   console.log(
     `[SIM OK] M4.2/M4.3 Chunked Worlds & Multi-Layer HD-2D -> Tilemap(1024x256, allocated=${grid.getAllocatedChunkCount()}/1024), SpatialHash(2048 ent: rebuild=${spRunA.tRebuildMs.toFixed(2)}ms, 32 queries=${spRunA.tQueryMs.toFixed(2)}ms), 1024x1024 Atlas (300x32px dyn, 10k pass batch)`,
