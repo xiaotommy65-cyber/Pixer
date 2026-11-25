@@ -46,6 +46,10 @@ export class SceneTrue3DPass {
     composedPool: ResolvedLayerInstance[],
   ): void {
     const pitchDeg = hd2d.pitchDeg ?? 42;
+    const yawDeg = hd2d.yawDeg ?? 0;
+    const rollDeg = hd2d.rollDeg ?? 0;
+    const camCenterZ = hd2d.camCenterZ ?? 0;
+    const projection = hd2d.cameraProjection3d ?? 'perspective';
     const fovDeg = hd2d.fovDeg ?? 38;
     const wallHeightScale = hd2d.wallHeightScale ?? 1.25;
     const tiltDeg = hd2d.billboardTiltDeg ?? 12;
@@ -55,9 +59,13 @@ export class SceneTrue3DPass {
       {
         camCenterX,
         camCenterY,
+        camCenterZ,
         zoom,
+        yawDeg,
         pitchDeg,
+        rollDeg,
         fovDeg,
+        projection,
         viewW,
         viewH,
       },
@@ -75,6 +83,18 @@ export class SceneTrue3DPass {
       occ?.originX ?? 0,
       occ?.originY ?? 0,
       occ?.tileSize ?? 32,
+      yawDeg,
+      rollDeg,
+      camCenterZ,
+      projection,
+    );
+    const sunDir = hd2d.sunDir;
+    gpu.setSunLight3D(
+      sunDir ? sunDir[0] : -0.38,
+      sunDir ? sunDir[1] : 0.48,
+      sunDir ? sunDir[2] : 0.79,
+      hd2d.shadowMapEnabled !== false,
+      hd2d.shadowMapStrength ?? 0.45,
     );
     if (occ && occ.cols > 0 && occ.rows > 0 && occStrength > 0.001) {
       gpu.setOcclusionGrid(
@@ -95,7 +115,7 @@ export class SceneTrue3DPass {
     const cullHalfW = (viewW / Math.max(0.25, zoom)) * 1.25 + 160;
     const cullHalfH = (viewH / Math.max(0.25, zoom)) * 1.65 + 220;
 
-    // 1. Dynamic point lights in world space (shared by 3D walls, floors, and billboards)
+    // 1. Dynamic 3D point lights in world space (shared by Mesh3D, 3D walls, floors, and billboards)
     for (let i = 0; i < snap.lights.length; i++) {
       const l = snap.lights[i];
       if (
@@ -105,8 +125,20 @@ export class SceneTrue3DPass {
         continue;
       }
       const falloff = l.falloffPower ?? 2.0;
-      gpu.pushDynamicLight(l.x, l.y, l.radius, l.color, l.intensity * 1.12, falloff);
+      const lz = l.z ?? 24;
+      gpu.pushDynamicLight3D(l.x, l.y, lz, l.radius, l.color, l.intensity * 1.12, falloff);
       gpu.drawLight3D(l.x, l.y, 0.45, l.radius, l.color, l.intensity * 0.34, falloff);
+    }
+
+    if (hd2d.showOrthoGrid3d) {
+      const spanX = Math.max(256, Math.ceil(cullHalfW / 32) * 32);
+      const spanY = Math.max(256, Math.ceil(cullHalfH / 32) * 32);
+      const baseX = Math.floor((camCenterX - spanX) / 32) * 32;
+      const baseY = Math.floor((camCenterY - spanY) / 32) * 32;
+      gpu.drawOrthoGrid3D(baseX, baseY, baseX + spanX * 2, baseY + spanY * 2, camCenterZ + 0.35, 32, 4);
+    }
+    if (hd2d.showAxisGizmo3d) {
+      gpu.drawAxisGizmo3D(camCenterX, camCenterY, camCenterZ + 0.6, 48);
     }
 
     // 2. 3D Floor Tiles, Flat/Tall Decor & Neighbor-Culled Extruded 3D Wall Boxes

@@ -1,4 +1,5 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import type {
   OrthogonalArtBlueprint,
   OrthogonalFacing,
@@ -162,6 +163,8 @@ export interface ParticleDesc {
 export interface LightDesc {
   x: number;
   y: number;
+  /** Optional 3D elevation Z coordinate in world px (defaults to 24 in 3D passes). */
+  z?: number;
   radius: number;
   color: string;
   intensity: number;
@@ -288,6 +291,24 @@ export interface Hd2dDepthConfig {
   mode3d?: boolean;
   /** 3D camera pitch angle in degrees above ground plane (default 42). */
   pitchDeg?: number;
+  /** 3D camera yaw angle in degrees around +Z axis (0..360, default 0). */
+  yawDeg?: number;
+  /** 3D camera roll angle in degrees around forward axis (default 0). */
+  rollDeg?: number;
+  /** 3D camera target elevation Z in world px (default 0). */
+  camCenterZ?: number;
+  /** 3D projection mode ('perspective' | 'ortho_top' | 'ortho_front' | 'ortho_side' | 'ortho_iso' | 'ortho_free'). */
+  cameraProjection3d?: Camera3DProjectionMode;
+  /** Directional sunlight vector pointing toward sun (default [-0.38, 0.48, 0.79]). */
+  sunDir?: [number, number, number];
+  /** Enables 1024x1024 PCF Directional Shadow Map in 3D passes (default true). */
+  shadowMapEnabled?: boolean;
+  /** Directional Shadow Map darkening strength 0..0.95 (default 0.45). */
+  shadowMapStrength?: number;
+  /** Draws canonical Z-Up RGB XYZ axis gizmo at camera focus target. */
+  showAxisGizmo3d?: boolean;
+  /** Draws world-space orthographic reference grid on Z=camCenterZ plane. */
+  showOrthoGrid3d?: boolean;
   /** 3D camera vertical field of view in degrees (default 38). */
   fovDeg?: number;
   /** Wall & column height multiplier (default 1.15). */

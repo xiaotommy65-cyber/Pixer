@@ -1,4 +1,5 @@
 import type { SpriteId, TextureAtlas } from '../../assets/TextureAtlas.ts';
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import { INV_255, packHexRgb } from './GpuColorCache.ts';
 import {
   FLOATS_PER_QUAD3D,
@@ -28,14 +29,23 @@ export class GpuQuad3DBatch {
     enabled: false,
     camCenterX: 0,
     camCenterY: 0,
+    camCenterZ: 0,
     zoom: 1,
+    yawDeg: 0,
     pitchDeg: 42,
+    rollDeg: 0,
     fovDeg: 38,
+    projection: 'perspective',
     viewW: 320,
     viewH: 180,
     occOriginWorldX: 0,
     occOriginWorldY: 0,
     occTileSizeWorld: 32,
+    sunDirX: -0.38,
+    sunDirY: 0.48,
+    sunDirZ: 0.79,
+    shadowMapEnabled: true,
+    shadowStrength: 0.45,
   };
 
   private readonly passData: Quad3DPassData = {
@@ -68,18 +78,41 @@ export class GpuQuad3DBatch {
     occOriginWorldX = 0,
     occOriginWorldY = 0,
     occTileSizeWorld = 32,
+    yawDeg = 0,
+    rollDeg = 0,
+    camCenterZ = 0,
+    projection: Camera3DProjectionMode = 'perspective',
   ): void {
     this.cameraState.enabled = true;
     this.cameraState.camCenterX = Number.isFinite(camCenterX) ? camCenterX : 0;
     this.cameraState.camCenterY = Number.isFinite(camCenterY) ? camCenterY : 0;
+    this.cameraState.camCenterZ = Number.isFinite(camCenterZ) ? camCenterZ : 0;
     this.cameraState.zoom = Number.isFinite(zoom) ? Math.max(0.1, zoom) : 1;
-    this.cameraState.pitchDeg = Number.isFinite(pitchDeg) ? Math.max(20, Math.min(78, pitchDeg)) : 42;
-    this.cameraState.fovDeg = Number.isFinite(fovDeg) ? Math.max(20, Math.min(65, fovDeg)) : 38;
+    this.cameraState.yawDeg = Number.isFinite(yawDeg) ? yawDeg : 0;
+    this.cameraState.pitchDeg = Number.isFinite(pitchDeg) ? Math.max(-90, Math.min(90, pitchDeg)) : 42;
+    this.cameraState.rollDeg = Number.isFinite(rollDeg) ? rollDeg : 0;
+    this.cameraState.fovDeg = Number.isFinite(fovDeg) ? Math.max(16, Math.min(85, fovDeg)) : 38;
+    this.cameraState.projection = projection;
     this.cameraState.viewW = Number.isFinite(viewW) && viewW > 0 ? viewW : 320;
     this.cameraState.viewH = Number.isFinite(viewH) && viewH > 0 ? viewH : 180;
     this.cameraState.occOriginWorldX = Number.isFinite(occOriginWorldX) ? occOriginWorldX : 0;
     this.cameraState.occOriginWorldY = Number.isFinite(occOriginWorldY) ? occOriginWorldY : 0;
     this.cameraState.occTileSizeWorld = Number.isFinite(occTileSizeWorld) ? Math.max(1, occTileSizeWorld) : 32;
+  }
+
+  public setSunLight3D(
+    dirX: number,
+    dirY: number,
+    dirZ: number,
+    shadowMapEnabled = true,
+    shadowStrength = 0.45,
+  ): void {
+    const len = Math.hypot(dirX, dirY, dirZ) || 1;
+    this.cameraState.sunDirX = dirX / len;
+    this.cameraState.sunDirY = dirY / len;
+    this.cameraState.sunDirZ = dirZ / len;
+    this.cameraState.shadowMapEnabled = shadowMapEnabled;
+    this.cameraState.shadowStrength = Math.max(0, Math.min(0.95, shadowStrength));
   }
 
   public getStats(): { opaqueCount: number; alphaCount: number; additiveCount: number; enabled: boolean } {
@@ -331,11 +364,47 @@ export class GpuQuad3DBatch {
       emissive,
     );
 
+    const hasNorth = (neighborMask & 1) !== 0;
     const hasEast = (neighborMask & 2) !== 0;
     const hasSouth = (neighborMask & 4) !== 0;
     const hasWest = (neighborMask & 8) !== 0;
     const sideMode = sideId ? 0 : 4;
     const sidePage = sideRect.page ?? 0;
+
+    // 1b. North Back Vertical Face (-Y normal, visible under 360° Yaw orbit)
+    if (!hasNorth) {
+      this.pushQuad3D(
+        pass,
+        x + w,
+        y,
+        zTop,
+        -w,
+        0,
+        0,
+        0,
+        0,
+        -wallH,
+        sideId ? sideRect.u0 : Math.max(0.5, w / 16),
+        sideId ? sideRect.v0 : Math.max(0.25, wallH / 16),
+        sideId ? sideRect.u1 : (x + y + 17) * 0.017,
+        sideId ? sideRect.v1 : 0,
+        wr,
+        wg,
+        wb,
+        alpha,
+        0,
+        -1,
+        0,
+        sideMode,
+        0,
+        0.78,
+        paletteRow,
+        sidePage,
+        roughness,
+        metallic,
+        emissive,
+      );
+    }
 
     // 2. South Front Vertical Face (+Y normal, faces camera directly)
     if (!hasSouth) {
