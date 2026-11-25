@@ -5,3 +5,5 @@ export * from './TiledImporter.ts';
 export * from './InteropBundleLoader.ts';
 export * from './PixelForgeProcessor.ts';
 export * from './PixerAssetPack.ts';
+export * from './GlbImporter.ts';
+export * from './BbmodelImporter.ts';
