@@ -9,15 +9,18 @@ import {
   type EcsProjectV2,
 } from '../ecs/EcsProjectSchema.ts';
 import { CASTLE_TILE_REGISTRY } from '../ecs/EcsTilemapTypes.ts';
+import { ECS_VOXEL_SHAPES } from '../ecs/EcsVoxelVolume.ts';
 import {
   runScriptedPlaytest,
   type EcsKeypointPlaytestPlan,
 } from './EcsPlaytestVerifier.ts';
 import {
   analyzeActionReachability,
+  analyzeWorldMap3DReachability,
   analyzeWorldMapReachability,
   observeSceneSemantics,
   renderRoomAscii,
+  renderRoomSliceAscii,
   type ReachabilityOptions,
 } from './EcsSpatialOracle.ts';
 import { critiqueCutsceneAesthetics } from './EcsCinematicOracle.ts';
@@ -95,6 +98,29 @@ export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
     name: 'analyze_world_map',
     description:
       'Runs a deterministic multi-room BFS + key/switch dependency solver to prove all rooms, portals, interactions, and Bosses are reachable with zero soft-locks.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'get_room_slice_ascii',
+    description:
+      'Renders a single story zLevel (0..7) 3D voxel slice of a WorldMap room as compact ASCII (# cube, = half_slab, ^/v/</> ramps & stairs, A arch, @ hero, M entities).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        roomId: { type: 'string', description: 'Optional room ID (defaults to worldMap.startRoomId).' },
+        zLevel: { type: 'number', minimum: 0, maximum: 7, description: 'Story Z level 0..7 (default 0).' },
+      },
+    },
+  },
+  {
+    name: 'analyze_world_map_3d',
+    description:
+      'Runs a multi-story 3D BFS over (col, row, zLevel) across stairs, ramps, arches, upper decks, and portals to verify 3D reachability with zero soft-locks.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'list_models_3d',
+    description: 'Lists all 3D cuboid / glTF rawMesh model assets registered in project.models3d.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -391,7 +417,9 @@ export class PixerMcpSession {
           commands: ECS_COMMAND_CATALOG,
           attachableComponents: [...ECS_ATTACHABLE_COMPONENTS],
           proceduralSpritePatterns: [...ECS_PROCEDURAL_SPRITE_PATTERNS],
+          voxelShapes: [...ECS_VOXEL_SHAPES],
           customSprites: this.session.listCustomSprites(),
+          models3d: this.session.listModels3D(),
           tiles: Array.from(mergedTiles.values()).map((t) => ({
             id: t.id,
             name: t.name,
@@ -418,6 +446,24 @@ export class PixerMcpSession {
 
       case 'analyze_world_map':
         return makeToolSuccess(analyzeWorldMapReachability(this.session.getProject()));
+
+      case 'get_room_slice_ascii': {
+        const roomId = typeof args.roomId === 'string' ? args.roomId : undefined;
+        const zLevel =
+          typeof args.zLevel === 'number' && Number.isFinite(args.zLevel)
+            ? Math.max(0, Math.min(7, Math.floor(args.zLevel)))
+            : 0;
+        return makeToolSuccess(renderRoomSliceAscii(this.session.getProject(), roomId, zLevel));
+      }
+
+      case 'analyze_world_map_3d':
+        return makeToolSuccess(analyzeWorldMap3DReachability(this.session.getProject()));
+
+      case 'list_models_3d':
+        return makeToolSuccess({
+          revision: this.session.getRevision(),
+          models3d: this.session.listModels3D(),
+        });
 
       case 'list_attachable_components':
         return makeToolSuccess({ components: [...ECS_ATTACHABLE_COMPONENTS] });

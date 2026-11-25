@@ -1,4 +1,6 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
+import type { EcsModel3DDef } from '../ecs/EcsModel3D.ts';
+import type { EcsVoxelShape } from '../ecs/EcsVoxelVolume.ts';
 import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import type {
   OrthogonalArtBlueprint,
@@ -135,6 +137,35 @@ export interface EntityDesc {
   billboardScale?: number;
   /** If true, entity is omitted in 1P raycast view (e.g. the player's own 3P body). */
   hideInFirstPerson?: boolean;
+  /** Optional 3D model asset ID (in `snap.models3d`) rendered via `emitModel3DToGpu`. */
+  model3dId?: string;
+  modelScaleX?: number;
+  modelScaleY?: number;
+  modelScaleZ?: number;
+  modelAnimClip?: string;
+  modelAnimTime?: number;
+  billboardYawMode?: 'fixed' | 'camera_4way' | 'camera_8way';
+}
+
+export interface VoxelRenderDesc {
+  col: number;
+  row: number;
+  zLevel: number;
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+  d: number;
+  h: number;
+  shape: EcsVoxelShape;
+  sprite: SpriteId;
+  sideSprite?: SpriteId;
+  cullMask: number;
+  tint?: string;
+  roughness?: number;
+  metallic?: number;
+  emissive?: number;
+  alpha?: number;
 }
 
 export interface ParticleDesc {
@@ -289,6 +320,8 @@ export interface Hd2dDepthConfig {
   splitToneWarmth?: number;
   /** Enables true 3D perspective box-wall + upright pixel billboard GPU rendering (`hd2d_3d`). */
   mode3d?: boolean;
+  /** Enables 4-quadrant CAD quad-view split (Persp / Top XY / Front XZ / Side YZ). */
+  quadView?: boolean;
   /** 3D camera pitch angle in degrees above ground plane (default 42). */
   pitchDeg?: number;
   /** 3D camera yaw angle in degrees around +Z axis (0..360, default 0). */
@@ -388,6 +421,8 @@ export interface RenderSceneSnapshot {
   bgClouds: BgCloudDesc[];
   tiles: TileDesc[];
   fgTiles?: TileDesc[];
+  voxels3d?: readonly VoxelRenderDesc[];
+  models3d?: Readonly<Record<string, EcsModel3DDef>>;
   entities: EntityDesc[];
   particles: ParticleDesc[];
   lights: LightDesc[];

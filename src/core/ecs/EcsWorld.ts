@@ -17,6 +17,7 @@ import {
   type EcsProjectV2,
   type EcsWaypoint,
 } from './EcsProjectSchema.ts';
+import type { EcsModel3DDef } from './EcsModel3D.ts';
 
 export const MAX_ECS_ENTITIES = 2048;
 export { ECS_VAR_SLOTS };
@@ -56,6 +57,7 @@ export class EcsWorld {
   public readonly paths = new Map<string, EcsWaypoint[]>();
   public readonly animDefs = new Map<string, AnimationStateMachineDef>();
   public readonly prefabs = new Map<string, EcsPrefabDef>();
+  public readonly models3d = new Map<string, EcsModel3DDef>();
   public readonly rng = new SeededRng(7001);
   public tilemap: TilemapGrid | null = null;
   public readonly animStepOut: AnimationStepResult = {
@@ -83,6 +85,7 @@ export class EcsWorld {
     this.paths.clear();
     this.animDefs.clear();
     this.prefabs.clear();
+    this.models3d.clear();
     this.tilemap = null;
     this.nextAutoId = 1;
     this.rng.reset(7001);
@@ -101,6 +104,11 @@ export class EcsWorld {
     }
     for (const [k, pref] of Object.entries(project.prefabs)) {
       this.prefabs.set(k, pref);
+    }
+    if (project.models3d) {
+      for (const [k, m3d] of Object.entries(project.models3d)) {
+        this.models3d.set(k, m3d);
+      }
     }
     for (let i = 0; i < project.entities.length; i++) {
       this.spawnEntityInit(project.entities[i]);
@@ -324,6 +332,29 @@ export class EcsWorld {
         jumpZVelocity: Math.max(0, sp.jumpZVelocity ?? 190),
         dimensionMask: sp.dimensionMask !== undefined ? Math.max(1, Math.round(sp.dimensionMask)) : 1,
         shadowScale: Math.max(0.2, sp.shadowScale ?? 1),
+        yaw: typeof sp.yaw === 'number' && Number.isFinite(sp.yaw) ? sp.yaw : 0,
+        pitch: typeof sp.pitch === 'number' && Number.isFinite(sp.pitch) ? sp.pitch : 0,
+        roll: typeof sp.roll === 'number' && Number.isFinite(sp.roll) ? sp.roll : 0,
+        depth: Math.max(1, typeof sp.depth === 'number' && Number.isFinite(sp.depth) ? sp.depth : (tr.h ?? 16)),
+        stepHeight: Math.max(0, typeof sp.stepHeight === 'number' && Number.isFinite(sp.stepHeight) ? sp.stepHeight : 10),
+        ceilingZ: typeof sp.ceilingZ === 'number' && Number.isFinite(sp.ceilingZ) ? sp.ceilingZ : 9999,
+        slopeNormalX: 0,
+        slopeNormalY: 0,
+        slopeNormalZ: 1,
+      });
+    }
+
+    if (bundle.mesh3d) {
+      const m3 = bundle.mesh3d;
+      this.core.addComponent(handle, c.MeshRenderer3D, {
+        modelId: m3.modelId ?? '',
+        scaleX: m3.scaleX ?? 1,
+        scaleY: m3.scaleY ?? 1,
+        scaleZ: m3.scaleZ ?? 1,
+        animClip: m3.animClip ?? '',
+        animTime: 0,
+        castShadow: m3.castShadow !== false,
+        billboardYawMode: m3.billboardYawMode ?? 'fixed',
       });
     }
 
@@ -433,6 +464,7 @@ export class EcsWorld {
       if (this.core.hasComponent(h, c.TriggerZone)) comps.push('TriggerZone');
       if (this.core.hasComponent(h, c.VerletChain)) comps.push('VerletChain');
       if (sp) comps.push('Spatial3D');
+      if (this.core.hasComponent(h, c.MeshRenderer3D)) comps.push('MeshRenderer3D');
       if (agent) comps.push('ScriptAgent');
       if (this.core.hasComponent(h, c.Lifetime)) comps.push('Lifetime');
 

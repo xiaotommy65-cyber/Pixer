@@ -16,7 +16,9 @@ import type {
   OcclusionGridDesc,
   SimEvent,
   TileDesc,
+  VoxelRenderDesc,
 } from '../types/WorldTypes.ts';
+import { ecsEntitiesInteractInSpace } from './EcsActionPhysicsSystems.ts';
 import { EcsCinematicDirector, type EcsCutsceneShotDef } from './EcsCinematicDirector.ts';
 import type { EcsProjectV2 } from './EcsProjectSchema.ts';
 import {
@@ -29,6 +31,7 @@ import {
   type EcsTileDef,
   type EcsTopDownAiProfile,
 } from './EcsTilemapTypes.ts';
+import { RoomVoxelVolume } from './EcsVoxelVolume.ts';
 import type { EcsWorld } from './EcsWorld.ts';
 
 export interface WorldMapStepCallbacks {
@@ -62,6 +65,10 @@ export class EcsWorldMapController {
   // Pre-allocated tile snapshot pool & 2D wall shadow occlusion grid (Zero-GC per frame)
   private readonly tilePool: TileDesc[] = [];
   public readonly outTiles: TileDesc[] = [];
+  public readonly voxelVolume = new RoomVoxelVolume();
+  private readonly voxelRenderPool: VoxelRenderDesc[] = [];
+  public readonly outVoxels3d: VoxelRenderDesc[] = [];
+  public outVoxels3dCount = 0;
   private readonly occlusionGrid = new Uint8Array(OCCLUSION_GRID_MAX * OCCLUSION_GRID_MAX);
   private occlusionVersion = 0;
   private lastUnlockMask = -1;
@@ -158,6 +165,15 @@ export class EcsWorldMapController {
     const wm = this.project.worldMap;
     if (!room || !wm || !this.currentGlobalsRef) return true;
     return isRoomCellSolid(room, c, r, this.currentGlobalsRef, wm.tileDefs);
+  };
+  private readonly isWallTileSolidForVoxel = (tileId: number): boolean => {
+    const wm = this.project.worldMap;
+    const def = getCastleTileDef(tileId, wm?.tileDefs);
+    if (!def || !def.solid) return false;
+    if (def.unlockGlobal && this.currentGlobalsRef && (this.currentGlobalsRef.get(def.unlockGlobal) ?? 0) >= 1) {
+      return false;
+    }
+    return true;
   };
 
   constructor(project: EcsProjectV2) {
@@ -330,6 +346,8 @@ export class EcsWorldMapController {
       this.activeRoom = null;
       this.activeRoomId = '';
       this.outTiles.length = 0;
+      this.outVoxels3d.length = 0;
+      this.outVoxels3dCount = 0;
       this.cachedAmbientLightCount = 0;
       this.cameraX = 0;
       this.cameraY = 0;
@@ -443,6 +461,7 @@ export class EcsWorldMapController {
     world.paths.clear();
     world.animDefs.clear();
     world.prefabs.clear();
+    world.models3d.clear();
 
     for (const [k, v] of Object.entries(this.project.globals)) {
       world.globals.set(k, v);
@@ -460,6 +479,11 @@ export class EcsWorldMapController {
     }
     for (const [k, pref] of Object.entries(this.project.prefabs)) {
       world.prefabs.set(k, pref);
+    }
+    if (this.project.models3d) {
+      for (const [k, m3d] of Object.entries(this.project.models3d)) {
+        world.models3d.set(k, m3d);
+      }
     }
 
     const core = world.core;
@@ -564,6 +588,28 @@ export class EcsWorldMapController {
     return slot;
   }
 
+  private acquireVoxelRender(idx: number): VoxelRenderDesc {
+    let slot = this.voxelRenderPool[idx];
+    if (!slot) {
+      slot = {
+        col: 0,
+        row: 0,
+        zLevel: 0,
+        x: 0,
+        y: 0,
+        z: 0,
+        w: 32,
+        d: 32,
+        h: 24,
+        shape: 'cube',
+        sprite: 'solid',
+        cullMask: 0,
+      };
+      this.voxelRenderPool[idx] = slot;
+    }
+    return slot;
+  }
+
   /**
    * Rebuilds the pooled `TileDesc[]` array for the active room (ground + decor + HD-2D extruded walls)
    * and caches static ambient tile lights so 60Hz snapshots never rescan the wall grid.
@@ -573,6 +619,8 @@ export class EcsWorldMapController {
     const wm = this.project.worldMap;
     if (!room || !wm) {
       this.outTiles.length = 0;
+      this.outVoxels3d.length = 0;
+      this.outVoxels3dCount = 0;
       this.cachedAmbientLightCount = 0;
       return;
     }
@@ -729,6 +777,65 @@ export class EcsWorldMapController {
     }
     this.occlusionVersion++;
     this.lastUnlockMask = this.computeUnlockMask(globals);
+
+    // 5. Compile Multi-Story RoomVoxelVolume & Zero-GC VoxelRenderDesc pool
+    this.currentGlobalsRef = globals;
+    const storyH = room.storyHeight ?? room.wallExtrudeH ?? 24;
+    this.voxelVolume.compileFromRoom(
+      cols,
+      rows,
+      ts,
+      storyH,
+      room.voxels,
+      room.wall,
+      this.isWallTileSolidForVoxel,
+    );
+    if (room.voxels && room.voxels.length > 0) {
+      let vCount = 0;
+      const stories = this.voxelVolume.stories;
+      for (let z = 0; z < stories; z++) {
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const tid = this.voxelVolume.getCellTileId(c, r, z);
+            if (tid <= 0) continue;
+            const shape = this.voxelVolume.getCellShape(c, r, z) ?? 'cube';
+            const def = getCastleTileDef(tid, customDefs);
+            const isUnlocked = def?.unlockGlobal ? (globals.get(def.unlockGlobal) ?? 0) >= 1 : false;
+            const sprite = isUnlocked && def?.unlockedSprite ? def.unlockedSprite : (def?.sprite ?? 'castle_wall_top');
+            const sideSprite = isUnlocked && def?.unlockedSprite ? def.unlockedSprite : def?.sideSprite;
+            const slot = this.acquireVoxelRender(vCount);
+            slot.col = c;
+            slot.row = r;
+            slot.zLevel = z;
+            slot.x = c * ts;
+            slot.y = r * ts;
+            slot.z = z * storyH;
+            slot.w = ts;
+            slot.d = ts;
+            slot.h = storyH;
+            slot.shape = shape;
+            slot.sprite = sprite;
+            slot.sideSprite = sideSprite;
+            slot.cullMask = shape === 'cube' ? this.voxelVolume.computeFaceCullMask(c, r, z) : 0;
+            slot.tint = def?.tint;
+            slot.roughness = def?.roughness;
+            slot.metallic = def?.metallic;
+            slot.emissive = def?.emissive;
+            slot.alpha = 1;
+            this.outVoxels3d[vCount++] = slot;
+          }
+        }
+      }
+      if (this.outVoxels3d.length > vCount) {
+        this.outVoxels3d.length = vCount;
+      }
+      this.outVoxels3dCount = vCount;
+    } else {
+      if (this.outVoxels3d.length > 0) {
+        this.outVoxels3d.length = 0;
+      }
+      this.outVoxels3dCount = 0;
+    }
   }
 
   private computeUnlockMask(globals: ReadonlyMap<string, number>): number {
@@ -796,21 +903,48 @@ export class EcsWorldMapController {
     room: EcsMapRoomDef,
     tileDefs: NonNullable<EcsProjectV2['worldMap']>['tileDefs'],
     world: EcsWorld,
+    actorHandle = 0,
   ): boolean {
     const left = tx + padX;
     const right = tx + w - padX;
     const top = ty + footTop;
     const bottom = ty + footBot;
-    const c0 = Math.floor(left / ts);
-    const c1 = Math.floor(right / ts);
-    const r0 = Math.floor(top / ts);
-    const r1 = Math.floor(bottom / ts);
-    for (let rr = r0; rr <= r1; rr++) {
-      for (let cc = c0; cc <= c1; cc++) {
-        if (isRoomCellSolid(room, cc, rr, world.globals, tileDefs)) return true;
+    const core = world.core;
+    const activeDimMask = this.project.projection?.activeDimensionMask ?? 3;
+
+    if (room.voxels && room.voxels.length > 0) {
+      if (left < 0 || top < 0 || right > room.cols * ts || bottom > room.rows * ts) {
+        return true;
+      }
+      const sp = actorHandle ? core.getComponent(actorHandle, core.components.Spatial3D) : undefined;
+      const actorZ = sp ? sp.z : 0;
+      const actorH = sp ? sp.height : 16;
+      const actorStep = sp ? sp.stepHeight : 10;
+      if (
+        this.voxelVolume.collidesAabb3D(
+          left,
+          top,
+          actorZ,
+          Math.max(2, right - left),
+          Math.max(2, bottom - top),
+          actorH,
+          actorStep,
+        )
+      ) {
+        return true;
+      }
+    } else {
+      const c0 = Math.floor(left / ts);
+      const c1 = Math.floor(right / ts);
+      const r0 = Math.floor(top / ts);
+      const r1 = Math.floor(bottom / ts);
+      for (let rr = r0; rr <= r1; rr++) {
+        for (let cc = c0; cc <= c1; cc++) {
+          if (isRoomCellSolid(room, cc, rr, world.globals, tileDefs)) return true;
+        }
       }
     }
-    const core = world.core;
+
     const colStore = core.getStore(core.components.Collider);
     const cx = tx + w * 0.5;
     const cy = ty + h * 0.72;
@@ -818,6 +952,9 @@ export class EcsWorldMapController {
       const col = colStore.getDenseDataAt(i);
       if (!col.isSolid) continue;
       const eh = colStore.getDenseEntityAt(i);
+      if (actorHandle && (eh === actorHandle || !ecsEntitiesInteractInSpace(core, actorHandle, eh, activeDimMask))) {
+        continue;
+      }
       const etr = core.getComponent(eh, core.components.Transform2D);
       if (!etr) continue;
       const ex = etr.x + etr.w * 0.5;
@@ -828,7 +965,7 @@ export class EcsWorldMapController {
   }
 
   /**
-   * Resolves AABB tilemap + solid prop collisions cleanly with per-axis wall sliding.
+   * Resolves AABB tilemap + multi-story 3D voxel + solid prop collisions cleanly with per-axis wall sliding.
    */
   private moveWithTileCollision(
     x: number,
@@ -839,6 +976,7 @@ export class EcsWorldMapController {
     dy: number,
     world: EcsWorld,
     outPos: [number, number],
+    actorHandle = 0,
   ): void {
     const room = this.activeRoom;
     const wm = this.project.worldMap;
@@ -854,14 +992,56 @@ export class EcsWorldMapController {
 
     let nx = x;
     let ny = y;
-    if (dx !== 0 && !this.isBoxCollidingAt(nx + dx, ny, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world)) {
+    if (dx !== 0 && !this.isBoxCollidingAt(nx + dx, ny, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world, actorHandle)) {
       nx += dx;
     }
-    if (dy !== 0 && !this.isBoxCollidingAt(nx, ny + dy, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world)) {
+    if (dy !== 0 && !this.isBoxCollidingAt(nx, ny + dy, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world, actorHandle)) {
       ny += dy;
     }
     outPos[0] = nx;
     outPos[1] = ny;
+  }
+
+  private updateActorVoxelElevation(world: EcsWorld, handle: number, dt: number): void {
+    const c = world.core.components;
+    const sp = world.core.getComponent(handle, c.Spatial3D);
+    const tr = world.core.getComponent(handle, c.Transform2D);
+    if (!sp || !tr) return;
+    const padX = Math.max(4, tr.w * 0.24);
+    const left = tr.x + padX;
+    const right = tr.x + tr.w - padX;
+    const top = tr.y + tr.h * 0.48;
+    const bot = tr.y + tr.h - 3;
+    const footCx = tr.x + tr.w * 0.5;
+    const footCy = tr.y + tr.h * 0.72;
+    const sC = this.voxelVolume.sampleSupportZ(footCx, footCy, sp.z, sp.stepHeight);
+    const sLT = this.voxelVolume.sampleSupportZ(left, top, sp.z, sp.stepHeight);
+    const sRT = this.voxelVolume.sampleSupportZ(right, top, sp.z, sp.stepHeight);
+    const sRB = this.voxelVolume.sampleSupportZ(right, bot, sp.z, sp.stepHeight);
+    const sLB = this.voxelVolume.sampleSupportZ(left, bot, sp.z, sp.stepHeight);
+    const nextSupport = Math.max(sC, sLT, sRT, sRB, sLB);
+    const ceilingZ = this.voxelVolume.sampleCeilingZ(footCx, footCy, sp.z, 9999);
+    sp.ceilingZ = ceilingZ;
+    sp.prevZ = sp.z;
+    if (sp.gravityZ > 0) {
+      if (sp.z < nextSupport) {
+        sp.z = nextSupport;
+        if (sp.vz < 0) sp.vz = 0;
+      } else if (sp.z > nextSupport) {
+        sp.vz -= sp.gravityZ * dt;
+        sp.z += sp.vz * dt;
+        if (sp.vz > 0 && sp.z + sp.height > ceilingZ) {
+          sp.z = Math.max(nextSupport, ceilingZ - sp.height);
+          sp.vz = 0;
+        }
+        if (sp.z <= nextSupport) {
+          sp.z = nextSupport;
+          if (sp.vz < 0) sp.vz = 0;
+        }
+      }
+    } else {
+      sp.z = Math.max(sp.groundZ, nextSupport);
+    }
   }
 
   /**
@@ -1010,9 +1190,13 @@ export class EcsWorldMapController {
           const vx = this.dashTimer > 0 ? this.dashDirX * speed : mx * speed;
           const vy = this.dashTimer > 0 ? this.dashDirY * speed : my * speed;
 
-          this.moveWithTileCollision(hTr.x, hTr.y, hTr.w, hTr.h, vx * dt, vy * dt, world, this.scratchPos);
+          this.moveWithTileCollision(hTr.x, hTr.y, hTr.w, hTr.h, vx * dt, vy * dt, world, this.scratchPos, heroHandle);
           hTr.x = this.scratchPos[0];
           hTr.y = this.scratchPos[1];
+          const hasVoxels = Boolean(room.voxels && room.voxels.length > 0);
+          if (hasVoxels) {
+            this.updateActorVoxelElevation(world, heroHandle, dt);
+          }
 
           const heroCx = hTr.x + hTr.w * 0.5;
           const heroCy = hTr.y + hTr.h * 0.5;
@@ -1040,10 +1224,12 @@ export class EcsWorldMapController {
             hAnim.runtime.setParam('hurt', (hHp?.hitFlash ?? 0) > 0.05 ? 1 : 0);
           }
 
-          // 3. Floor Hazard Check
+          // 3. Floor Hazard Check (elevated 3D actors above ground bridges clear ground-level hazards)
           const heroCol = Math.floor(heroCx / wm.tileSize);
           const heroRow = Math.floor((hTr.y + hTr.h * 0.72) / wm.tileSize);
-          if (this.heroInvulnTimer <= 0 && isRoomCellHazard(room, heroCol, heroRow, wm.tileDefs)) {
+          const heroSp = core.getComponent(heroHandle, c.Spatial3D);
+          const heroZ = heroSp ? heroSp.z : 0;
+          if (heroZ <= 4 && this.heroInvulnTimer <= 0 && isRoomCellHazard(room, heroCol, heroRow, wm.tileDefs)) {
             this.damageHero(hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
           }
 
@@ -1275,9 +1461,13 @@ export class EcsWorldMapController {
           dirY * kb,
           world,
           this.scratchPos,
+          eh,
         );
         etr.x = this.scratchPos[0];
         etr.y = this.scratchPos[1];
+        if (this.activeRoom?.voxels && this.activeRoom.voxels.length > 0) {
+          this.updateActorVoxelElevation(world, eh, 1 / 60);
+        }
 
         const killed = hp.hp <= 0;
         this.director.triggerCombatImpact(
@@ -1472,6 +1662,7 @@ export class EcsWorldMapController {
             moveDirY * spd * dt,
             world,
             this.scratchPos,
+            eh,
           );
           if (
             room &&
@@ -1512,12 +1703,16 @@ export class EcsWorldMapController {
                   (ndy / ndist) * spd * dt,
                   world,
                   this.scratchPos,
+                  eh,
                 );
               }
             }
           }
           etr.x = this.scratchPos[0];
           etr.y = this.scratchPos[1];
+          if (room && room.voxels && room.voxels.length > 0) {
+            this.updateActorVoxelElevation(world, eh, dt);
+          }
           const mat = core.getComponent(eh, c.Material);
           if (mat) mat.flipX = dx < 0;
         }

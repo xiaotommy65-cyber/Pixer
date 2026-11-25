@@ -147,14 +147,30 @@ export class EcsSnapshotProjector {
       const isHd2d = projMode === 'hd2d_iso' || projMode === 'hd2d_3d';
       const hasWm = st.worldMapCtrl.hasWorldMap();
       const dir = st.worldMapCtrl.director;
+      const hasFreeCamera3d = Boolean(
+        projCfg?.cameraProjection3d ||
+        (projCfg?.yawDeg !== undefined && projCfg.yawDeg !== 0) ||
+        projCfg?.quadView,
+      );
+      const minPitch = hasFreeCamera3d ? -85 : 20;
+      const maxPitch = hasFreeCamera3d ? 85 : 72;
       snap.hd2dDepth.enabled = isHd2d;
       snap.hd2dDepth.mode3d = projMode === 'hd2d_3d';
       snap.hd2dDepth.sortByDepthY = isHd2d;
       snap.hd2dDepth.perspectiveSkew = projMode === 'hd2d_iso' ? (projCfg?.perspectiveSkew ?? 0.055) : 0;
       snap.hd2dDepth.pitchDeg = Math.max(
-        20,
-        Math.min(72, (projCfg?.pitchDeg ?? 42) + (hasWm ? dir.pitchDeltaDeg : 0)),
+        minPitch,
+        Math.min(maxPitch, (projCfg?.pitchDeg ?? 42) + (hasWm ? dir.pitchDeltaDeg : 0)),
       );
+      snap.hd2dDepth.yawDeg = projCfg?.yawDeg ?? 0;
+      snap.hd2dDepth.rollDeg = projCfg?.rollDeg ?? 0;
+      snap.hd2dDepth.camCenterZ = projCfg?.camCenterZ ?? 0;
+      snap.hd2dDepth.cameraProjection3d = projCfg?.cameraProjection3d ?? 'perspective';
+      snap.hd2dDepth.quadView = Boolean(projCfg?.quadView);
+      snap.hd2dDepth.shadowMapEnabled = projCfg?.shadowMapEnabled ?? true;
+      snap.hd2dDepth.shadowMapStrength = projCfg?.shadowMapStrength ?? 0.45;
+      snap.hd2dDepth.showAxisGizmo3d = Boolean(projCfg?.showAxisGizmo3d);
+      snap.hd2dDepth.showOrthoGrid3d = Boolean(projCfg?.showOrthoGrid3d);
       snap.hd2dDepth.fovDeg = projCfg?.fovDeg ?? 38;
       snap.hd2dDepth.wallHeightScale = projCfg?.wallHeightScale ?? 1.25;
       snap.hd2dDepth.billboardTiltDeg = projCfg?.billboardTiltDeg ?? 12;
@@ -166,6 +182,9 @@ export class EcsSnapshotProjector {
         ? dir.tiltShiftFocusY
         : (st.project.atmosphere.tiltShiftFocusY ?? 0.52);
     }
+
+    snap.voxels3d = st.worldMapCtrl.outVoxels3d;
+    snap.models3d = st.project.models3d;
 
     // 1a. Project Material (PBR-Lite Sprite) entities from sparse-set store with Spatial3D elevation & realm masking
     const matStore = core.getStore(c.Material);
@@ -182,6 +201,7 @@ export class EcsSnapshotProjector {
       const tag = core.getComponent(h, c.Tag);
       const hp = core.getComponent(h, c.Health);
       const sp = core.getComponent(h, c.Spatial3D);
+      const m3 = core.getComponent(h, c.MeshRenderer3D);
       const motor = core.getComponent(h, c.CharacterMotor2D);
       const anim = core.getComponent(h, c.Animator);
 
@@ -250,6 +270,82 @@ export class EcsSnapshotProjector {
       dst.emissive = inActiveRealm ? mat.emissive : 0;
       dst.hideInFirstPerson = isHeroTag || !inActiveRealm || core.hasComponent(h, c.RhythmLane);
       dst.sortY = ry + tr.h + tr.zOrder * 1000 + rz * 0.05;
+      dst.yawRad = sp ? (sp.yaw * Math.PI) / 180 : undefined;
+      if (m3) {
+        dst.model3dId = m3.modelId || undefined;
+        dst.modelScaleX = m3.scaleX;
+        dst.modelScaleY = m3.scaleY;
+        dst.modelScaleZ = m3.scaleZ;
+        dst.modelAnimClip = m3.animClip || undefined;
+        dst.modelAnimTime = st.elapsedSec;
+        dst.billboardYawMode = m3.billboardYawMode;
+        if (!m3.castShadow) dst.castShadow = false;
+      } else {
+        dst.model3dId = undefined;
+        dst.modelScaleX = undefined;
+        dst.modelScaleY = undefined;
+        dst.modelScaleZ = undefined;
+        dst.modelAnimClip = undefined;
+        dst.modelAnimTime = undefined;
+        dst.billboardYawMode = undefined;
+      }
+      this.outEntities[eCount++] = dst;
+    }
+
+    // 1a-mesh. Project MeshRenderer3D entities that do not carry a 2D Material sprite component
+    const mesh3dStore = core.getStore(c.MeshRenderer3D);
+    const mesh3dCount = mesh3dStore.size();
+    for (let i = 0; i < mesh3dCount; i++) {
+      const h = mesh3dStore.getDenseEntityAt(i);
+      if (core.hasComponent(h, c.Material)) continue;
+      const m3 = mesh3dStore.getDenseDataAt(i);
+      const tr = core.getComponent(h, c.Transform2D);
+      if (!tr) continue;
+      const tag = core.getComponent(h, c.Tag);
+      const hp = core.getComponent(h, c.Health);
+      const sp = core.getComponent(h, c.Spatial3D);
+      const entMask = sp ? sp.dimensionMask : 3;
+      const inActiveRealm = (entMask & st.activeDimensionMask) !== 0;
+      if (!inActiveRealm && dimGhostAlpha <= 0.01) continue;
+
+      const rx = tr.prevX + (tr.x - tr.prevX) * alpha;
+      const ry = tr.prevY + (tr.y - tr.prevY) * alpha;
+      const rz = sp ? sp.prevZ + (sp.z - sp.prevZ) * alpha : 0;
+
+      const dst = this.acquireEntity(eCount);
+      dst.id = tag?.entityId ?? '';
+      dst.sprite = 'solid';
+      dst.x = rx;
+      dst.y = ry;
+      dst.w = tr.w;
+      dst.h = tr.h;
+      dst.rot = tr.rot;
+      dst.scaleX = tr.scaleX;
+      dst.scaleY = tr.scaleY;
+      dst.skewX = 0;
+      dst.anchorY = 0.5;
+      dst.flipX = false;
+      dst.tint = inActiveRealm ? undefined : '#64748b';
+      dst.alpha = inActiveRealm ? 1 : dimGhostAlpha;
+      dst.additive = false;
+      dst.paletteRow = -1;
+      dst.flash = hp ? hp.hitFlash : 0;
+      dst.castShadow = m3.castShadow && inActiveRealm;
+      dst.shadowRadius = sp ? tr.w * 0.42 * sp.shadowScale : undefined;
+      dst.elevationZ = projMode === 'ortho_2d' ? 0 : rz * elevScale;
+      dst.roughness = 0.58;
+      dst.metallic = 0.08;
+      dst.emissive = 0;
+      dst.hideInFirstPerson = !inActiveRealm;
+      dst.sortY = ry + tr.h + tr.zOrder * 1000 + rz * 0.05;
+      dst.yawRad = sp ? (sp.yaw * Math.PI) / 180 : undefined;
+      dst.model3dId = m3.modelId || undefined;
+      dst.modelScaleX = m3.scaleX;
+      dst.modelScaleY = m3.scaleY;
+      dst.modelScaleZ = m3.scaleZ;
+      dst.modelAnimClip = m3.animClip || undefined;
+      dst.modelAnimTime = st.elapsedSec;
+      dst.billboardYawMode = m3.billboardYawMode;
       this.outEntities[eCount++] = dst;
     }
 
@@ -304,6 +400,7 @@ export class EcsSnapshotProjector {
       const l = this.acquireLight(lCount);
       l.x = rx + tr.w * 0.5;
       l.y = ry + tr.h * 0.5 - (projMode === 'ortho_2d' ? 0 : rz * elevScale);
+      l.z = projMode === 'ortho_2d' ? undefined : rz * elevScale + 24;
       l.radius = ls.radius;
       l.color = ls.color;
       l.intensity = inActiveRealm ? ls.intensity : ls.intensity * 0.15;

@@ -1,4 +1,6 @@
+import { emitModel3DToGpu } from '../ecs/EcsModel3D.ts';
 import type { GpuEngine } from '../gpu/GpuEngine.ts';
+import type { CardinalFacing3D } from '../gpu/GpuMesh3DBatch.ts';
 import {
   computeCamera3D,
   createComputedCamera3D,
@@ -8,6 +10,7 @@ import {
   composeOrthogonalBlueprintInto,
   getOrthogonalBlueprint,
   type OrthogonalArtBlueprint,
+  type OrthogonalFacing,
   type ResolvedLayerInstance,
 } from '../sim/OrthogonalArt.ts';
 import type { Hd2dDepthConfig, RenderSceneSnapshot } from '../types/WorldTypes.ts';
@@ -53,6 +56,12 @@ export class SceneTrue3DPass {
     const fovDeg = hd2d.fovDeg ?? 38;
     const wallHeightScale = hd2d.wallHeightScale ?? 1.25;
     const tiltDeg = hd2d.billboardTiltDeg ?? 12;
+    const effectiveTilt =
+      projection === 'ortho_top'
+        ? 74
+        : projection === 'ortho_front' || projection === 'ortho_side'
+          ? 0
+          : tiltDeg;
     const obliqueShadowAlpha = hd2d.obliqueShadowAlpha ?? 0.42;
 
     computeCamera3D(
@@ -74,6 +83,7 @@ export class SceneTrue3DPass {
 
     const occ = snap.occlusion;
     const occStrength = occ?.shadowStrength ?? 0.86;
+    gpu.setQuadViewEnabled(Boolean(hd2d.quadView));
     gpu.setCamera3D(
       camCenterX,
       camCenterY,
@@ -142,6 +152,7 @@ export class SceneTrue3DPass {
     }
 
     // 2. 3D Floor Tiles, Flat/Tall Decor & Neighbor-Culled Extruded 3D Wall Boxes
+    const hasVoxels3d = Boolean(snap.voxels3d && snap.voxels3d.length > 0);
     for (let i = 0; i < snap.tiles.length; i++) {
       const t = snap.tiles[i];
       const cx = t.x + t.w * 0.5;
@@ -153,6 +164,9 @@ export class SceneTrue3DPass {
       const elevZ = t.elevationZ ?? 0;
 
       if (extrudeH > 0) {
+        if (hasVoxels3d && extrudeH > 4) {
+          continue;
+        }
         const wallH = extrudeH * wallHeightScale;
         const rawSide = t.sideSprite ?? t.sprite;
         const sideId = rawSide === 'solid' ? null : rawSide;
@@ -193,7 +207,7 @@ export class SceneTrue3DPass {
           0,
           t.w,
           t.h,
-          tiltDeg,
+          effectiveTilt,
           t.flipX ?? false,
           t.tint,
           t.alpha ?? 1,
@@ -226,7 +240,87 @@ export class SceneTrue3DPass {
       }
     }
 
-    // 3. 3D Actors, Bosses, Props & Melee Slash Billboards + Grounded Contact Shadows
+    // 2b. Multi-Story 3D Voxels (Cubes, Half-Slabs, Arches, Ramps & Stairs)
+    if (snap.voxels3d && snap.voxels3d.length > 0) {
+      for (let i = 0; i < snap.voxels3d.length; i++) {
+        const v = snap.voxels3d[i];
+        const vcx = v.x + v.w * 0.5;
+        const vcy = v.y + v.d * 0.5;
+        if (Math.abs(vcx - camCenterX) > cullHalfW || Math.abs(vcy - camCenterY) > cullHalfH) {
+          continue;
+        }
+        const sideId = v.sideSprite && v.sideSprite !== 'solid' ? v.sideSprite : v.sprite;
+        const rough = v.roughness ?? 0.62;
+        const met = v.metallic ?? 0.08;
+        const em = v.emissive ?? 0;
+        const vAlpha = v.alpha ?? 1;
+
+        if (v.shape === 'cube') {
+          gpu.drawCuboid3D(
+            v.sprite,
+            sideId,
+            v.sprite,
+            v.x,
+            v.y,
+            v.z,
+            v.w,
+            v.d,
+            v.h,
+            v.cullMask,
+            v.tint,
+            vAlpha,
+            defaultPaletteRow,
+            rough,
+            met,
+            em,
+          );
+        } else if (v.shape === 'half_slab') {
+          gpu.drawCuboid3D(
+            v.sprite,
+            sideId,
+            v.sprite,
+            v.x,
+            v.y,
+            v.z,
+            v.w,
+            v.d,
+            v.h * 0.5,
+            v.cullMask,
+            v.tint,
+            vAlpha,
+            defaultPaletteRow,
+            rough,
+            met,
+            em,
+          );
+        } else if (v.shape === 'arch') {
+          const pillarW = v.w * 0.22;
+          const pillarH = v.h * 0.7;
+          const lintelH = v.h * 0.3;
+          gpu.drawCuboid3D(v.sprite, sideId, v.sprite, v.x, v.y, v.z, pillarW, v.d, pillarH, 0, v.tint, vAlpha, defaultPaletteRow, rough, met, em);
+          gpu.drawCuboid3D(v.sprite, sideId, v.sprite, v.x + v.w - pillarW, v.y, v.z, pillarW, v.d, pillarH, 0, v.tint, vAlpha, defaultPaletteRow, rough, met, em);
+          gpu.drawCuboid3D(v.sprite, sideId, v.sprite, v.x, v.y, v.z + pillarH, v.w, v.d, lintelH, 0, v.tint, vAlpha, defaultPaletteRow, rough, met, em);
+        } else if (
+          v.shape === 'slope_n' ||
+          v.shape === 'slope_e' ||
+          v.shape === 'slope_s' ||
+          v.shape === 'slope_w'
+        ) {
+          const facing = v.shape.slice(6) as CardinalFacing3D;
+          gpu.drawRamp3D(v.sprite, sideId, v.x, v.y, v.z, v.w, v.d, v.h, facing, v.tint, vAlpha, defaultPaletteRow, rough, met, em);
+        } else if (
+          v.shape === 'stair_n' ||
+          v.shape === 'stair_e' ||
+          v.shape === 'stair_s' ||
+          v.shape === 'stair_w'
+        ) {
+          const facing = v.shape.slice(6) as CardinalFacing3D;
+          gpu.drawStairs3D(v.sprite, sideId, v.x, v.y, v.z, v.w, v.d, v.h, facing, 4, v.tint, vAlpha, defaultPaletteRow, rough, met, em);
+        }
+      }
+    }
+
+    // 3. 3D Actors, Bosses, 3D Models & Melee Slash Billboards + Grounded Contact Shadows
     for (let i = 0; i < snap.entities.length; i++) {
       const e = snap.entities[i];
       const footX = e.x + e.w * 0.5;
@@ -253,16 +347,76 @@ export class SceneTrue3DPass {
         );
       }
 
+      if (e.model3dId && snap.models3d && snap.models3d[e.model3dId]) {
+        const model = snap.models3d[e.model3dId];
+        const entityYawDeg = ((e.yawRad ?? 0) * 180) / Math.PI;
+        emitModel3DToGpu(
+          gpu,
+          model,
+          e.x + e.w * 0.5,
+          e.y + e.h * 0.5,
+          footZ,
+          entityYawDeg,
+          (e.modelScaleX ?? 1) * (e.scaleX ?? 1),
+          (e.modelScaleY ?? 1) * (e.scaleY ?? 1),
+          e.modelScaleZ ?? 1,
+          e.modelAnimClip,
+          e.modelAnimTime ?? frameTimeSec,
+          e.tint,
+          e.flash ?? 0,
+        );
+        continue;
+      }
+
+      if (hd2d.quadView && !e.additive) {
+        gpu.drawCuboid3D(
+          e.sprite,
+          e.sprite,
+          e.sprite,
+          e.x + e.w * 0.25,
+          e.y + e.h * 0.25,
+          footZ,
+          Math.max(4, e.w * 0.5),
+          Math.max(4, e.w * 0.5),
+          Math.max(8, drawH * 0.75),
+          0,
+          e.tint,
+          Math.min(0.42, e.alpha ?? 1),
+          e.paletteRow ?? defaultPaletteRow,
+          e.roughness ?? 0.55,
+          e.metallic ?? 0.1,
+          e.emissive ?? 0,
+          ((e.yawRad ?? 0) * 180) / Math.PI,
+        );
+      }
+
       if (e.artBlueprintId) {
         const bp = getOrthogonalBlueprint(e.artBlueprintId, activeCustomBlueprints);
         if (bp) {
+          let resolvedFacing: OrthogonalFacing = e.artFacing ?? 'front';
+          let resolvedFlipX = e.flipX ?? false;
+          if (e.billboardYawMode === 'camera_4way') {
+            const entityYawDeg = ((e.yawRad ?? 0) * 180) / Math.PI;
+            const rel = ((((entityYawDeg - yawDeg) % 360) + 540) % 360) - 180;
+            const absRel = Math.abs(rel);
+            if (absRel <= 45) {
+              resolvedFacing = 'front';
+              resolvedFlipX = false;
+            } else if (absRel >= 135) {
+              resolvedFacing = 'back';
+              resolvedFlipX = false;
+            } else {
+              resolvedFacing = 'side';
+              resolvedFlipX = rel < 0;
+            }
+          }
           const animToggle = (Math.floor(frameTimeSec * 4) & 1) === 1;
           const layerCount = composeOrthogonalBlueprintInto(
             bp,
-            e.artFacing ?? 'front',
+            resolvedFacing,
             e.artPose ?? 'idle',
             e.paletteRow,
-            e.flipX ?? false,
+            resolvedFlipX,
             animToggle,
             composedPool,
           );
@@ -275,7 +429,7 @@ export class SceneTrue3DPass {
               footZ - ly.oy * drawH,
               drawW * ly.scaleX,
               drawH * ly.scaleY,
-              tiltDeg,
+              effectiveTilt,
               ly.flipX,
               e.tint ?? ly.tint,
               (e.alpha ?? 1) * ly.alpha,
@@ -301,7 +455,7 @@ export class SceneTrue3DPass {
         footZ,
         drawW,
         drawH,
-        e.additive ? 34 : tiltDeg,
+        e.additive ? (projection === 'ortho_front' || projection === 'ortho_side' ? 0 : 34) : effectiveTilt,
         e.flipX ?? false,
         e.tint,
         e.alpha ?? 1,
