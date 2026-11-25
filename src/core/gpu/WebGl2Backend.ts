@@ -24,6 +24,7 @@ import {
   OVERSCAN_PAD,
   SHADOW_MAP_SIZE,
   type AtlasPageData,
+  type GpuCamera3DState,
   type GpuOcclusionState,
   type IGpuBackend,
   type Mesh3DPassData,
@@ -775,7 +776,8 @@ export class WebGl2Backend implements IGpuBackend {
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     gl.viewport(0, 0, rt.osW, rt.osH);
 
-    let drawCalls = 1;
+    const isQuadView = Boolean(quad3d && quad3d.camera.enabled && quad3d.quadViews);
+    let drawCalls = 0;
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.depthMask(false);
@@ -793,7 +795,10 @@ export class WebGl2Backend implements IGpuBackend {
     gl.uniform1f(this.uCozyLoc, sky.cozyFilter ? 1 : 0);
     gl.uniform1f(this.uTimeLoc, timeSec);
     gl.uniform2f(this.uSkyViewSizeLoc, vw, vh);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if (!isQuadView) {
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      drawCalls++;
+    }
 
     const safeLights = lightsData ? Math.max(0, Math.min(MAX_DYNAMIC_LIGHTS, lightCount | 0)) : 0;
     if (safeLights > 0) {
@@ -853,23 +858,6 @@ export class WebGl2Backend implements IGpuBackend {
     const use3D = Boolean(quad3d && quad3d.camera.enabled);
     if (use3D && quad3d) {
       const cam = quad3d.camera;
-      computeCamera3D(
-        {
-          camCenterX: cam.camCenterX,
-          camCenterY: cam.camCenterY,
-          camCenterZ: cam.camCenterZ,
-          zoom: cam.zoom,
-          yawDeg: cam.yawDeg,
-          pitchDeg: cam.pitchDeg,
-          rollDeg: cam.rollDeg,
-          fovDeg: cam.fovDeg,
-          projection: cam.projection,
-          viewW: vw,
-          viewH: vh,
-        },
-        this.cam3dScratch,
-      );
-      buildCamera3DViewProjMatrix(this.cam3dScratch, false, this.viewProj3d);
       const shadowHalfExtent = (Math.max(vw, vh) / Math.max(0.25, cam.zoom)) * 0.85 + 160;
       buildDirectionalLightViewProjMatrix(
         cam.camCenterX,
@@ -904,11 +892,29 @@ export class WebGl2Backend implements IGpuBackend {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dOpaqueBuffer);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.opaqueData.subarray(0, safe3dOpaque * FLOATS_PER_QUAD3D));
       }
+      if (safe3dAlpha > 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dAlphaBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.alphaData.subarray(0, safe3dAlpha * FLOATS_PER_QUAD3D));
+      }
+      if (safe3dAdd > 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dAddBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.additiveData.subarray(0, safe3dAdd * FLOATS_PER_QUAD3D));
+      }
       if (mesh3d && safeMeshOpaqueV > 0 && safeMeshOpaqueI > 0) {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.meshOpaqueVbo);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh3d.opaqueVertices.subarray(0, safeMeshOpaqueV * FLOATS_PER_MESH3D_VERTEX));
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.meshOpaqueIbo);
         gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, mesh3d.opaqueIndices.subarray(0, safeMeshOpaqueI));
+      }
+      if (mesh3d && safeMeshAlphaV > 0 && safeMeshAlphaI > 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.meshAlphaVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh3d.alphaVertices.subarray(0, safeMeshAlphaV * FLOATS_PER_MESH3D_VERTEX));
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.meshAlphaIbo);
+        gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, mesh3d.alphaIndices.subarray(0, safeMeshAlphaI));
+      }
+      if (mesh3d && safeLine3dV > 1) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.line3dVbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh3d.lineVertices.subarray(0, safeLine3dV * FLOATS_PER_MESH3D_VERTEX));
       }
 
       const runShadowPass = Boolean(
@@ -956,139 +962,85 @@ export class WebGl2Backend implements IGpuBackend {
       gl.activeTexture(gl.TEXTURE4);
       gl.bindTexture(gl.TEXTURE_2D, this.shadowDepthTex);
 
-      gl.depthMask(true);
-      gl.clearDepth(1.0);
-      gl.clear(gl.DEPTH_BUFFER_BIT);
-      gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.LEQUAL);
-
       const shadowFlag = runShadowPass ? 1.0 : 0.0;
-
-      // Pass 1A-Mesh: Indexed Triangle Mesh3D Opaque
-      if (safeMeshOpaqueI > 0) {
-        gl.disable(gl.BLEND);
-        gl.depthMask(true);
-        gl.useProgram(this.mesh3dProg);
-        gl.uniformMatrix4fv(this.uMeshViewProjLoc, false, this.viewProj3d);
-        gl.uniform2f(this.uMeshViewSizeLoc, vw, vh);
-        gl.uniformMatrix4fv(this.uMeshLightViewProjLoc, false, this.lightViewProj3d);
-        gl.uniform4f(this.uMeshEyePosLoc, this.cam3dScratch.eyeX, this.cam3dScratch.eyeY, this.cam3dScratch.eyeZ, shadowFlag);
-        gl.uniform4f(this.uMeshSunDirInfoLoc, cam.sunDirX, cam.sunDirY, cam.sunDirZ, cam.shadowStrength);
-        gl.uniform4fv(this.uMeshLightPosZLoc, this.lightPosZData);
-        gl.uniform1f(this.uMeshPaletteRowsLoc, this.paletteRows);
-        gl.uniform1f(this.uMeshOpaquePassLoc, 1.0);
-        gl.uniform1i(this.uMeshLightCountLoc, safeLights);
-        if (safeLights > 0) {
-          gl.uniform4fv(this.uMeshLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
-          gl.uniform4fv(this.uMeshLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
-        }
-        gl.bindVertexArray(this.meshOpaqueVao);
-        gl.drawElements(gl.TRIANGLES, safeMeshOpaqueI, gl.UNSIGNED_INT, 0);
-        drawCalls++;
-      }
-
-      // Pass 1A-Quad: Quad3D Opaque / Alpha / Additive
-      if (safe3dOpaque > 0 || safe3dAlpha > 0 || safe3dAdd > 0) {
-        gl.useProgram(this.quad3dProg);
-        gl.uniformMatrix4fv(this.u3dViewProjLoc, false, this.viewProj3d);
-        gl.uniform2f(this.u3dViewSizeLoc, vw, vh);
-        gl.uniformMatrix4fv(this.u3dLightViewProjLoc, false, this.lightViewProj3d);
-        gl.uniform4f(this.u3dEyePosLoc, this.cam3dScratch.eyeX, this.cam3dScratch.eyeY, this.cam3dScratch.eyeZ, shadowFlag);
-        gl.uniform4f(this.u3dSunDirInfoLoc, cam.sunDirX, cam.sunDirY, cam.sunDirZ, cam.shadowStrength);
-        gl.uniform4fv(this.u3dLightPosZLoc, this.lightPosZData);
-        gl.uniform1f(this.u3dPaletteRowsLoc, this.paletteRows);
-        gl.uniform1i(this.u3dLightCountLoc, safeLights);
-        if (safeLights > 0) {
-          gl.uniform4fv(this.u3dLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
-          gl.uniform4fv(this.u3dLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
-        }
-        const occCols = occOn && occlusion ? Math.min(OCCLUSION_GRID_MAX, occlusion.cols) : 0;
-        const occRows = occOn && occlusion ? Math.min(OCCLUSION_GRID_MAX, occlusion.rows) : 0;
-        const occStr = occOn && occlusion ? occlusion.shadowStrength : 0;
-        const occSoft = occOn && occlusion ? occlusion.shadowSoftness : 0.35;
-        gl.uniform4f(
-          this.u3dOccWorldLoc,
-          cam.occOriginWorldX,
-          cam.occOriginWorldY,
-          Math.max(1, cam.occTileSizeWorld),
-          occSoft,
-        );
-
-        if (safe3dOpaque > 0) {
+      const quadViews = quad3d.quadViews;
+      if (quadViews) {
+        const halfW = Math.floor(rt.osW * 0.5);
+        const halfH = Math.floor(rt.osH * 0.5);
+        const subW = vw * 0.5;
+        const subH = vh * 0.5;
+        gl.enable(gl.SCISSOR_TEST);
+        for (let q = 0; q < 4; q++) {
+          let vx = 0;
+          let vy = 0;
+          let vwQ = halfW;
+          let vhQ = halfH;
+          if (q === 0) {
+            vx = 0;
+            vy = halfH;
+            vwQ = halfW;
+            vhQ = rt.osH - halfH;
+          } else if (q === 1) {
+            vx = halfW;
+            vy = halfH;
+            vwQ = rt.osW - halfW;
+            vhQ = rt.osH - halfH;
+          } else if (q === 2) {
+            vx = 0;
+            vy = 0;
+            vwQ = halfW;
+            vhQ = halfH;
+          } else {
+            vx = halfW;
+            vy = 0;
+            vwQ = rt.osW - halfW;
+            vhQ = halfH;
+          }
+          if (vwQ <= 0 || vhQ <= 0) continue;
+          gl.viewport(vx, vy, vwQ, vhQ);
+          gl.scissor(vx, vy, vwQ, vhQ);
+          gl.useProgram(this.skyProg);
+          gl.bindVertexArray(this.skyVao);
           gl.disable(gl.BLEND);
-          gl.depthMask(true);
-          gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 1.0);
-          gl.bindVertexArray(this.quad3dOpaqueVao);
-          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dOpaque);
-          drawCalls++;
-        }
-
-        if (safe3dAlpha > 0) {
-          gl.enable(gl.BLEND);
-          gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+          gl.disable(gl.DEPTH_TEST);
           gl.depthMask(false);
-          gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 0.0);
-          gl.bindVertexArray(this.quad3dAlphaVao);
-          gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dAlphaBuffer);
-          gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.alphaData.subarray(0, safe3dAlpha * FLOATS_PER_QUAD3D));
-          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dAlpha);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
           drawCalls++;
+          drawCalls += this.bindAndDraw3DScene(
+            subW,
+            subH,
+            quadViews[q],
+            shadowFlag,
+            safeLights,
+            occOn,
+            occlusion,
+            safe3dOpaque,
+            safe3dAlpha,
+            safe3dAdd,
+            safeMeshOpaqueI,
+            safeMeshAlphaI,
+            safeLine3dV,
+          );
         }
-
-        if (safe3dAdd > 0) {
-          gl.enable(gl.BLEND);
-          gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-          gl.depthMask(false);
-          gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 0.0);
-          gl.bindVertexArray(this.quad3dAddVao);
-          gl.bindBuffer(gl.ARRAY_BUFFER, this.quad3dAddBuffer);
-          gl.bufferSubData(gl.ARRAY_BUFFER, 0, quad3d.additiveData.subarray(0, safe3dAdd * FLOATS_PER_QUAD3D));
-          gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dAdd);
-          drawCalls++;
-        }
+        gl.disable(gl.SCISSOR_TEST);
+        gl.viewport(0, 0, rt.osW, rt.osH);
+      } else {
+        drawCalls += this.bindAndDraw3DScene(
+          vw,
+          vh,
+          cam,
+          shadowFlag,
+          safeLights,
+          occOn,
+          occlusion,
+          safe3dOpaque,
+          safe3dAlpha,
+          safe3dAdd,
+          safeMeshOpaqueI,
+          safeMeshAlphaI,
+          safeLine3dV,
+        );
       }
-
-      // Pass 1A-MeshAlpha & 3D Gizmo/Grid Lines
-      if ((mesh3d && safeMeshAlphaV > 0 && safeMeshAlphaI > 0) || (mesh3d && safeLine3dV > 1)) {
-        gl.useProgram(this.mesh3dProg);
-        gl.uniformMatrix4fv(this.uMeshViewProjLoc, false, this.viewProj3d);
-        gl.uniform2f(this.uMeshViewSizeLoc, vw, vh);
-        gl.uniformMatrix4fv(this.uMeshLightViewProjLoc, false, this.lightViewProj3d);
-        gl.uniform4f(this.uMeshEyePosLoc, this.cam3dScratch.eyeX, this.cam3dScratch.eyeY, this.cam3dScratch.eyeZ, shadowFlag);
-        gl.uniform4f(this.uMeshSunDirInfoLoc, cam.sunDirX, cam.sunDirY, cam.sunDirZ, cam.shadowStrength);
-        gl.uniform4fv(this.uMeshLightPosZLoc, this.lightPosZData);
-        gl.uniform1f(this.uMeshPaletteRowsLoc, this.paletteRows);
-        gl.uniform1f(this.uMeshOpaquePassLoc, 0.0);
-        gl.uniform1i(this.uMeshLightCountLoc, safeLights);
-        if (safeLights > 0) {
-          gl.uniform4fv(this.uMeshLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
-          gl.uniform4fv(this.uMeshLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
-        }
-        gl.enable(gl.BLEND);
-        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-        gl.depthMask(false);
-
-        if (mesh3d && safeMeshAlphaV > 0 && safeMeshAlphaI > 0) {
-          gl.bindVertexArray(this.meshAlphaVao);
-          gl.bindBuffer(gl.ARRAY_BUFFER, this.meshAlphaVbo);
-          gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh3d.alphaVertices.subarray(0, safeMeshAlphaV * FLOATS_PER_MESH3D_VERTEX));
-          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.meshAlphaIbo);
-          gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, mesh3d.alphaIndices.subarray(0, safeMeshAlphaI));
-          gl.drawElements(gl.TRIANGLES, safeMeshAlphaI, gl.UNSIGNED_INT, 0);
-          drawCalls++;
-        }
-
-        if (mesh3d && safeLine3dV > 1) {
-          gl.bindVertexArray(this.line3dVao);
-          gl.bindBuffer(gl.ARRAY_BUFFER, this.line3dVbo);
-          gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh3d.lineVertices.subarray(0, safeLine3dV * FLOATS_PER_MESH3D_VERTEX));
-          gl.drawArrays(gl.LINES, 0, safeLine3dV);
-          drawCalls++;
-        }
-      }
-
-      gl.depthMask(true);
-      gl.disable(gl.DEPTH_TEST);
     }
 
     const safeAlpha = Math.min(alphaCount, MAX_INSTANCES_PER_PASS);
@@ -1205,6 +1157,165 @@ export class WebGl2Backend implements IGpuBackend {
     gl.bindSampler(2, null);
     drawCalls++;
 
+    return drawCalls;
+  }
+
+  private bindAndDraw3DScene(
+    subViewW: number,
+    subViewH: number,
+    cam: GpuCamera3DState,
+    shadowFlag: number,
+    safeLights: number,
+    occOn: boolean,
+    occlusion: GpuOcclusionState | undefined,
+    safe3dOpaque: number,
+    safe3dAlpha: number,
+    safe3dAdd: number,
+    safeMeshOpaqueI: number,
+    safeMeshAlphaI: number,
+    safeLine3dV: number,
+  ): number {
+    const gl = this.gl;
+    let drawCalls = 0;
+    computeCamera3D(
+      {
+        camCenterX: cam.camCenterX,
+        camCenterY: cam.camCenterY,
+        camCenterZ: cam.camCenterZ,
+        zoom: cam.zoom,
+        yawDeg: cam.yawDeg,
+        pitchDeg: cam.pitchDeg,
+        rollDeg: cam.rollDeg,
+        fovDeg: cam.fovDeg,
+        projection: cam.projection,
+        viewW: subViewW,
+        viewH: subViewH,
+      },
+      this.cam3dScratch,
+    );
+    buildCamera3DViewProjMatrix(this.cam3dScratch, false, this.viewProj3d);
+
+    gl.depthMask(true);
+    gl.clearDepth(1.0);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+
+    // Pass 1A-Mesh: Indexed Triangle Mesh3D Opaque
+    if (safeMeshOpaqueI > 0) {
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+      gl.useProgram(this.mesh3dProg);
+      gl.uniformMatrix4fv(this.uMeshViewProjLoc, false, this.viewProj3d);
+      gl.uniform2f(this.uMeshViewSizeLoc, subViewW, subViewH);
+      gl.uniformMatrix4fv(this.uMeshLightViewProjLoc, false, this.lightViewProj3d);
+      gl.uniform4f(this.uMeshEyePosLoc, this.cam3dScratch.eyeX, this.cam3dScratch.eyeY, this.cam3dScratch.eyeZ, shadowFlag);
+      gl.uniform4f(this.uMeshSunDirInfoLoc, cam.sunDirX, cam.sunDirY, cam.sunDirZ, cam.shadowStrength);
+      gl.uniform4fv(this.uMeshLightPosZLoc, this.lightPosZData);
+      gl.uniform1f(this.uMeshPaletteRowsLoc, this.paletteRows);
+      gl.uniform1f(this.uMeshOpaquePassLoc, 1.0);
+      gl.uniform1i(this.uMeshLightCountLoc, safeLights);
+      if (safeLights > 0) {
+        gl.uniform4fv(this.uMeshLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
+        gl.uniform4fv(this.uMeshLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
+      }
+      gl.bindVertexArray(this.meshOpaqueVao);
+      gl.drawElements(gl.TRIANGLES, safeMeshOpaqueI, gl.UNSIGNED_INT, 0);
+      drawCalls++;
+    }
+
+    // Pass 1A-Quad: Quad3D Opaque / Alpha / Additive
+    if (safe3dOpaque > 0 || safe3dAlpha > 0 || safe3dAdd > 0) {
+      gl.useProgram(this.quad3dProg);
+      gl.uniformMatrix4fv(this.u3dViewProjLoc, false, this.viewProj3d);
+      gl.uniform2f(this.u3dViewSizeLoc, subViewW, subViewH);
+      gl.uniformMatrix4fv(this.u3dLightViewProjLoc, false, this.lightViewProj3d);
+      gl.uniform4f(this.u3dEyePosLoc, this.cam3dScratch.eyeX, this.cam3dScratch.eyeY, this.cam3dScratch.eyeZ, shadowFlag);
+      gl.uniform4f(this.u3dSunDirInfoLoc, cam.sunDirX, cam.sunDirY, cam.sunDirZ, cam.shadowStrength);
+      gl.uniform4fv(this.u3dLightPosZLoc, this.lightPosZData);
+      gl.uniform1f(this.u3dPaletteRowsLoc, this.paletteRows);
+      gl.uniform1i(this.u3dLightCountLoc, safeLights);
+      if (safeLights > 0) {
+        gl.uniform4fv(this.u3dLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
+        gl.uniform4fv(this.u3dLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
+      }
+      const occCols = occOn && occlusion ? Math.min(OCCLUSION_GRID_MAX, occlusion.cols) : 0;
+      const occRows = occOn && occlusion ? Math.min(OCCLUSION_GRID_MAX, occlusion.rows) : 0;
+      const occStr = occOn && occlusion ? occlusion.shadowStrength : 0;
+      const occSoft = occOn && occlusion ? occlusion.shadowSoftness : 0.35;
+      gl.uniform4f(
+        this.u3dOccWorldLoc,
+        cam.occOriginWorldX,
+        cam.occOriginWorldY,
+        Math.max(1, cam.occTileSizeWorld),
+        occSoft,
+      );
+
+      if (safe3dOpaque > 0) {
+        gl.disable(gl.BLEND);
+        gl.depthMask(true);
+        gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 1.0);
+        gl.bindVertexArray(this.quad3dOpaqueVao);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dOpaque);
+        drawCalls++;
+      }
+
+      if (safe3dAlpha > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 0.0);
+        gl.bindVertexArray(this.quad3dAlphaVao);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dAlpha);
+        drawCalls++;
+      }
+
+      if (safe3dAdd > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.depthMask(false);
+        gl.uniform4f(this.u3dOccDimsLoc, occCols, occRows, occStr, 0.0);
+        gl.bindVertexArray(this.quad3dAddVao);
+        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, safe3dAdd);
+        drawCalls++;
+      }
+    }
+
+    // Pass 1A-MeshAlpha & 3D Gizmo/Grid Lines
+    if (safeMeshAlphaI > 0 || safeLine3dV > 1) {
+      gl.useProgram(this.mesh3dProg);
+      gl.uniformMatrix4fv(this.uMeshViewProjLoc, false, this.viewProj3d);
+      gl.uniform2f(this.uMeshViewSizeLoc, subViewW, subViewH);
+      gl.uniformMatrix4fv(this.uMeshLightViewProjLoc, false, this.lightViewProj3d);
+      gl.uniform4f(this.uMeshEyePosLoc, this.cam3dScratch.eyeX, this.cam3dScratch.eyeY, this.cam3dScratch.eyeZ, shadowFlag);
+      gl.uniform4f(this.uMeshSunDirInfoLoc, cam.sunDirX, cam.sunDirY, cam.sunDirZ, cam.shadowStrength);
+      gl.uniform4fv(this.uMeshLightPosZLoc, this.lightPosZData);
+      gl.uniform1f(this.uMeshPaletteRowsLoc, this.paletteRows);
+      gl.uniform1f(this.uMeshOpaquePassLoc, 0.0);
+      gl.uniform1i(this.uMeshLightCountLoc, safeLights);
+      if (safeLights > 0) {
+        gl.uniform4fv(this.uMeshLightPosRadLoc, this.lightPosRadData, 0, safeLights * 4);
+        gl.uniform4fv(this.uMeshLightColIntLoc, this.lightColIntData, 0, safeLights * 4);
+      }
+      gl.enable(gl.BLEND);
+      gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+
+      if (safeMeshAlphaI > 0) {
+        gl.bindVertexArray(this.meshAlphaVao);
+        gl.drawElements(gl.TRIANGLES, safeMeshAlphaI, gl.UNSIGNED_INT, 0);
+        drawCalls++;
+      }
+
+      if (safeLine3dV > 1) {
+        gl.bindVertexArray(this.line3dVao);
+        gl.drawArrays(gl.LINES, 0, safeLine3dV);
+        drawCalls++;
+      }
+    }
+
+    gl.depthMask(true);
+    gl.disable(gl.DEPTH_TEST);
     return drawCalls;
   }
 

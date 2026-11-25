@@ -395,6 +395,10 @@ export class GpuEngine {
     this.quad3d.setSunLight3D(dirX, dirY, dirZ, shadowMapEnabled, shadowStrength);
   }
 
+  public setQuadViewEnabled(enabled: boolean): void {
+    this.quad3d.setQuadViewEnabled(enabled);
+  }
+
   public pushDynamicLight3D(
     x: number,
     y: number,

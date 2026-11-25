@@ -24,6 +24,7 @@ import {
   OVERSCAN_PAD,
   SHADOW_MAP_SIZE,
   type AtlasPageData,
+  type GpuCamera3DState,
   type GpuOcclusionState,
   type IGpuBackend,
   type Mesh3DPassData,
@@ -52,6 +53,10 @@ interface Mesh3dGpuResources {
   alphaVertBuf: GPUBuffer;
   alphaIdxBuf: GPUBuffer;
   lineVertBuf: GPUBuffer;
+  quadViewOpaqueUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer];
+  quadViewBlendUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer];
+  quadViewOpaqueBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup];
+  quadViewBlendBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup];
 }
 
 interface PostRenderTargets {
@@ -609,22 +614,46 @@ export class WebGpuBackend implements IGpuBackend {
           { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
         ],
       });
-      const quad3dOpaqueBindGroup = device.createBindGroup({
-        layout: quad3dBindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: quad3dOpaqueUniBuf } },
-          { binding: 1, resource: shadowDepthView },
-          { binding: 2, resource: shadowSampler },
-        ],
-      });
-      const quad3dBlendBindGroup = device.createBindGroup({
-        layout: quad3dBindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: quad3dBlendUniBuf } },
-          { binding: 1, resource: shadowDepthView },
-          { binding: 2, resource: shadowSampler },
-        ],
-      });
+      const mkQuad3dUniBuf = () =>
+        device.createBuffer({
+          size: 288,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+      const mkQuad3dBindGroup = (buf: GPUBuffer) =>
+        device.createBindGroup({
+          layout: quad3dBindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: buf } },
+            { binding: 1, resource: shadowDepthView },
+            { binding: 2, resource: shadowSampler },
+          ],
+        });
+      const quad3dOpaqueBindGroup = mkQuad3dBindGroup(quad3dOpaqueUniBuf);
+      const quad3dBlendBindGroup = mkQuad3dBindGroup(quad3dBlendUniBuf);
+      const quadViewOpaqueUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer] = [
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+      ];
+      const quadViewBlendUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer] = [
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+      ];
+      const quadViewOpaqueBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup] = [
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[0]),
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[1]),
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[2]),
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[3]),
+      ];
+      const quadViewBlendBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup] = [
+        mkQuad3dBindGroup(quadViewBlendUniBufs[0]),
+        mkQuad3dBindGroup(quadViewBlendUniBufs[1]),
+        mkQuad3dBindGroup(quadViewBlendUniBufs[2]),
+        mkQuad3dBindGroup(quadViewBlendUniBufs[3]),
+      ];
 
       const postBindGroupLayout = device.createBindGroupLayout({
         entries: [
@@ -878,6 +907,10 @@ export class WebGpuBackend implements IGpuBackend {
         alphaVertBuf: meshAlphaVertBuf,
         alphaIdxBuf: meshAlphaIdxBuf,
         lineVertBuf: line3dVertBuf,
+        quadViewOpaqueUniBufs,
+        quadViewBlendUniBufs,
+        quadViewOpaqueBindGroups,
+        quadViewBlendBindGroups,
       };
 
       const validationErr = await device.popErrorScope();
@@ -1362,23 +1395,6 @@ export class WebGpuBackend implements IGpuBackend {
 
     if (use3D && quad3d) {
       const cam = quad3d.camera;
-      computeCamera3D(
-        {
-          camCenterX: cam.camCenterX,
-          camCenterY: cam.camCenterY,
-          camCenterZ: cam.camCenterZ,
-          zoom: cam.zoom,
-          yawDeg: cam.yawDeg,
-          pitchDeg: cam.pitchDeg,
-          rollDeg: cam.rollDeg,
-          fovDeg: cam.fovDeg,
-          projection: cam.projection,
-          viewW,
-          viewH,
-        },
-        this.cam3dScratch,
-      );
-      buildCamera3DViewProjMatrix(this.cam3dScratch, true, this.viewProj3d);
       const shadowHalfExtent = Math.max(viewW, viewH) / Math.max(0.25, cam.zoom) * 0.85 + 160;
       buildDirectionalLightViewProjMatrix(
         cam.camCenterX,
@@ -1395,31 +1411,30 @@ export class WebGpuBackend implements IGpuBackend {
       );
       runShadowPass = Boolean(cam.shadowMapEnabled && cam.shadowStrength > 0.005 && (safeMeshOpaqueI > 0 || safe3dOpaque > 0));
 
-      this.quad3dUniformData.set(this.viewProj3d, 0);
-      this.quad3dUniformData.set(this.lightViewProj3d, 16);
-      this.quad3dUniformData[32] = cam.occOriginWorldX;
-      this.quad3dUniformData[33] = cam.occOriginWorldY;
-      this.quad3dUniformData[34] = Math.max(1, cam.occTileSizeWorld);
-      this.quad3dUniformData[35] = 1.0; // opaque cutout pass
-      this.quad3dUniformData[36] = viewW;
-      this.quad3dUniformData[37] = viewH;
-      this.quad3dUniformData[38] = cam.camCenterX;
-      this.quad3dUniformData[39] = cam.camCenterY;
-      this.quad3dUniformData[40] = this.cam3dScratch.eyeX;
-      this.quad3dUniformData[41] = this.cam3dScratch.eyeY;
-      this.quad3dUniformData[42] = this.cam3dScratch.eyeZ;
-      this.quad3dUniformData[43] = runShadowPass ? 1.0 : 0.0;
-      this.quad3dUniformData[44] = cam.sunDirX;
-      this.quad3dUniformData[45] = cam.sunDirY;
-      this.quad3dUniformData[46] = cam.sunDirZ;
-      this.quad3dUniformData[47] = cam.shadowStrength;
-      const lz = mesh3d?.lightPosZ;
-      for (let i = 0; i < MAX_DYNAMIC_LIGHTS; i++) {
-        this.quad3dUniformData[48 + i] = lz && i < lz.length ? lz[i] : 24.0;
+      this.writeQuad3dCameraUniforms(
+        viewW,
+        viewH,
+        cam,
+        runShadowPass,
+        mesh3d,
+        this.quad3dOpaqueUniBuf,
+        this.quad3dBlendUniBuf,
+      );
+      if (quad3d.quadViews) {
+        const subW = viewW * 0.5;
+        const subH = viewH * 0.5;
+        for (let q = 0; q < 4; q++) {
+          this.writeQuad3dCameraUniforms(
+            subW,
+            subH,
+            quad3d.quadViews[q],
+            runShadowPass,
+            mesh3d,
+            this.mesh3dRes.quadViewOpaqueUniBufs[q],
+            this.mesh3dRes.quadViewBlendUniBufs[q],
+          );
+        }
       }
-      this.device.queue.writeBuffer(this.quad3dOpaqueUniBuf, 0, this.quad3dUniformData);
-      this.quad3dUniformData[35] = 0.0; // alpha/additive blend pass
-      this.device.queue.writeBuffer(this.quad3dBlendUniBuf, 0, this.quad3dUniformData);
 
       if (safe3dOpaque > 0) {
         this.device.queue.writeBuffer(
@@ -1547,53 +1562,62 @@ export class WebGpuBackend implements IGpuBackend {
           depthStoreOp: 'store',
         },
       });
-      pass1a.setBindGroup(0, this.pass1BindGroup);
-      pass1a.setPipeline(this.sky3dPipeline);
-      pass1a.draw(6);
-
-      if (safeMeshOpaqueI > 0) {
-        pass1a.setPipeline(this.mesh3dRes.meshOpaquePipeline);
-        pass1a.setBindGroup(1, this.quad3dOpaqueBindGroup);
-        pass1a.setVertexBuffer(0, this.mesh3dRes.opaqueVertBuf);
-        pass1a.setIndexBuffer(this.mesh3dRes.opaqueIdxBuf, 'uint32');
-        pass1a.drawIndexed(safeMeshOpaqueI);
-        drawCalls++;
-      }
-      if (safe3dOpaque > 0) {
-        pass1a.setPipeline(this.quad3dOpaquePipeline);
-        pass1a.setBindGroup(1, this.quad3dOpaqueBindGroup);
-        pass1a.setVertexBuffer(0, this.quad3dOpaqueBuffer);
-        pass1a.draw(6, safe3dOpaque);
-        drawCalls++;
-      }
-      if (safeMeshAlphaI > 0) {
-        pass1a.setPipeline(this.mesh3dRes.meshAlphaPipeline);
-        pass1a.setBindGroup(1, this.quad3dBlendBindGroup);
-        pass1a.setVertexBuffer(0, this.mesh3dRes.alphaVertBuf);
-        pass1a.setIndexBuffer(this.mesh3dRes.alphaIdxBuf, 'uint32');
-        pass1a.drawIndexed(safeMeshAlphaI);
-        drawCalls++;
-      }
-      if (safe3dAlpha > 0) {
-        pass1a.setPipeline(this.quad3dAlphaPipeline);
-        pass1a.setBindGroup(1, this.quad3dBlendBindGroup);
-        pass1a.setVertexBuffer(0, this.quad3dAlphaBuffer);
-        pass1a.draw(6, safe3dAlpha);
-        drawCalls++;
-      }
-      if (safe3dAdd > 0) {
-        pass1a.setPipeline(this.quad3dAddPipeline);
-        pass1a.setBindGroup(1, this.quad3dBlendBindGroup);
-        pass1a.setVertexBuffer(0, this.quad3dAddBuffer);
-        pass1a.draw(6, safe3dAdd);
-        drawCalls++;
-      }
-      if (safeLine3dV > 1) {
-        pass1a.setPipeline(this.mesh3dRes.line3dPipeline);
-        pass1a.setBindGroup(1, this.quad3dBlendBindGroup);
-        pass1a.setVertexBuffer(0, this.mesh3dRes.lineVertBuf);
-        pass1a.draw(safeLine3dV);
-        drawCalls++;
+      if (quad3d?.quadViews) {
+        const halfW = Math.floor(rt.osW * 0.5);
+        const halfH = Math.floor(rt.osH * 0.5);
+        for (let q = 0; q < 4; q++) {
+          let vx = 0;
+          let vy = 0;
+          let vwQ = halfW;
+          let vhQ = halfH;
+          if (q === 0) {
+            vx = 0;
+            vy = 0;
+            vwQ = halfW;
+            vhQ = halfH;
+          } else if (q === 1) {
+            vx = halfW;
+            vy = 0;
+            vwQ = rt.osW - halfW;
+            vhQ = halfH;
+          } else if (q === 2) {
+            vx = 0;
+            vy = halfH;
+            vwQ = halfW;
+            vhQ = rt.osH - halfH;
+          } else {
+            vx = halfW;
+            vy = halfH;
+            vwQ = rt.osW - halfW;
+            vhQ = rt.osH - halfH;
+          }
+          if (vwQ <= 0 || vhQ <= 0) continue;
+          pass1a.setViewport(vx, vy, vwQ, vhQ, 0, 1);
+          pass1a.setScissorRect(vx, vy, vwQ, vhQ);
+          drawCalls += this.drawPass1a3DScene(
+            pass1a,
+            this.mesh3dRes.quadViewOpaqueBindGroups[q],
+            this.mesh3dRes.quadViewBlendBindGroups[q],
+            safeMeshOpaqueI,
+            safe3dOpaque,
+            safeMeshAlphaI,
+            safe3dAlpha,
+            safe3dAdd,
+            safeLine3dV,
+          );
+        }
+      } else {
+        drawCalls += this.drawPass1a3DScene(
+          pass1a,
+          this.quad3dOpaqueBindGroup,
+          this.quad3dBlendBindGroup,
+          safeMeshOpaqueI,
+          safe3dOpaque,
+          safeMeshAlphaI,
+          safe3dAlpha,
+          safe3dAdd,
+          safeLine3dV,
+        );
       }
       pass1a.end();
 
@@ -1709,6 +1733,123 @@ export class WebGpuBackend implements IGpuBackend {
     return drawCalls;
   }
 
+  private writeQuad3dCameraUniforms(
+    subViewW: number,
+    subViewH: number,
+    cam: GpuCamera3DState,
+    runShadowPass: boolean,
+    mesh3d: Mesh3DPassData | undefined,
+    opaqueBuf: GPUBuffer,
+    blendBuf: GPUBuffer,
+  ): void {
+    computeCamera3D(
+      {
+        camCenterX: cam.camCenterX,
+        camCenterY: cam.camCenterY,
+        camCenterZ: cam.camCenterZ,
+        zoom: cam.zoom,
+        yawDeg: cam.yawDeg,
+        pitchDeg: cam.pitchDeg,
+        rollDeg: cam.rollDeg,
+        fovDeg: cam.fovDeg,
+        projection: cam.projection,
+        viewW: subViewW,
+        viewH: subViewH,
+      },
+      this.cam3dScratch,
+    );
+    buildCamera3DViewProjMatrix(this.cam3dScratch, true, this.viewProj3d);
+
+    this.quad3dUniformData.set(this.viewProj3d, 0);
+    this.quad3dUniformData.set(this.lightViewProj3d, 16);
+    this.quad3dUniformData[32] = cam.occOriginWorldX;
+    this.quad3dUniformData[33] = cam.occOriginWorldY;
+    this.quad3dUniformData[34] = Math.max(1, cam.occTileSizeWorld);
+    this.quad3dUniformData[35] = 1.0; // opaque cutout pass
+    this.quad3dUniformData[36] = subViewW;
+    this.quad3dUniformData[37] = subViewH;
+    this.quad3dUniformData[38] = cam.camCenterX;
+    this.quad3dUniformData[39] = cam.camCenterY;
+    this.quad3dUniformData[40] = this.cam3dScratch.eyeX;
+    this.quad3dUniformData[41] = this.cam3dScratch.eyeY;
+    this.quad3dUniformData[42] = this.cam3dScratch.eyeZ;
+    this.quad3dUniformData[43] = runShadowPass ? 1.0 : 0.0;
+    this.quad3dUniformData[44] = cam.sunDirX;
+    this.quad3dUniformData[45] = cam.sunDirY;
+    this.quad3dUniformData[46] = cam.sunDirZ;
+    this.quad3dUniformData[47] = cam.shadowStrength;
+    const lz = mesh3d?.lightPosZ;
+    for (let i = 0; i < MAX_DYNAMIC_LIGHTS; i++) {
+      this.quad3dUniformData[48 + i] = lz && i < lz.length ? lz[i] : 24.0;
+    }
+    this.device.queue.writeBuffer(opaqueBuf, 0, this.quad3dUniformData);
+    this.quad3dUniformData[35] = 0.0; // alpha/additive blend pass
+    this.device.queue.writeBuffer(blendBuf, 0, this.quad3dUniformData);
+  }
+
+  private drawPass1a3DScene(
+    pass1a: GPURenderPassEncoder,
+    opaqueBindGroup: GPUBindGroup,
+    blendBindGroup: GPUBindGroup,
+    safeMeshOpaqueI: number,
+    safe3dOpaque: number,
+    safeMeshAlphaI: number,
+    safe3dAlpha: number,
+    safe3dAdd: number,
+    safeLine3dV: number,
+  ): number {
+    let drawCalls = 0;
+    pass1a.setBindGroup(0, this.pass1BindGroup);
+    pass1a.setPipeline(this.sky3dPipeline);
+    pass1a.draw(6);
+
+    if (safeMeshOpaqueI > 0) {
+      pass1a.setPipeline(this.mesh3dRes.meshOpaquePipeline);
+      pass1a.setBindGroup(1, opaqueBindGroup);
+      pass1a.setVertexBuffer(0, this.mesh3dRes.opaqueVertBuf);
+      pass1a.setIndexBuffer(this.mesh3dRes.opaqueIdxBuf, 'uint32');
+      pass1a.drawIndexed(safeMeshOpaqueI);
+      drawCalls++;
+    }
+    if (safe3dOpaque > 0) {
+      pass1a.setPipeline(this.quad3dOpaquePipeline);
+      pass1a.setBindGroup(1, opaqueBindGroup);
+      pass1a.setVertexBuffer(0, this.quad3dOpaqueBuffer);
+      pass1a.draw(6, safe3dOpaque);
+      drawCalls++;
+    }
+    if (safeMeshAlphaI > 0) {
+      pass1a.setPipeline(this.mesh3dRes.meshAlphaPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.mesh3dRes.alphaVertBuf);
+      pass1a.setIndexBuffer(this.mesh3dRes.alphaIdxBuf, 'uint32');
+      pass1a.drawIndexed(safeMeshAlphaI);
+      drawCalls++;
+    }
+    if (safe3dAlpha > 0) {
+      pass1a.setPipeline(this.quad3dAlphaPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.quad3dAlphaBuffer);
+      pass1a.draw(6, safe3dAlpha);
+      drawCalls++;
+    }
+    if (safe3dAdd > 0) {
+      pass1a.setPipeline(this.quad3dAddPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.quad3dAddBuffer);
+      pass1a.draw(6, safe3dAdd);
+      drawCalls++;
+    }
+    if (safeLine3dV > 1) {
+      pass1a.setPipeline(this.mesh3dRes.line3dPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.mesh3dRes.lineVertBuf);
+      pass1a.draw(safeLine3dV);
+      drawCalls++;
+    }
+    return drawCalls;
+  }
+
   public dispose(): void {
     if (this.uncapturedErrorListener) {
       this.device.removeEventListener('uncapturederror', this.uncapturedErrorListener);
@@ -1722,6 +1863,10 @@ export class WebGpuBackend implements IGpuBackend {
     this.quad3dAddBuffer.destroy();
     this.quad3dOpaqueUniBuf.destroy();
     this.quad3dBlendUniBuf.destroy();
+    for (let q = 0; q < 4; q++) {
+      this.mesh3dRes.quadViewOpaqueUniBufs[q].destroy();
+      this.mesh3dRes.quadViewBlendUniBufs[q].destroy();
+    }
     this.mesh3dRes.opaqueVertBuf.destroy();
     this.mesh3dRes.opaqueIdxBuf.destroy();
     this.mesh3dRes.alphaVertBuf.destroy();

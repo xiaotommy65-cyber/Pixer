@@ -145,6 +145,7 @@ export interface GpuCamera3DState {
 
 export interface Quad3DPassData {
   camera: GpuCamera3DState;
+  quadViews?: readonly [GpuCamera3DState, GpuCamera3DState, GpuCamera3DState, GpuCamera3DState];
   opaqueData: Float32Array;
   opaqueCount: number;
   alphaData: Float32Array;

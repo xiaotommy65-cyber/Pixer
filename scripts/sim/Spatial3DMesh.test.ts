@@ -85,6 +85,17 @@ function attachCaptureGpu(kind: 'webgpu' | 'webgl2' | 'canvas2d', atlas: Texture
           ? {
               ...quad3d,
               camera: { ...quad3d.camera },
+              quadViews: quad3d.quadViews
+                ? ([
+                    { ...quad3d.quadViews[0] },
+                    { ...quad3d.quadViews[1] },
+                    { ...quad3d.quadViews[2] },
+                    { ...quad3d.quadViews[3] },
+                  ] as const)
+                : undefined,
+              opaqueData: new Float32Array(quad3d.opaqueData.subarray(0, quad3d.opaqueCount * 28)),
+              alphaData: new Float32Array(quad3d.alphaData.subarray(0, quad3d.alphaCount * 28)),
+              additiveData: new Float32Array(quad3d.additiveData.subarray(0, quad3d.additiveCount * 28)),
             }
           : undefined,
         mesh3d: mesh3d
@@ -431,4 +442,116 @@ test('Phase A2: SceneGpuBridge + SceneTrue3DPass forwards 6DoF/Ortho camera, sha
   if (snap.lights.length > 0) {
     assert.equal(f.mesh3d?.lightPosZ?.[0], 42);
   }
+});
+
+test('Phase A Polish: 360-degree camera-facing drawBillboard3D & drawParticle3D orientation', () => {
+  const atlas = new TextureAtlas();
+  const { gpu, frames } = attachCaptureGpu('webgpu', atlas);
+
+  // 1. yawDeg = 0° must produce exact legacy values
+  gpu.beginFrame('#141226', '#282040');
+  gpu.setCamera3D(100, 100, 1, 42, 38, 0, 0, 32, 0, 0, 0, 'perspective');
+  gpu.drawBillboard3D('hero', 100, 120, 16, 16, 24, 12, false, undefined, 1, 0, false, 0, 0, 0.48, 0.12, 2);
+  gpu.flush(0);
+
+  // 2. yawDeg = 90° aligns uAxis along +Y camera right (0, dw, 0) and normal along (-cosT, 0, sinT)
+  gpu.beginFrame('#141226', '#282040');
+  gpu.setCamera3D(100, 100, 1, 42, 38, 0, 0, 32, 90, 0, 0, 'perspective');
+  gpu.drawBillboard3D('hero', 100, 120, 16, 16, 24, 12, false, undefined, 1, 0, false, 0, 0, 0.48, 0.12, 2);
+  gpu.drawParticle3D(50, 60, 10, 8, '#ffaa44', 0.9, false, 0.45);
+  gpu.flush(0);
+
+  assert.equal(frames.length, 2);
+  const f0 = frames[0].quad3d!;
+  const f90 = frames[1].quad3d!;
+  assert.equal(f0.opaqueCount, 1);
+  assert.equal(f90.opaqueCount, 1);
+  assert.equal(f90.alphaCount, 1);
+
+  const rad12 = (12 * Math.PI) / 180;
+  const sinT12 = Math.sin(rad12);
+  const cosT12 = Math.cos(rad12);
+
+  // Check yaw = 0° legacy billboard
+  const d0 = f0.opaqueData;
+  assert.ok(Math.abs(d0[0] - (100 - 8 + 2)) < 1e-4);
+  assert.ok(Math.abs(d0[1] - (120 - sinT12 * 24)) < 1e-4);
+  assert.ok(Math.abs(d0[2] - (16 + cosT12 * 24)) < 1e-4);
+  assert.ok(Math.abs(d0[4] - 16) < 1e-4 && Math.abs(d0[5]) < 1e-4 && Math.abs(d0[6]) < 1e-4);
+  assert.ok(Math.abs(d0[8] - (-2)) < 1e-4 && Math.abs(d0[9] - sinT12 * 24) < 1e-4 && Math.abs(d0[10] - (-cosT12 * 24)) < 1e-4);
+  assert.ok(Math.abs(d0[20]) < 1e-4 && Math.abs(d0[21] - cosT12) < 1e-4 && Math.abs(d0[22] - sinT12) < 1e-4);
+
+  // Check yaw = 90° rotated billboard
+  const d90 = f90.opaqueData;
+  assert.ok(Math.abs(d90[0] - (100 + sinT12 * 24)) < 1e-4, `yaw=90 ox mismatch: ${d90[0]}`);
+  assert.ok(Math.abs(d90[1] - (120 - 8 + 2)) < 1e-4, `yaw=90 oy mismatch: ${d90[1]}`);
+  assert.ok(Math.abs(d90[2] - (16 + cosT12 * 24)) < 1e-4);
+  assert.ok(Math.abs(d90[4]) < 1e-4 && Math.abs(d90[5] - 16) < 1e-4 && Math.abs(d90[6]) < 1e-4, 'yaw=90 uAxis must point along +Y');
+  assert.ok(Math.abs(d90[8] - (-sinT12 * 24)) < 1e-4 && Math.abs(d90[9] - (-2)) < 1e-4 && Math.abs(d90[10] - (-cosT12 * 24)) < 1e-4);
+  assert.ok(Math.abs(d90[20] - (-cosT12)) < 1e-4 && Math.abs(d90[21]) < 1e-4 && Math.abs(d90[22] - sinT12) < 1e-4, 'yaw=90 normal must face -X');
+
+  // Check yaw = 90° particle
+  const p90 = f90.alphaData;
+  const sinT24 = Math.sin((24 * Math.PI) / 180);
+  const cosT24 = Math.cos((24 * Math.PI) / 180);
+  assert.ok(Math.abs(p90[4]) < 1e-4 && Math.abs(p90[5] - 8) < 1e-4 && Math.abs(p90[6]) < 1e-4, 'yaw=90 particle uAxis must point along +Y');
+  assert.ok(Math.abs(p90[20] - (-cosT24)) < 1e-4 && Math.abs(p90[21]) < 1e-4 && Math.abs(p90[22] - sinT24) < 1e-4, 'yaw=90 particle normal must face -X');
+});
+
+test('Phase A Polish: GpuEngine.setQuadViewEnabled(true) emits 4 distinct quadViews at half viewport and resets next frame', () => {
+  const atlas = new TextureAtlas();
+  const { gpu, frames } = attachCaptureGpu('webgl2', atlas);
+  gpu.setLogicalViewport(640, 360);
+
+  gpu.beginFrame('#141226', '#282040');
+  gpu.setCamera3D(200, 150, 1.5, 90, 40, 16, 32, 32, 35, 5, 24, 'perspective');
+  gpu.setSunLight3D(-0.4, 0.5, 0.75, true, 0.55);
+  gpu.setQuadViewEnabled(true);
+  gpu.flush(0.1);
+
+  // Next frame without setQuadViewEnabled(true) must reset quadViews to undefined
+  gpu.beginFrame('#141226', '#282040');
+  gpu.setCamera3D(200, 150, 1.5, 42, 40, 16, 32, 32, 35, 5, 24, 'perspective');
+  gpu.flush(0.2);
+
+  assert.equal(frames.length, 2);
+  const qv = frames[0].quad3d?.quadViews;
+  assert.ok(qv, 'quadViews must be populated when setQuadViewEnabled(true)');
+  assert.equal(qv.length, 4);
+
+  assert.equal(qv[0].projection, 'perspective');
+  assert.equal(qv[0].yawDeg, 35);
+  assert.equal(qv[0].pitchDeg, 42, 'Perspective quadrant must clamp exact 90deg pitch to 42deg');
+  assert.equal(qv[0].rollDeg, 5);
+
+  assert.equal(qv[1].projection, 'ortho_top');
+  assert.equal(qv[1].yawDeg, 0);
+  assert.equal(qv[1].pitchDeg, 90);
+  assert.equal(qv[1].rollDeg, 0);
+
+  assert.equal(qv[2].projection, 'ortho_front');
+  assert.equal(qv[2].yawDeg, 0);
+  assert.equal(qv[2].pitchDeg, 0);
+  assert.equal(qv[2].rollDeg, 0);
+
+  assert.equal(qv[3].projection, 'ortho_side');
+  assert.equal(qv[3].yawDeg, 90);
+  assert.equal(qv[3].pitchDeg, 0);
+  assert.equal(qv[3].rollDeg, 0);
+
+  for (const sub of qv) {
+    assert.equal(sub.viewW, 320);
+    assert.equal(sub.viewH, 180);
+    assert.equal(sub.camCenterX, 200);
+    assert.equal(sub.camCenterY, 150);
+    assert.equal(sub.camCenterZ, 24);
+    assert.equal(sub.zoom, 1.5);
+    assert.equal(sub.shadowMapEnabled, true);
+    assert.ok(Math.abs(sub.shadowStrength - 0.55) < 1e-5);
+    assert.equal(sub.occOriginWorldX, 16);
+    assert.equal(sub.occOriginWorldY, 32);
+    assert.equal(sub.occTileSizeWorld, 32);
+  }
+
+  assert.equal(frames[1].quad3d?.quadViews, undefined, 'resetFrame() must clear quadViewEnabled');
 });
