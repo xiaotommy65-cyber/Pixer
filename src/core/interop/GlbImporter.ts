@@ -62,12 +62,13 @@ export interface ImportedRawMesh3DData {
 
 export interface ImportedModel3DAnimKeyframe {
   timeSec: number;
-  value: [number, number, number];
+  posOffset?: [number, number, number];
+  rotDeg?: [number, number, number];
+  scale?: [number, number, number];
 }
 
 export interface ImportedModel3DAnimTrack {
   partId: string;
-  property: 'pos' | 'rotDeg' | 'scale';
   keyframes: ImportedModel3DAnimKeyframe[];
 }
 
