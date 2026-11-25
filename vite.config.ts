@@ -17,6 +17,7 @@ export default defineConfig(() => {
               { name: 'vendor-utils', test: /node_modules\/(fflate|maxrects-packer)/ },
               { name: 'cartridges', test: /src\/game\// },
               { name: 'sprite-atelier', test: /src\/ui\/SpriteAtelier[A-Za-z]*/ },
+              { name: 'model-atelier', test: /src\/ui\/ModelAtelier[A-Za-z]*/ },
               { name: 'external-import', test: /src\/ui\/(ExternalImportModalView|InteropWorkerClient|PixelForgeImportTab)/ },
               { name: 'event-graph', test: /src\/ui\/EventGraphEditorView/ },
               { name: 'cloud-publish', test: /src\/ui\/CloudPublishModalView/ },
@@ -27,6 +28,10 @@ export default defineConfig(() => {
               {
                 name: 'legacy-v1-sim',
                 test: /src\/core\/(editor\/|sim\/(CardDeckEngine|FighterFrameEngine|GenreControllers|DataCartridgeRuntime|DataRuntime[A-Za-z]*))/,
+              },
+              {
+                name: 'core-spatial-3d',
+                test: /src\/core\/(ecs\/EcsVoxelVolume|ecs\/EcsModel3D|interop\/GlbImporter|interop\/BbmodelImporter)/,
               },
               { name: 'core-ecs-interop', test: /src\/core\/(ecs|interop|ai)\// },
             ],
