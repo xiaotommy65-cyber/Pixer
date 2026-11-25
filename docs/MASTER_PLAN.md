@@ -131,3 +131,18 @@
 - **Live Browser & Full Gate**:
   - Live browser check at `http://localhost:3001/`: **0** console/page/shader errors; verified immediate `hd2d_3d` castle render on boot, Tile PBR inspector (`[data-testid="tile-pbr-inspector"]`), Pixel Forge `emissive_light_prop` & `wall_top_side` baking, and `vn_parlor_prologue` Pass 1B `160×192` portrait cutscene.
   - Full Gate: `bun run audit -- --strict` (exit 0, `critical=0`, `circularDepsCount=0`, `dynamicImportCount=5`) · `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`) · `npm run test` (**72 pass / 0 fail**) · `bun run build` (216 modules, `246ms`, **0 chunk warnings**).
+
+---
+
+## 10. Wave 5 Verification Log (True Z-Up 3D Spatial Architecture Phases A–C)
+- **Status**: `PASSED` on `feat/swarm-p0-p1-hardening`
+- **Phase A + Phase A Polish (`4955384`, `bac6de4`)**:
+  - Unified Z-Up 6DoF & 5 orthographic projection views (`perspective`, `ortho_top`, `ortho_front`, `ortho_side`, `ortho_iso`, `ortho_free`) + `screenToWorldPlaneAxis` + `convertGlbYUpToPixerZUp` in `Perspective3DMath.ts` & `CameraRigDirector.ts`.
+  - Delivered `GpuMesh3DBatch.ts`, indexed `Mesh3D` pipelines & `1024×1024` Directional Shadow Map in WGSL/GLSL (`WebGpuBackend`/`WebGl2Backend`), 360° camera-facing billboards/particles, and hardware 4-view `quadViews`.
+- **Phase B (`fc49ff0`, `ea48d55`)**:
+  - Delivered `EcsVoxelVolume.ts` (11 shapes, 8 stories, 6-bit neighbor face culling, stair/slope support & ceiling collision), `EcsModel3D.ts` (multi-part cuboids + `rawMesh` Zero-GC GPU emitter), 3D $A^*$ in `GridPathfinder.ts`, ECS `MeshRenderer3D`, `EcsSpatialOracle` (`analyzeWorldMap3DReachability`, `renderRoomSliceAscii`), and `48/48` `EcsStudioCommand` + MCP 3D tool parity (`WorldMap3D.test.ts`).
+- **Phase C (`5c71fab`, `a093478`, `6e07c0f`, `6bea800` + Workstation Wiring)**:
+  - Added strict bounds-checked `GlbImporter.ts` & `BbmodelImporter.ts` (Y-Up -> Z-Up + triangle winding inversion), lazy-loaded `ModelAtelierModalView.ts` (`model-atelier` Vite chunk), `.p7-spatial3d-bar` quad-view/ortho switcher, Alt+Drag 360° camera orbit, interactive RGB XYZ gizmo, Z-slice floor painting (`set_room_voxel` / `fill_room_box_3d`), 6DoF scene sliders, and `cartridges-hd2d` chunk split in `vite.config.ts`.
+- **Live Browser & Full Gate**:
+  - Live WebGL2 check at `http://localhost:3001/`: **0** console/page/network errors; verified 4-quadrant split (`3D PERSP | TOP [XY] | FRONT [XZ] | SIDE [YZ]`) w/ XYZ gizmo & ortho grid, and `ModelAtelierModalView` loading/previewing/saving sample `.bbmodel` (`Knight_Relic_Chest`).
+  - Full Gate: `bun run audit -- --strict` (exit 0, `critical=0`, `circularDepsCount=0`, `snapshotArrayResets=0`, `dynamicImportCount=6`, `ecsCommandTypes=48/48`) · `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`) · `npm run test` (**89 pass / 0 fail**) · `bun run build` (222 modules, `355ms`, **0 chunk warnings**) · `bun run clean`.

@@ -119,6 +119,25 @@ export class EcsWorkbenchLiveMutator {
     this.onPreviewDirty();
   }
 
+  public mutateTransform(entityId: string, patch: { x?: number; y?: number }): void {
+    const core = this.runtime.world.core;
+    const h = findEntityHandle(core, entityId);
+    if (h !== null) {
+      const tr = core.getComponent(h, core.components.Transform2D);
+      if (tr) {
+        if (patch.x !== undefined) {
+          tr.x = patch.x;
+          tr.prevX = patch.x;
+        }
+        if (patch.y !== undefined) {
+          tr.y = patch.y;
+          tr.prevY = patch.y;
+        }
+      }
+    }
+    this.onPreviewDirty();
+  }
+
   public mutateSpatial3D(
     entityId: string,
     patch: { z?: number; height?: number; gravityZ?: number; jumpZVelocity?: number; dimensionMask?: number },

@@ -39,6 +39,7 @@ import { buildDiagReportBox, buildSceneAndHistorySections } from './EcsWorkbench
 import {
   buildEcsWorkbenchShell,
   type EcsWorkbenchShellRefs,
+  type WorkbenchCamera3DViewChoice,
   type WorkbenchCenterMode,
   type WorkbenchLeftTab,
 } from './EcsWorkbenchShellBuilder.ts';
@@ -46,6 +47,7 @@ import { EcsWorldRulesInspectorPanel } from './EcsWorldRulesInspectorPanel.ts';
 import type { CloudPublishModalView } from './CloudPublishModalView.ts';
 import type { EventGraphEditorView } from './EventGraphEditorView.ts';
 import type { ExternalImportModalView } from './ExternalImportModalView.ts';
+import type { ModelAtelierModalView } from './ModelAtelierModalView.ts';
 
 export interface EcsWorkbenchCallbacks {
   onLaunchInArcade: (proj: EcsProjectV2) => void;
@@ -82,6 +84,8 @@ export class EcsWorkbenchView {
   private externalImportLoadPromise: Promise<ExternalImportModalView> | null = null;
   private cloudPublishModal: CloudPublishModalView | null = null;
   private cloudPublishLoadPromise: Promise<CloudPublishModalView | null> | null = null;
+  private modelAtelierModal: ModelAtelierModalView | null = null;
+  private modelAtelierLoadPromise: Promise<ModelAtelierModalView | null> | null = null;
   private readonly worldRulesPanel: EcsWorldRulesInspectorPanel;
   private readonly liveInput = createEmptyInputState();
 
@@ -162,6 +166,9 @@ export class EcsWorkbenchView {
       onOpenExternalImport: () => {
         void this.openExternalImportModal();
       },
+      onOpenModelAtelier: () => {
+        void this.openModelAtelierModal();
+      },
       onOpenClassicWorkshop: () => this.callbacks.onOpenClassicWorkshop(),
       onSelectBuiltinProject: (project) => {
         this.lastDiagReport = null;
@@ -236,6 +243,19 @@ export class EcsWorkbenchView {
         this.session.dispatch({ type: 'set_projection', patch: { activeDimensionMask: mask } });
         this.previewDirty = true;
       },
+      onSelectCamera3DView: (view) => this.selectCamera3DView(view),
+      onToggleAxisGizmo3d: () => {
+        const cur = Boolean(this.session.getProject().projection?.showAxisGizmo3d);
+        this.session.dispatch({ type: 'set_camera_3d_pose', showAxisGizmo3d: !cur });
+      },
+      onToggleOrthoGrid3d: () => {
+        const cur = Boolean(this.session.getProject().projection?.showOrthoGrid3d);
+        this.session.dispatch({ type: 'set_camera_3d_pose', showOrthoGrid3d: !cur });
+      },
+      onToggleShadowMap3d: () => {
+        const cur = this.session.getProject().projection?.shadowMapEnabled !== false;
+        this.session.dispatch({ type: 'set_camera_3d_pose', shadowMapEnabled: !cur });
+      },
     });
     this.element = this.dom.rootEl;
 
@@ -256,6 +276,8 @@ export class EcsWorkbenchView {
       runtime: this.runtime,
       previewGpu: this.previewGpu,
       mapState: this.mapState,
+      liveMutator: this.liveMutator,
+      getSelectedEntityId: () => this.selectedEntityId,
       isEditingActive: () => this.isMapEditingActive(),
       onToolStateMutated: () => this.renderLeftPanel(),
       onEntityStamped: (entityId) => {
@@ -308,7 +330,14 @@ export class EcsWorkbenchView {
     window.addEventListener(
       'keydown',
       (e) => {
-        if (!this.visible || this.externalImportModal?.isOpen() || this.cloudPublishModal?.isOpen()) return;
+        if (
+          !this.visible ||
+          this.externalImportModal?.isOpen() ||
+          this.cloudPublishModal?.isOpen() ||
+          this.modelAtelierModal?.isOpen()
+        ) {
+          return;
+        }
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         const proj = this.session.getProject();
@@ -704,6 +733,7 @@ export class EcsWorkbenchView {
 
     this.dom.projectionSelectEl.value = proj.projection?.mode ?? 'hd2d_iso';
     this.dom.dimensionSelectEl.value = String(proj.projection?.activeDimensionMask ?? 3);
+    this.syncSpatial3dBar(proj);
     this.dom.undoBtn.disabled = !this.session.canUndo();
     this.dom.redoBtn.disabled = !this.session.canRedo();
     this.mapCanvasCtrl.syncInteractivity();
@@ -711,6 +741,36 @@ export class EcsWorkbenchView {
     this.renderLeftPanel();
     this.renderRightPanel();
     this.updateStatusStrip();
+  }
+
+  private selectCamera3DView(view: WorkbenchCamera3DViewChoice): void {
+    const proj = this.session.getProject();
+    if (view === 'quad') {
+      const cur = Boolean(proj.projection?.quadView);
+      this.session.dispatch({ type: 'set_camera_3d_pose', quadView: !cur });
+    } else {
+      this.session.dispatch({ type: 'set_camera_3d_pose', cameraProjection3d: view, quadView: false });
+    }
+  }
+
+  private syncSpatial3dBar(proj: EcsProjectV2): void {
+    const is3d = proj.projection?.mode === 'hd2d_3d';
+    this.dom.spatial3dBarEl.classList.toggle('panel-hidden', !is3d);
+    if (!is3d) return;
+    const isQuad = Boolean(proj.projection?.quadView);
+    const activeCam = proj.projection?.cameraProjection3d ?? 'perspective';
+    const entries = Object.entries(this.dom.spatial3dViewBtns) as [
+      WorkbenchCamera3DViewChoice,
+      HTMLButtonElement | undefined,
+    ][];
+    for (const [key, btn] of entries) {
+      if (!btn) continue;
+      const active = key === 'quad' ? isQuad : !isQuad && activeCam === key;
+      btn.classList.toggle('p7-btn-accent', active);
+    }
+    this.dom.toggleAxisGizmoBtn.classList.toggle('p7-btn-accent', Boolean(proj.projection?.showAxisGizmo3d));
+    this.dom.toggleOrthoGridBtn.classList.toggle('p7-btn-accent', Boolean(proj.projection?.showOrthoGrid3d));
+    this.dom.toggleShadowMapBtn.classList.toggle('p7-btn-accent', proj.projection?.shadowMapEnabled !== false);
   }
 
   private renderLeftPanel(): void {
@@ -1066,6 +1126,79 @@ export class EcsWorkbenchView {
     this.cloudPublishModal.open(this.session.getProject());
   }
 
+  public async openModelAtelierModal(initialModelId?: string): Promise<void> {
+    if (this.destroyed) return;
+    if (!this.modelAtelierModal) {
+      if (!this.modelAtelierLoadPromise) {
+        this.modelAtelierLoadPromise = import('./ModelAtelierModalView.ts')
+          .then(({ ModelAtelierModalView }) => {
+            const modal = new ModelAtelierModalView({
+              atlas: this.atlas,
+              getProject: () => this.session.getProject(),
+              getSpriteOptions: (proj) => collectProjectSpriteOptions(proj),
+              onSaveModel3D: (model) => {
+                const res = this.session.dispatch({ type: 'upsert_model_3d', model });
+                if (res.ok) {
+                  this.previewDirty = true;
+                  this.renderPreviewNow();
+                  this.dom.statusLeftEl.textContent = `已儲存 3D 模型「${model.name}」（修訂 #${res.revision}）`;
+                }
+              },
+              onDeleteModel3D: (modelId) => {
+                this.session.dispatch({ type: 'remove_model_3d', modelId });
+              },
+              onSpawnModelEntity: (modelId) => {
+                const proj = this.session.getProject();
+                const roomId = this.runtime.getActiveRoomId() ?? proj.worldMap?.startRoomId;
+                const room = roomId ? proj.worldMap?.rooms.find((r) => r.id === roomId) : undefined;
+                const ts = proj.worldMap?.tileSize ?? 32;
+                const x = room ? Math.round(room.cols * ts * 0.5) : Math.round(proj.viewport.width * 0.5);
+                const y = room ? Math.round(room.rows * ts * 0.5) : Math.round(proj.viewport.height * 0.5);
+                const modelName = proj.models3d?.[modelId]?.name ?? modelId;
+                const entityId = `model_${modelId}_${(Date.now() % 10000).toString(36)}`;
+                const res = this.session.dispatch({
+                  type: 'spawn_entity',
+                  entity: {
+                    id: entityId,
+                    name: modelName,
+                    ...(roomId ? { roomId } : {}),
+                    components: {
+                      transform: { x, y, w: 32, h: 32 },
+                      sprite: { sprite: 'hero', alpha: 1 },
+                      spatial3d: { z: 0, height: 32, dimensionMask: 3 },
+                      mesh3d: { modelId, castShadow: true },
+                    },
+                  },
+                });
+                if (res.ok) {
+                  this.selectedEntityId = res.createdEntityId ?? entityId;
+                  this.selectedPrefabId = null;
+                  this.modelAtelierModal?.close();
+                  this.previewDirty = true;
+                  this.renderPreviewNow();
+                  this.renderRightPanel();
+                  this.dom.statusLeftEl.textContent = `已於場景生成 3D 模型實體「${modelName}」`;
+                }
+              },
+            });
+            if (this.destroyed) {
+              modal.destroy();
+              return null;
+            }
+            this.modelAtelierModal = modal;
+            this.element.appendChild(modal.element);
+            return modal;
+          })
+          .finally(() => {
+            this.modelAtelierLoadPromise = null;
+          });
+      }
+      await this.modelAtelierLoadPromise;
+    }
+    if (this.destroyed || !this.modelAtelierModal) return;
+    this.modelAtelierModal.open(initialModelId);
+  }
+
   private handleAtomicAssetCommands(
     cmds: EcsStudioCommand[],
     summary: string,
@@ -1156,6 +1289,10 @@ export class EcsWorkbenchView {
     if (this.cloudPublishModal) {
       this.cloudPublishModal.destroy();
       this.cloudPublishModal = null;
+    }
+    if (this.modelAtelierModal) {
+      this.modelAtelierModal.destroy();
+      this.modelAtelierModal = null;
     }
     if (this.eventGraphView) {
       this.eventGraphView.destroy();

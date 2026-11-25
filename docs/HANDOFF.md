@@ -1,4 +1,4 @@
-# Pixer — 工程交接書（Engineering Handoff · Wave 1–4B Complete）
+# Pixer — 工程交接書（Engineering Handoff · Wave 1–5 Spatial 3D Complete）
 
 > **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit`**（~0.7s 唯讀體檢），即可零盲點掌握全倉狀態。
 
@@ -33,6 +33,10 @@
     - **Pixel Forge 多管線烘焙預設（Baking Profiles）**：於 [`PixelForgeProcessor.ts`](../src/core/interop/PixelForgeProcessor.ts) 與 [`PixelForgeImportTab.ts`](../src/ui/PixelForgeImportTab.ts) 新增 `wall_top_side`（單圖自動合成斜角牆頂 + 牆側雙貼圖）、`billboard_actor`、`emissive_light_prop`（`detectEmissiveLightFromRgba` 自動萃取高光主色並掛載 `LightSource` + 自發光）與 `portrait_160x192` 四組專用烘焙預設。
     - **Pass 1B `160×192` 對話立繪通道**：擴充 `EcsCutsceneShotDef`（`portraitSpriteId` / `portraitSide`）、`HudPrimitiveDesc`（`kind: 'sprite'`）、[`SceneHudOverlayPass.ts`](../src/core/runtime/SceneHudOverlayPass.ts)（`paletteRow = -2` 繞過世界光影呈現原色像素立繪）、[`EcsCinematicDirector.ts`](../src/core/ecs/EcsCinematicDirector.ts) 與 [`PixerAssetPack.ts`](../src/core/interop/PixerAssetPack.ts)（`horror`/`visual_novel` 起始包內建含 `160×192` 立繪之敘事過場）。
     - **首幀出畫與後端 Canvas 同步修復**：修正 [`EcsWorkbenchView.ts`](../src/ui/EcsWorkbenchView.ts) 在 `GpuEngine` 非同步初始化與 `replaceCanvasNode()` 降級 WebGL2 時的 `previewCanvas` 參照同步、`hasBackend()` 檢查及 `rAF` 二次刷新，實機開啟即完整呈現 `hd2d_3d` 城塞場景，無須手動切換視角。
+  - **Wave 5｜真 Z-Up 3D 空間架構升級（Phase A / A Polish / B / C）**：
+    - **Phase A + Phase A Polish（`4955384`、`bac6de4`）**：統一 Z-Up 6DoF／五種正交透視數學與精確螢幕反投影（[`Perspective3DMath.ts`](../src/core/math/Perspective3DMath.ts) + [`CameraRigDirector.ts`](../src/core/runtime/CameraRigDirector.ts)）；實作 `Indexed Mesh3D` 批次與 `1024×1024` 方向光陰影貼圖（[`GpuMesh3DBatch.ts`](../src/core/gpu/GpuMesh3DBatch.ts)、WebGPU/WebGL2 雙端著色器）、360° 相機朝向 Billboard/Particle，以及硬體 4 視圖分割（`quadViews`）。
+    - **Phase B（`fc49ff0`、`ea48d55`）**：交付多層 3D 體素引擎（[`EcsVoxelVolume.ts`](../src/core/ecs/EcsVoxelVolume.ts)：11 種體素形狀、8 層樓高、`6-bit` 鄰接面剔除、台階/斜坡高度與天花板衝突）、Zero-GC `Model3D` 積木／`rawMesh` 資產與 GPU 發射（[`EcsModel3D.ts`](../src/core/ecs/EcsModel3D.ts)）、3D $A^*$（[`GridPathfinder.ts`](../src/core/sim/GridPathfinder.ts)）、ECS `MeshRenderer3D` 元件、`EcsSpatialOracle` 3D BFS（`analyzeWorldMap3DReachability` + `renderRoomSliceAscii`），以及 **`48/48` `EcsStudioCommand`** 與 3 組 MCP 3D 工具。
+    - **Phase C（`5c71fab`、`a093478`、`6e07c0f`、`6bea800` + 工作站串接）**：交付 Y-Up→Z-Up 嚴格防轟炸 [`GlbImporter.ts`](../src/core/interop/GlbImporter.ts) 與 [`BbmodelImporter.ts`](../src/core/interop/BbmodelImporter.ts)；新增懶載入 Blockbench 風格 [`ModelAtelierModalView.ts`](../src/ui/ModelAtelierModalView.ts)（`model-atelier` 分包）；於工作站補齊 `.p7-spatial3d-bar` 四視圖/正交切換、Alt+Drag 360° 環繞、RGB XYZ 互動 Gizmo、Z 樓層切片筆刷、6DoF 相機滑桿，以及 `vite.config.ts` `cartridges-hd2d` 分包優化。
 
 ---
 
@@ -40,12 +44,12 @@
 
 - **本機環境**：Windows 已安裝並寫入 User PATH：`Node v26.13.0`、`Bun 1.4.5`、`Git 2.56.1`、`uv`/`uvx`，PowerShell `CurrentUser` `RemoteSigned` + `Unblock-File` 已生效；Swarm `workspace: "share"` 獨立工作樹可直接運作。
 - **驗證門檻與最新基線**：
-  - `bun run audit -- --strict`：**PASS**（exit 0，`critical=0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=5`，`ecsCommandTypes=42/42`）
+  - `bun run audit -- --strict`：**PASS**（exit 0，`critical=0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=6`，`ecsCommandTypes=48/48`）
   - `bun run lint`（`tsc --noEmit`）：**0 errors**
-  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.37ms / 0KB`）
-  - `npm run test`：**72 pass / 0 fail**
-  - `bun run build && bun run clean`：**PASS**（216 modules，`246ms`，**0 chunk warnings**：`ecs-workbench 344.10 kB`、`external-import 121.35 kB`、`cartridges 483.85 kB`、`index 225.98 kB`、`cloud-publish 14.82 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`；`dist/` 已清理）
-  - **本機瀏覽器實機驗收**：`http://localhost:3001/` 實測初始載入即完整出畫 HD-2D 3D 城塞場景、牆體 PBR 頂側檢查器、Pixel Forge `emissive_light_prop`／`wall_top_side` 烘焙、`visual_novel` 資產包安裝與 `vn_parlor_prologue` Pass 1B `160×192` 立繪對話過場，**0 console / page / shader errors**。
+  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.33ms / 0KB`）
+  - `npm run test`：**89 pass / 0 fail**
+  - `bun run build && bun run clean`：**PASS**（222 modules，`355ms`，**0 chunk warnings**：`cartridges 458.46 kB`、`cartridges-hd2d 47.71 kB`、`model-atelier 260.60 kB`、`index 226.08 kB`、`ecs-workbench 202.71 kB`、`external-import 115.41 kB`、`sprite-atelier 73.07 kB`、`event-graph 32.95 kB`、`cloud-publish 14.82 kB`、`legacy-v1-sim 24.38 kB`；`dist/` 已清理）
+  - **本機瀏覽器實機驗收**：`http://localhost:3001/` WebGL2 實測「四視圖分割 + XYZ 軸 Gizmo + 正交格線」與「`ModelAtelierModalView` 載入範例 `.bbmodel`（`Knight_Relic_Chest`）3D 即時預覽 + 儲存」，全程 **0 console / page / shader errors**。
 - **不可動搖鐵則**：
   1. 任何開工與收尾先跑 `bun run audit -- --strict`；新修結構問題必補規則與端到端持久性測試。
   2. 不得將測試檔放回 `src/`，不得在純核心使用 DOM 或遊戲專屬硬編碼，不得產生 `package-lock.json`，不得直推 `main`。

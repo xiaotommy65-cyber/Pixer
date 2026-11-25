@@ -205,6 +205,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'EcsWorkbenchMapCanvasController.ts',
     'ConsoleSpatialController.ts',
     'InteropWorkerClient.ts',
+    'ModelAtelierModalView.ts',
   ];
   for (const viewFile of newUiViews) {
     const viewSrc = fs.readFileSync(path.join(rootDir, 'src/ui', viewFile), 'utf8');
@@ -221,6 +222,7 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'EcsWorldRulesInspectorPanel.ts',
     'EcsWorkbenchMapCanvasController.ts',
     'ConsoleSpatialController.ts',
+    'ModelAtelierModalView.ts',
   ]) {
     const ovSrc = fs.readFileSync(path.join(rootDir, 'src/ui', overlayFile), 'utf8');
     check(

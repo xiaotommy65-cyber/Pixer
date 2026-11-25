@@ -223,8 +223,8 @@ export function buildSceneAndHistorySections(
   projSliders.append(
     createWorkbenchSliderRow(
       '相機俯角 Pitch',
-      22,
-      70,
+      -45,
+      85,
       1,
       proj.projection?.pitchDeg ?? DEFAULT_HD2D_3D_PITCH_DEG,
       (v) => `${Math.round(v)}°`,
@@ -233,6 +233,45 @@ export function buildSceneAndHistorySections(
         onPreviewDirty();
       },
       (v) => commitProj({ pitchDeg: v }),
+    ),
+    createWorkbenchSliderRow(
+      '水平旋轉 Yaw',
+      0,
+      360,
+      1,
+      proj.projection?.yawDeg ?? 0,
+      (v) => `${Math.round(v)}°`,
+      (v) => {
+        runtime.patchLiveProjection({ yawDeg: v });
+        onPreviewDirty();
+      },
+      (v) => commitProj({ yawDeg: v }),
+    ),
+    createWorkbenchSliderRow(
+      '焦點高度 Target Z',
+      0,
+      224,
+      4,
+      proj.projection?.camCenterZ ?? 0,
+      (v) => `${Math.round(v)}px`,
+      (v) => {
+        runtime.patchLiveProjection({ camCenterZ: v });
+        onPreviewDirty();
+      },
+      (v) => commitProj({ camCenterZ: v }),
+    ),
+    createWorkbenchSliderRow(
+      '方向光陰影強度',
+      0,
+      0.9,
+      0.05,
+      proj.projection?.shadowMapStrength ?? 0.45,
+      (v) => `${Math.round(v * 100)}%`,
+      (v) => {
+        runtime.patchLiveProjection({ shadowMapStrength: v });
+        onPreviewDirty();
+      },
+      (v) => commitProj({ shadowMapStrength: v }),
     ),
     createWorkbenchSliderRow(
       '透視視野 FOV',

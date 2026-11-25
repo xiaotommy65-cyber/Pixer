@@ -15,6 +15,7 @@ export default defineConfig(() => {
             groups: [
               { name: 'vendor-capacitor', test: /node_modules\/@capacitor/ },
               { name: 'vendor-utils', test: /node_modules\/(fflate|maxrects-packer)/ },
+              { name: 'cartridges-hd2d', test: /src\/game\/(obsidianCitadel|emeraldRuins)\// },
               { name: 'cartridges', test: /src\/game\// },
               { name: 'sprite-atelier', test: /src\/ui\/SpriteAtelier[A-Za-z]*/ },
               { name: 'model-atelier', test: /src\/ui\/ModelAtelier[A-Za-z]*/ },

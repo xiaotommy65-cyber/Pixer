@@ -623,6 +623,10 @@ export class ModelAtelierModalView {
     return [first, second];
   }
 
+  public isOpen(): boolean {
+    return !this.destroyed && !this.element.hidden;
+  }
+
   public open(initialModelId?: string): void {
     if (this.destroyed) return;
     this.element.hidden = false;
