@@ -115,3 +115,19 @@
 - **Live Browser & Full Gate**:
   - Live Chromium check at `http://localhost:3000/`: **0** console/page/shader errors; verified demo forging (`已煉製 1 張精靈 (32×32) · 偵測原圖像素塊=4×` -> commit `gothic_lantern_forged`), Horror Asylum pack install (`6 張精靈 · 3 瓦片 · 2 Prefab` + dark horror atmosphere), and 1-step Undo rollback.
   - Full Gate: `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`, `240f Zero-GC: ECS 0.58ms / 40.7KB, Chunked 2.25ms / 26.7KB`) · `npm run test` (**69 pass / 0 fail**) · `bun run build` (216 modules, `1.26s`, **0 chunk warnings**, `external-import 113.62 kB`, `ecs-workbench 339.93 kB`, `cartridges 481.93 kB`) · `bun run audit -- --strict` (exit 0, `critical=0`, `circularDepsCount=0`, `dynamicImportCount=5`).
+
+---
+
+## 9. Wave 4B Verification Log (Multi-Pipeline Baking, Tile PBR/Side Split, Pass 1B Portraits & Boot Render Timing)
+- **Status**: `PASSED` on `feat/swarm-p0-p1-hardening`
+- **HD-2D Tile PBR & Top/Side Wall Split**:
+  - Extended `EcsTileDef.sideSprite`, `TileDesc` (`sideSprite`, `roughness`, `metallic`, `emissive`), `EcsWorldMapController.rebuildTiles()` + `patchLiveTileDef()`, `GpuQuad3DBatch`/`GpuEngine.drawBox3DWall()` (`emissive`), `SceneTrue3DPass.ts`, and `SceneGpuBridge.ts`; exposed live + transactional Tile PBR / Top+Side sprite controls in `EcsMapDesignerPanel.ts` and `PixerMcpProtocol.ts` (`describe_editor_grammar`).
+- **Pixel Forge Multi-Pipeline Baking Profiles (`PixelForgeProcessor.ts` / `PixelForgeImportTab.ts`)**:
+  - Added `PIXEL_FORGE_BAKING_PROFILES` (`wall_top_side`, `billboard_actor`, `emissive_light_prop`, `portrait_160x192`, `custom`), `synthesizeWallTopCapRgba()`, `detectEmissiveLightFromRgba()`, and `buildPixelForgeCommitCommands()` wiring `sideSprite` + `LightSource` / `emissive`.
+- **Pass 1B `160×192` Dialogue Portrait Overlay (`portraitSpriteId`)**:
+  - Added `portraitSpriteId` / `portraitSide` to `EcsCutsceneShotDef`, `kind: 'sprite'` to `HudPrimitiveDesc` + `SceneHudOverlayPass.ts` (`paletteRow: -2`), portrait framing in `EcsCinematicDirector.ts`, and narrative starter cutscenes in `PixerAssetPack.ts`.
+- **Initial Preview Timing & Backend Canvas Sync (`EcsWorkbenchView.ts`)**:
+  - Synced `dom.previewCanvas` via `GpuEngine` `onBackendChange`, guarded `renderPreviewNow()` with `hasBackend()`, and scheduled a post-init `rAF` refresh so `PA-14` renders `hd2d_3d` immediately on page load.
+- **Live Browser & Full Gate**:
+  - Live browser check at `http://localhost:3001/`: **0** console/page/shader errors; verified immediate `hd2d_3d` castle render on boot, Tile PBR inspector (`[data-testid="tile-pbr-inspector"]`), Pixel Forge `emissive_light_prop` & `wall_top_side` baking, and `vn_parlor_prologue` Pass 1B `160×192` portrait cutscene.
+  - Full Gate: `bun run audit -- --strict` (exit 0, `critical=0`, `circularDepsCount=0`, `dynamicImportCount=5`) · `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`) · `npm run test` (**72 pass / 0 fail**) · `bun run build` (216 modules, `246ms`, **0 chunk warnings**).

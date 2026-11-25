@@ -55,10 +55,10 @@ Every game and workstation built on Pixer runs **60Hz simulation & rendering loc
 - Locked V1 legacy sub-engines (`GenreControllers`, `CardDeckEngine`, `FighterFrameEngine`, `DataCartridgeRuntime`, `src/core/editor/*`) as a frozen compatibility tier isolated in Vite chunk `legacy-v1-sim`.
 - Added lazy-loaded `CloudPublishModalView.ts` in the workstation toolbar (`雲端發佈`) backed by `CloudSyncClient` (`?play=<slug>` sharing, ETag `If-Match` handling, offline `.pixer.json` fallback).
 
-### Phase 7A — Universal Pixel Forge, `256×256` Portraits & Cross-Genre `PixerAssetPack` v1 `[DONE]`
+### Phase 7A–7B — Universal Pixel Forge, Multi-Pipeline Baking, `160×192` Pass 1B Portraits & `PixerAssetPack` v1 `[DONE]`
 - Raised `EcsCustomSpriteDef` bounds to `8..256` (supporting `160×192` visual-novel portraits and `256×256` horror/dungeon bosses) while keeping strict zlib decompression bounds.
-- Delivered DOM-free `PixelForgeProcessor.ts` (corner flood-fill background strip, tight opaque crop, integer pixel block detection, `grid_majority` Oklab `adaptive_kmeans`/`palette_lock` quantization across 5 genre palettes + Bayer4 + 1px outline, sprite-sheet slicing -> `AnimationStateMachineDef`) and `PixerAssetPack.ts` (`schemaVersion: 1`, `horror`/`visual_novel`/`dungeon` starter packs + MCP `install_asset_pack`/`export_asset_pack`).
-- Integrated `PixelForgeImportTab.ts` into the lazy `external-import` modal (`113.62 kB`) with live Chromium verification (`0` errors).
+- Delivered DOM-free `PixelForgeProcessor.ts` (corner flood-fill background strip, tight opaque crop, integer pixel block detection, `grid_majority` Oklab `adaptive_kmeans`/`palette_lock` quantization across 5 genre palettes + Bayer4 + 1px outline, sprite-sheet slicing -> `AnimationStateMachineDef`, plus multi-pipeline baking profiles `wall_top_side`, `billboard_actor`, `emissive_light_prop` w/ `detectEmissiveLightFromRgba`, and `portrait_160x192`) and `PixerAssetPack.ts` (`schemaVersion: 1`, `horror`/`visual_novel`/`dungeon` starter packs w/ portrait cutscenes + MCP `install_asset_pack`/`export_asset_pack`).
+- Wired `EcsTileDef.sideSprite` + PBR (`roughness`/`metallic`/`emissive`) through `SceneTrue3DPass`/`SceneGpuBridge`/`EcsMapDesignerPanel`, Pass 1B `portraitSpriteId` portrait rendering in `EcsCinematicDirector`/`SceneHudOverlayPass`, and initial-boot `hd2d_3d` preview sync in `EcsWorkbenchView` with live browser verification (`0` errors).
 
-### Phase 7B — Production Cloud Provisioning, Live `?play=<slug>` & Optional BYOK AI Art Bridge `[NEXT]`
+### Phase 8 — Production Cloud Provisioning, Live `?play=<slug>` & Optional BYOK AI Art Bridge `[NEXT]`
 - Provision Cloudflare R2 (`pixer-assets`), deploy `workers/api`, apply Supabase SQL migration (`docs/CLOUD_SETUP.md`), configure `VITE_CLOUD_API_BASE` + `VITE_CDN_BASE_URL`, verify live `?play=<slug>` & SRAM sync, and optionally connect BYOK external image generation directly into Pixel Forge.

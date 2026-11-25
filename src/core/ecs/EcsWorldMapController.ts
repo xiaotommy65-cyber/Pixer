@@ -26,6 +26,7 @@ import {
   type EcsMapInteractionRule,
   type EcsMapPortalDef,
   type EcsMapRoomDef,
+  type EcsTileDef,
   type EcsTopDownAiProfile,
 } from './EcsTilemapTypes.ts';
 import type { EcsWorld } from './EcsWorld.ts';
@@ -594,12 +595,16 @@ export class EcsWorldMapController {
         if (!def) continue;
         const slot = this.acquireTile(count);
         slot.sprite = def.sprite;
+        slot.sideSprite = undefined;
         slot.x = c * ts;
         slot.y = wy;
         slot.w = ts;
         slot.h = ts;
         slot.alpha = 1;
         slot.tint = def.tint ?? '#ffffff';
+        slot.roughness = def.roughness;
+        slot.metallic = def.metallic;
+        slot.emissive = def.emissive;
         slot.extrudeH = 0;
         slot.elevationZ = 0;
         slot.wallMaterial = undefined;
@@ -622,12 +627,16 @@ export class EcsWorldMapController {
         const isTall = rh > ts;
         const slot = this.acquireTile(count);
         slot.sprite = def.sprite;
+        slot.sideSprite = undefined;
         slot.x = c * ts;
         slot.y = isTall ? wy - (rh - ts) : wy;
         slot.w = ts;
         slot.h = rh;
         slot.alpha = 1;
         slot.tint = def.tint ?? '#ffffff';
+        slot.roughness = def.roughness;
+        slot.metallic = def.metallic;
+        slot.emissive = def.emissive;
         slot.extrudeH = 0;
         slot.elevationZ = isTall ? 0.5 : 0;
         slot.wallMaterial = undefined;
@@ -659,6 +668,7 @@ export class EcsWorldMapController {
         if (!def) continue;
         const isUnlocked = def.unlockGlobal ? (globals.get(def.unlockGlobal) ?? 0) >= 1 : false;
         const sprite = isUnlocked && def.unlockedSprite ? def.unlockedSprite : def.sprite;
+        const sideSprite = isUnlocked && def.unlockedSprite ? def.unlockedSprite : def.sideSprite;
         let mask = 0;
         if (!isUnlocked) {
           if (isExtrudedWallCell(c, r - 1)) mask |= 1; // North
@@ -668,12 +678,16 @@ export class EcsWorldMapController {
         }
         const slot = this.acquireTile(count);
         slot.sprite = sprite;
+        slot.sideSprite = sideSprite;
         slot.x = c * ts;
         slot.y = wy;
         slot.w = ts;
         slot.h = ts;
         slot.alpha = 1;
         slot.tint = def.tint ?? '#ffffff';
+        slot.roughness = def.roughness;
+        slot.metallic = def.metallic;
+        slot.emissive = def.emissive;
         slot.extrudeH = isUnlocked ? 4 : (def.extrudeH ?? defaultExtrude);
         slot.elevationZ = 0;
         slot.wallMaterial = def.wallMaterial ?? 'stone';
@@ -1592,6 +1606,18 @@ export class EcsWorldMapController {
       }
     }
     return null;
+  }
+
+  /** Live non-transactional tile PBR/sprite preview update for workbench sliders. */
+  public patchLiveTileDef(tileDef: EcsTileDef, globals: ReadonlyMap<string, number>): void {
+    const wm = this.project.worldMap;
+    if (!wm) return;
+    const defs = [...(wm.tileDefs ?? [])];
+    const idx = defs.findIndex((d) => d.id === tileDef.id);
+    if (idx >= 0) defs[idx] = tileDef;
+    else defs.push(tileDef);
+    wm.tileDefs = defs;
+    this.rebuildTiles(globals);
   }
 
   /**

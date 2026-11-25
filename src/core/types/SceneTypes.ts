@@ -51,11 +51,19 @@ export interface SimEventDetail {
 
 export interface TileDesc {
   sprite: SpriteId;
+  /** Optional vertical side-face sprite for 3D extruded walls (defaults to `sprite`). */
+  sideSprite?: SpriteId;
   x: number;
   y: number;
   w: number;
   h: number;
   tint?: string;
+  /** PBR-Lite surface roughness (0.05..1.0). */
+  roughness?: number;
+  /** PBR-Lite metallic reflectance (0..1.0). */
+  metallic?: number;
+  /** Self-illumination / Pass 2 bloom intensity (0..2.0). */
+  emissive?: number;
   unlockable?: boolean;
   /** 2.5D HD-2D vertical wall extrusion height (world px). */
   extrudeH?: number;
@@ -169,7 +177,7 @@ export interface DebugRectDesc {
 }
 
 export interface HudPrimitiveDesc {
-  kind: 'bar' | 'box' | 'aim_line' | 'text';
+  kind: 'bar' | 'box' | 'aim_line' | 'text' | 'sprite';
   x: number;
   y: number;
   w: number;
@@ -178,6 +186,8 @@ export interface HudPrimitiveDesc {
   y2?: number;
   ratio?: number;
   text?: string;
+  sprite?: SpriteId;
+  flipX?: boolean;
   scale?: number;
   align?: 'left' | 'center' | 'right';
   shadowColor?: string;

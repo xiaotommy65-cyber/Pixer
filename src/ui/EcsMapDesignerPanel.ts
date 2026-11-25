@@ -8,12 +8,14 @@ import {
   type EcsMapLayerName,
   type EcsMapPortalDef,
   type EcsMapRoomDef,
+  type EcsTileDef,
 } from '../core/ecs/EcsTilemapTypes.ts';
 import {
   projectWorld3DToScreen,
   type ComputedCamera3D,
   type ScreenPoint3D,
 } from '../core/math/Perspective3DMath.ts';
+import { collectProjectSpriteOptions, createWorkbenchSliderRow } from './EcsWorkbenchCatalog.ts';
 
 export type MapToolMode = 'brush' | 'rect' | 'fill' | 'erase' | 'eyedropper' | 'stamp' | 'pan';
 
@@ -32,6 +34,7 @@ export interface MapDesignerPanelCallbacks {
   onSwitchRoom: (roomId: string) => void;
   onSelectEntity: (entityId: string) => void;
   onEnterEditMode: () => void;
+  onLiveTileDef?: (tileDef: EcsTileDef) => void;
   onOpenSpriteAtelierForTile?: () => void;
   onOpenExternalImport?: () => void;
 }
@@ -352,6 +355,162 @@ export function renderMapDesignerPane(
     tileGrid.appendChild(card);
   }
   palSec.append(palHead, tileGrid);
+
+  // 3b. Selected Tile PBR Material & Top/Side Texture Inspector
+  const selectedTile = mergedTiles.get(state.selectedTileId);
+  if (state.tool !== 'stamp' && selectedTile && selectedTile.layer === state.layer) {
+    const pbrCard = document.createElement('div');
+    pbrCard.className = 'p7-rule-card';
+    pbrCard.setAttribute('data-testid', 'tile-pbr-inspector');
+
+    const pbrHead = document.createElement('div');
+    pbrHead.className = 'p7-rule-card-head';
+    const pbrTitle = document.createElement('strong');
+    pbrTitle.textContent = `瓦片材質：${selectedTile.name}`;
+    const pbrIdTag = document.createElement('span');
+    pbrIdTag.className = 'p7-meta-line p7-mono';
+    pbrIdTag.textContent = `#${selectedTile.id}`;
+    pbrHead.append(pbrTitle, pbrIdTag);
+    pbrCard.appendChild(pbrHead);
+
+    const spriteOpts = collectProjectSpriteOptions(proj, atlas);
+    const liveTile = (patch: Partial<EcsTileDef>) => {
+      cb.onLiveTileDef?.({ ...selectedTile, ...patch });
+    };
+    const commitTile = (patch: Partial<EcsTileDef>) => {
+      session.dispatch({ type: 'upsert_tile_def', tileDef: { ...selectedTile, ...patch } });
+    };
+
+    const makeSpriteSelect = (
+      label: string,
+      value: string,
+      allowEmptyLabel: string | null,
+      onChange: (val: string) => void,
+      testId: string,
+    ) => {
+      const row = document.createElement('label');
+      row.className = 'p7-rule-field';
+      const sp = document.createElement('span');
+      sp.textContent = label;
+      const sel = document.createElement('select');
+      sel.className = 'p7-select p7-mono';
+      sel.setAttribute('data-testid', testId);
+      if (allowEmptyLabel) {
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = allowEmptyLabel;
+        sel.appendChild(emptyOpt);
+      }
+      for (const opt of spriteOpts) {
+        const o = document.createElement('option');
+        o.value = opt.id;
+        o.textContent = opt.label;
+        sel.appendChild(o);
+      }
+      if (value && !spriteOpts.some((o) => o.id === value)) {
+        const cur = document.createElement('option');
+        cur.value = value;
+        cur.textContent = value;
+        sel.appendChild(cur);
+      }
+      sel.value = value;
+      sel.addEventListener('change', () => onChange(sel.value));
+      row.append(sp, sel);
+      return row;
+    };
+
+    pbrCard.appendChild(
+      makeSpriteSelect(
+        selectedTile.layer === 'wall' ? '牆頂貼圖 (Top)' : '瓦片貼圖 (Sprite)',
+        selectedTile.sprite,
+        null,
+        (v) => commitTile({ sprite: (v || selectedTile.sprite) as SpriteId }),
+        'tile-pbr-sprite',
+      ),
+    );
+
+    if (selectedTile.layer === 'wall') {
+      pbrCard.appendChild(
+        makeSpriteSelect(
+          '牆側貼圖 (Side)',
+          selectedTile.sideSprite ?? '',
+          '(同牆頂貼圖)',
+          (v) => commitTile({ sideSprite: (v || undefined) as SpriteId | undefined }),
+          'tile-pbr-side-sprite',
+        ),
+      );
+      const matRow = document.createElement('label');
+      matRow.className = 'p7-rule-field';
+      const matLbl = document.createElement('span');
+      matLbl.textContent = '牆體材質 (Material)';
+      const matSel = document.createElement('select');
+      matSel.className = 'p7-select p7-mono';
+      for (const [mId, mTxt] of [
+        ['stone', '石砌 (stone)'],
+        ['earth', '岩土 (earth)'],
+        ['timber', '木構 (timber)'],
+        ['astral', '星晶 (astral)'],
+      ] as const) {
+        const o = document.createElement('option');
+        o.value = mId;
+        o.textContent = mTxt;
+        matSel.appendChild(o);
+      }
+      matSel.value = selectedTile.wallMaterial ?? 'stone';
+      matSel.addEventListener('change', () => {
+        commitTile({ wallMaterial: matSel.value as EcsTileDef['wallMaterial'] });
+      });
+      matRow.append(matLbl, matSel);
+      pbrCard.appendChild(matRow);
+
+      pbrCard.appendChild(
+        createWorkbenchSliderRow(
+          '牆高 ExtrudeH',
+          4,
+          48,
+          1,
+          selectedTile.extrudeH ?? 26,
+          (v) => `${Math.round(v)}px`,
+          (v) => liveTile({ extrudeH: Math.round(v) }),
+          (v) => commitTile({ extrudeH: Math.round(v) }),
+        ),
+      );
+    }
+
+    pbrCard.append(
+      createWorkbenchSliderRow(
+        '粗糙度 Roughness',
+        0.05,
+        1.0,
+        0.02,
+        selectedTile.roughness ?? 0.62,
+        (v) => v.toFixed(2),
+        (v) => liveTile({ roughness: Number(v.toFixed(2)) }),
+        (v) => commitTile({ roughness: Number(v.toFixed(2)) }),
+      ),
+      createWorkbenchSliderRow(
+        '金屬度 Metallic',
+        0.0,
+        1.0,
+        0.02,
+        selectedTile.metallic ?? 0.1,
+        (v) => v.toFixed(2),
+        (v) => liveTile({ metallic: Number(v.toFixed(2)) }),
+        (v) => commitTile({ metallic: Number(v.toFixed(2)) }),
+      ),
+      createWorkbenchSliderRow(
+        '自發光 Emissive',
+        0.0,
+        2.0,
+        0.05,
+        selectedTile.emissive ?? 0,
+        (v) => v.toFixed(2),
+        (v) => liveTile({ emissive: Number(v.toFixed(2)) }),
+        (v) => commitTile({ emissive: Number(v.toFixed(2)) }),
+      ),
+    );
+    palSec.appendChild(pbrCard);
+  }
 
   // 4. Castle Object / Prop / Enemy Prefab Stamp Palette
   const stampSec = document.createElement('div');

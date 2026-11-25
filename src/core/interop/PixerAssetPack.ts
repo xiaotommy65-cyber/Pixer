@@ -1,4 +1,5 @@
 import type { ExternalAudioManifest } from '../audio/ExternalAudioBank.ts';
+import { validateCutsceneDef, type EcsCutsceneDef } from '../ecs/EcsCutsceneSchema.ts';
 import { encodeRgbaToZlibB64 } from '../ecs/EcsCustomSpriteCompiler.ts';
 import {
   validateCustomSpriteDef,
@@ -35,6 +36,7 @@ export interface PixerAssetPackManifest {
   tileDefs?: EcsTileDef[];
   prefabs?: Record<string, EcsPrefabDef>;
   animations?: AnimationStateMachineDef[];
+  cutscenes?: EcsCutsceneDef[];
   portraits?: Record<string, PixerAssetPackPortraitMeta>;
   audioManifest?: ExternalAudioManifest;
 }
@@ -116,6 +118,15 @@ export function validateAssetPackManifest(
   if (p.animations !== undefined && !Array.isArray(p.animations)) {
     errors.push('animations must be an array when provided');
   }
+  if (p.cutscenes !== undefined) {
+    if (!Array.isArray(p.cutscenes)) {
+      errors.push('cutscenes must be an array when provided');
+    } else {
+      for (let i = 0; i < p.cutscenes.length; i++) {
+        errors.push(...validateCutsceneDef(p.cutscenes[i], `cutscenes[${i}]`));
+      }
+    }
+  }
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -140,6 +151,12 @@ export function buildAssetPackInstallCommands(
   if (pack.animations) {
     for (const animation of pack.animations) {
       cmds.push({ type: 'upsert_animation', animation });
+    }
+  }
+
+  if (pack.cutscenes) {
+    for (const cutscene of pack.cutscenes) {
+      cmds.push({ type: 'upsert_cutscene', cutscene });
     }
   }
 
@@ -202,6 +219,7 @@ export function exportProjectAsAssetPack(
   const tileDefs = project.worldMap?.tileDefs ? [...project.worldMap.tileDefs] : [];
   const prefabs = { ...project.prefabs };
   const animations = project.animations ? [...project.animations] : [];
+  const cutscenes = project.cutscenes ? [...project.cutscenes] : [];
 
   return {
     schemaVersion: 1,
@@ -215,6 +233,7 @@ export function exportProjectAsAssetPack(
     ...(tileDefs.length > 0 ? { tileDefs } : {}),
     ...(Object.keys(prefabs).length > 0 ? { prefabs } : {}),
     ...(animations.length > 0 ? { animations } : {}),
+    ...(cutscenes.length > 0 ? { cutscenes } : {}),
   };
 }
 
@@ -459,6 +478,30 @@ function buildHorrorPack(): PixerAssetPackManifest {
     portraits: {
       detective: { spriteId: 'hr_portrait_detective', displayName: '調查員', mood: 'tense' },
     },
+    cutscenes: [
+      {
+        id: 'hr_investigation_intro',
+        name: '古宅線索調查對話 (160×192 立繪)',
+        trigger: 'manual',
+        handbackDurationSec: 0.45,
+        skippable: true,
+        shots: [
+          {
+            id: 'hr_shot_clue',
+            durationSec: 2.2,
+            subject: 'hero',
+            shotSize: 'CU',
+            anchor: 'right_third',
+            motion: 'push_in',
+            speaker: '調查員',
+            portraitSpriteId: 'hr_portrait_detective',
+            portraitSide: 'left',
+            subtitle: '蠟燭才剛熄滅……兇手一定還藏在這座古宅的長廊裡。',
+            letterbox: 1.0,
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -560,6 +603,30 @@ function buildVisualNovelPack(): PixerAssetPackManifest {
     portraits: {
       protagonist: { spriteId: 'vn_portrait_protagonist', displayName: '主角', mood: 'calm' },
     },
+    cutscenes: [
+      {
+        id: 'vn_parlor_prologue',
+        name: '手帳書房序章對話 (160×192 立繪)',
+        trigger: 'manual',
+        handbackDurationSec: 0.45,
+        skippable: true,
+        shots: [
+          {
+            id: 'vn_shot_1',
+            durationSec: 2.2,
+            subject: 'hero',
+            shotSize: 'MS',
+            anchor: 'right_third',
+            motion: 'spring',
+            speaker: '手帳主角',
+            portraitSpriteId: 'vn_portrait_protagonist',
+            portraitSide: 'left',
+            subtitle: '午後的陽光灑在書桌上，泛黃的日記正等著我們翻開下一頁。',
+            letterbox: 1.0,
+          },
+        ],
+      },
+    ],
   };
 }
 

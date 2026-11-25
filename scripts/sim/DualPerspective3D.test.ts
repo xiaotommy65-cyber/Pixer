@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { TextureAtlas } from '../../src/assets/TextureAtlas.ts';
 import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
+import { syncProjectCustomSpritesToAtlas } from '../../src/core/ecs/EcsCustomSpriteCompiler.ts';
+import { cloneEcsProject } from '../../src/core/ecs/EcsProjectSchema.ts';
 import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
+import { buildBuiltinStarterPack, buildAssetPackInstallCommands } from '../../src/core/interop/index.ts';
 import { GpuDynamicGlyphCache } from '../../src/core/gpu/GpuDynamicGlyphCache.ts';
 import { GpuEngine, hexToRgb01 } from '../../src/core/gpu/GpuEngine.ts';
 import type {
@@ -582,6 +585,133 @@ test('Cutscene subtitle/splash HUD emits Pass 1B overlays after 3D Pass 1A and G
   const titleIdx = drawEvents.indexOf('text:黑曜魔王城');
   const subIdx = drawEvents.indexOf('text:OBSIDIAN CITADEL');
   assert.ok(last3dIdx >= 0 && titleIdx > last3dIdx && subIdx > last3dIdx, 'Pass 1B splash text must be queued after Pass 1A 3D walls');
+});
+
+test('SceneTrue3DPass forwards tile PBR (roughness/metallic/emissive) and separates wall top/side sprites via EcsTileDef.sideSprite', () => {
+  const atlas = new TextureAtlas();
+  const bridge = new SceneGpuBridge();
+  const session = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
+  const res = session.dispatch({
+    type: 'upsert_tile_def',
+    tileDef: {
+      id: 10,
+      name: '雙面神殿高牆',
+      layer: 'wall',
+      sprite: 'castle_wall_top',
+      sideSprite: 'castle_wall_brick',
+      solid: true,
+      extrudeH: 30,
+      wallMaterial: 'stone',
+      roughness: 0.21,
+      metallic: 0.77,
+      emissive: 0.44,
+    },
+  });
+  assert.equal(res.ok, true);
+
+  const floorRes = session.dispatch({
+    type: 'upsert_tile_def',
+    tileDef: {
+      id: 1,
+      name: '鏡面石板地',
+      layer: 'ground',
+      sprite: 'castle_floor_stone',
+      solid: false,
+      roughness: 0.19,
+      metallic: 0.65,
+      emissive: 0.12,
+    },
+  });
+  assert.equal(floorRes.ok, true);
+
+  const rt = new EcsCartridgeRuntime(session.getProject());
+  const snap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+
+  const { gpu } = attachMockGpu('webgpu', atlas);
+  const wallCalls: Array<{ topId: string; sideId: string | null; roughness: number; metallic: number; emissive: number }> = [];
+  const floorCalls: Array<{ id: string; roughness: number; metallic: number; emissive: number }> = [];
+  const origWall = gpu.drawBox3DWall.bind(gpu);
+  const origFloor = gpu.drawFloorTile3D.bind(gpu);
+  gpu.drawBox3DWall = (topId, sideId, x, y, w, h, zBase, wallH, mask, tint, wallTint, alpha, palRow, roughness, metallic, obl, emissive) => {
+    wallCalls.push({
+      topId,
+      sideId,
+      roughness: roughness ?? -1,
+      metallic: metallic ?? -1,
+      emissive: emissive ?? 0,
+    });
+    return origWall(topId, sideId, x, y, w, h, zBase, wallH, mask, tint, wallTint, alpha, palRow, roughness, metallic, obl, emissive);
+  };
+  gpu.drawFloorTile3D = (id, x, y, w, h, z, tint, alpha, palRow, shade, roughness, metallic, emissive) => {
+    floorCalls.push({
+      id,
+      roughness: roughness ?? -1,
+      metallic: metallic ?? -1,
+      emissive: emissive ?? 0,
+    });
+    return origFloor(id, x, y, w, h, z, tint, alpha, palRow, shade, roughness, metallic, emissive);
+  };
+
+  bridge.render(gpu, snap, null);
+  const splitWall = wallCalls.find((c) => c.topId === 'castle_wall_top' && c.sideId === 'castle_wall_brick');
+  assert.ok(splitWall, 'hd2d_3d wall must pass distinct topId and sideSprite to drawBox3DWall');
+  assert.ok(Math.abs(splitWall.roughness - 0.21) < 1e-6);
+  assert.ok(Math.abs(splitWall.metallic - 0.77) < 1e-6);
+  assert.ok(Math.abs(splitWall.emissive - 0.44) < 1e-6);
+
+  const pbrFloor = floorCalls.find((c) => c.id === 'castle_floor_stone');
+  assert.ok(pbrFloor, 'hd2d_3d floor must render');
+  assert.ok(Math.abs(pbrFloor.roughness - 0.19) < 1e-6);
+  assert.ok(Math.abs(pbrFloor.metallic - 0.65) < 1e-6);
+  assert.ok(Math.abs(pbrFloor.emissive - 0.12) < 1e-6);
+});
+
+test('Pass 1B renders 160x192 dialogue portraits above subtitle box via portraitSpriteId', () => {
+  const atlas = new TextureAtlas();
+  const bridge = new SceneGpuBridge();
+  const input = createEmptyInputState();
+  const session = new EcsStudioSession(cloneEcsProject(OBSIDIAN_CITADEL_PROJECT));
+  const vnPack = buildBuiltinStarterPack('visual_novel');
+  const cmds = buildAssetPackInstallCommands(vnPack, session.getProject(), { applyAtmosphere: true });
+  const installRes = session.dispatchBatch(cmds, 'Install VN pack');
+  assert.equal(installRes.ok, true);
+
+  const proj = session.getProject();
+  assert.ok(proj.customSprites?.vn_portrait_protagonist);
+  assert.ok(proj.cutscenes?.some((c) => c.id === 'vn_parlor_prologue'));
+
+  const rt = new EcsCartridgeRuntime(proj);
+  assert.ok(rt.playCutscene('vn_parlor_prologue'));
+  for (let f = 0; f < 10; f++) {
+    rt.step(1 / 60, input, DEFAULT_RUNTIME_PARAMS);
+  }
+  const snap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const portraitPrim = (snap.hudPrimitives ?? []).find(
+    (p) => p.kind === 'sprite' && p.sprite === 'vn_portrait_protagonist',
+  );
+  assert.ok(portraitPrim, 'Cutscene snapshot must emit Pass 1B sprite primitive for portraitSpriteId');
+  assert.ok(portraitPrim.h >= 48 && portraitPrim.w >= 40);
+
+  // Sync custom portrait into atlas and verify GpuEngine receives drawSpriteRaw with paletteRow=-2
+  const { gpu } = attachMockGpu('webgpu', atlas);
+  syncProjectCustomSpritesToAtlas(atlas, proj);
+  const spriteDrawCalls: Array<{ id: string; paletteRow: number; y: number }> = [];
+  const origDrawRaw = gpu.drawSpriteRaw.bind(gpu);
+  gpu.drawSpriteRaw = (id, x, y, w, h, flipX, rot, tint, alpha, flash, add, px, py, skewX, palRow, em, r, m) => {
+    spriteDrawCalls.push({ id, paletteRow: palRow ?? 0, y });
+    return origDrawRaw(id, x, y, w, h, flipX, rot, tint, alpha, flash, add, px, py, skewX, palRow, em, r, m);
+  };
+  (gpu as unknown as { dynamicGlyphCache: GpuDynamicGlyphCache }).dynamicGlyphCache = new GpuDynamicGlyphCache(
+    (_cp, outRgba, size) => {
+      outRgba.fill(255, 0, size * size * 4);
+      return true;
+    },
+  );
+
+  bridge.render(gpu, snap, null);
+  const drawnPortrait = spriteDrawCalls.find((c) => c.id === 'vn_portrait_protagonist');
+  assert.ok(drawnPortrait, 'SceneHudOverlayPass must draw the portrait sprite onto Pass 1B');
+  assert.equal(drawnPortrait.paletteRow, -2, 'Portrait HUD sprite must use paletteRow=-2 to bypass world lighting');
 });
 
 

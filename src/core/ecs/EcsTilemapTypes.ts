@@ -24,6 +24,8 @@ export interface EcsTileDef {
   readonly name: string;
   readonly layer: EcsMapLayerName;
   readonly sprite: SpriteId;
+  /** Optional vertical wall side-face sprite for `hd2d_3d` / `hd2d_iso` extruded walls (defaults to `sprite`). */
+  readonly sideSprite?: SpriteId;
   readonly solid: boolean;
   readonly hazard?: boolean;
   readonly extrudeH?: number;

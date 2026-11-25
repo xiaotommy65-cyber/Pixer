@@ -1,4 +1,4 @@
-# Pixer — 工程交接書（Engineering Handoff · Wave 1–4A Complete）
+# Pixer — 工程交接書（Engineering Handoff · Wave 1–4B Complete）
 
 > **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit`**（~0.7s 唯讀體檢），即可零盲點掌握全倉狀態。
 
@@ -28,6 +28,11 @@
     - **純核心萬用像素煉金爐（[`PixelForgeProcessor.ts`](../src/core/interop/PixelForgeProcessor.ts)）**：100% DOM-free 提供四角 Flood-fill 去背與 Anti-fringe 清理、緊緻裁切、整數倍網格週期偵測（`detectPixelBlockSize`）、`grid_majority` 抗糊邊降採樣、Oklab `adaptive_kmeans` / `palette_lock` + Bayer 4×4 + 1px 外框勾邊（內建 `asylum_horror` / `obsidian_dungeon` / `cozy_vn` / `cyber_neon` / `endesga_32` 五組題材色盤）、`cols×rows` Sprite Sheet 切片自動產生 `AnimationStateMachineDef`，以及單步 Undo 原子寫入指令。
     - **可攜式跨題材資產包標準（[`PixerAssetPack.ts`](../src/core/interop/PixerAssetPack.ts) + [`PixerMcpProtocol.ts`](../src/core/ai/PixerMcpProtocol.ts)）**：定義 `PixerAssetPackManifest` (`schemaVersion: 1`) 驗證與防 ID 碰撞安裝／匯出，內建 `horror`（陰森古宅恐怖包 + `160×192` 偵探立繪）、`visual_novel`（暖色手帳物語包 + `160×192` 主角立繪）與 `dungeon`（黑曜古墓包）三大起始包，並新增 MCP 工具 `install_asset_pack` 與 `export_asset_pack`。
     - **工作站整合與實機驗收（[`PixelForgeImportTab.ts`](../src/ui/PixelForgeImportTab.ts) + [`ExternalImportModalView.ts`](../src/ui/ExternalImportModalView.ts)）**：於 `external-import` 懶載入分包擴充「Pixel Forge 任意圖洗圖」與「題材資產包」分頁（受 `ArchitectureTests.ts` 守門，不跨分包匯入 `SpriteAtelierPixelOps`）；Chrome `http://localhost:3000/` 實測示範洗圖、恐怖資產包一鍵套用（含氛圍光影切換）與一鍵 `復原` 皆 **0 console / shader 錯誤**。
+  - **Wave 4B｜多管線烘焙、HD-2D 瓦片 PBR 頂側分離、Pass 1B 立繪通道與首幀出畫修復**：
+    - **`hd2d_3d` 瓦片 PBR 與牆頂／牆側貼圖分離**：擴充 [`EcsTilemapTypes.ts`](../src/core/ecs/EcsTilemapTypes.ts) (`EcsTileDef.sideSprite`)、[`SceneTypes.ts`](../src/core/types/SceneTypes.ts) (`TileDesc.sideSprite` / `roughness` / `metallic` / `emissive`)、[`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts) (`rebuildTiles` 池化零分配轉發與 `patchLiveTileDef`)、[`GpuQuad3DBatch.ts`](../src/core/gpu/GpuQuad3DBatch.ts) / [`GpuEngine.ts`](../src/core/gpu/GpuEngine.ts) (`drawBox3DWall` 支援 `emissive`)、[`SceneTrue3DPass.ts`](../src/core/runtime/SceneTrue3DPass.ts) 與 [`SceneGpuBridge.ts`](../src/core/runtime/SceneGpuBridge.ts)；於 [`EcsMapDesignerPanel.ts`](../src/ui/EcsMapDesignerPanel.ts) 開放牆頂／牆側貼圖、牆體材質、`ExtrudeH`、`Roughness`、`Metallic`、`Emissive` 調整（含即時預覽與單步 Undo 提交）並同步暴露至 [`PixerMcpProtocol.ts`](../src/core/ai/PixerMcpProtocol.ts)。
+    - **Pixel Forge 多管線烘焙預設（Baking Profiles）**：於 [`PixelForgeProcessor.ts`](../src/core/interop/PixelForgeProcessor.ts) 與 [`PixelForgeImportTab.ts`](../src/ui/PixelForgeImportTab.ts) 新增 `wall_top_side`（單圖自動合成斜角牆頂 + 牆側雙貼圖）、`billboard_actor`、`emissive_light_prop`（`detectEmissiveLightFromRgba` 自動萃取高光主色並掛載 `LightSource` + 自發光）與 `portrait_160x192` 四組專用烘焙預設。
+    - **Pass 1B `160×192` 對話立繪通道**：擴充 `EcsCutsceneShotDef`（`portraitSpriteId` / `portraitSide`）、`HudPrimitiveDesc`（`kind: 'sprite'`）、[`SceneHudOverlayPass.ts`](../src/core/runtime/SceneHudOverlayPass.ts)（`paletteRow = -2` 繞過世界光影呈現原色像素立繪）、[`EcsCinematicDirector.ts`](../src/core/ecs/EcsCinematicDirector.ts) 與 [`PixerAssetPack.ts`](../src/core/interop/PixerAssetPack.ts)（`horror`/`visual_novel` 起始包內建含 `160×192` 立繪之敘事過場）。
+    - **首幀出畫與後端 Canvas 同步修復**：修正 [`EcsWorkbenchView.ts`](../src/ui/EcsWorkbenchView.ts) 在 `GpuEngine` 非同步初始化與 `replaceCanvasNode()` 降級 WebGL2 時的 `previewCanvas` 參照同步、`hasBackend()` 檢查及 `rAF` 二次刷新，實機開啟即完整呈現 `hd2d_3d` 城塞場景，無須手動切換視角。
 
 ---
 
@@ -37,9 +42,10 @@
 - **驗證門檻與最新基線**：
   - `bun run audit -- --strict`：**PASS**（exit 0，`critical=0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=5`，`ecsCommandTypes=42/42`）
   - `bun run lint`（`tsc --noEmit`）：**0 errors**
-  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.67ms / 0KB`；`240f Zero-GC: ECS 0.58ms / 40.7KB, Chunked 2.25ms / 26.7KB`）
-  - `npm run test`：**69 pass / 0 fail**
-  - `bun run build && bun run clean`：**PASS**（216 modules，`1.26s`，**0 chunk warnings**：`ecs-workbench 339.93 kB`、`external-import 113.62 kB`、`cartridges 481.93 kB`、`index 225.98 kB`、`cloud-publish 14.82 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`；`dist/` 已清理）
+  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.37ms / 0KB`）
+  - `npm run test`：**72 pass / 0 fail**
+  - `bun run build && bun run clean`：**PASS**（216 modules，`246ms`，**0 chunk warnings**：`ecs-workbench 344.10 kB`、`external-import 121.35 kB`、`cartridges 483.85 kB`、`index 225.98 kB`、`cloud-publish 14.82 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`；`dist/` 已清理）
+  - **本機瀏覽器實機驗收**：`http://localhost:3001/` 實測初始載入即完整出畫 HD-2D 3D 城塞場景、牆體 PBR 頂側檢查器、Pixel Forge `emissive_light_prop`／`wall_top_side` 烘焙、`visual_novel` 資產包安裝與 `vn_parlor_prologue` Pass 1B `160×192` 立繪對話過場，**0 console / page / shader errors**。
 - **不可動搖鐵則**：
   1. 任何開工與收尾先跑 `bun run audit -- --strict`；新修結構問題必補規則與端到端持久性測試。
   2. 不得將測試檔放回 `src/`，不得在純核心使用 DOM 或遊戲專屬硬編碼，不得產生 `package-lock.json`，不得直推 `main`。
@@ -47,10 +53,9 @@
 
 ---
 
-## 3. 下一階段推進路線（PR 合入與 Wave 4B / 雲端環境佈建）
+## 3. 下一階段推進路線（PR 合入與正式環境雲端佈建）
 
 1. **推送並合入 PR（`feat/swarm-p0-p1-hardening` → `main`）**：
    - 推送分支至 GitHub 開 PR，確認 Actions CI（Bun `1.4.5`）全綠後合入 `main`。
-2. **Wave 4B｜跨題材對話立繪面板／BYOK AI 接橋／正式環境雲端佈建**：
-   - 可擴充工作站對話立繪 UI（搭配 Wave 4A `160×192` 立繪）或 BYOK 外部生圖 API 接橋至 Pixel Forge；雲端部分依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase PostgreSQL migration、Cloudflare R2 (`pixer-assets`) 與 `workers/api`。
-   - 設定 `VITE_CLOUD_API_BASE` / `VITE_CDN_BASE_URL` 並實測工作站「雲端發佈」與 `?play=<slug>` 遠端載入／SRAM 同步。
+2. **正式環境雲端佈建 / BYOK AI 生圖接橋**：
+   - 依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase PostgreSQL migration、Cloudflare R2 (`pixer-assets`) 與 `workers/api`，設定 `VITE_CLOUD_API_BASE` / `VITE_CDN_BASE_URL` 並實測工作站「雲端發佈」與 `?play=<slug>` 遠端載入／SRAM 同步，或選配接橋外部生圖 API 至 Pixel Forge。

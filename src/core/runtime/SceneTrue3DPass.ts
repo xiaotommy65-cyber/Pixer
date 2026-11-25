@@ -122,7 +122,8 @@ export class SceneTrue3DPass {
 
       if (extrudeH > 0) {
         const wallH = extrudeH * wallHeightScale;
-        const sideId = t.sprite === 'solid' ? null : t.sprite;
+        const rawSide = t.sideSprite ?? t.sprite;
+        const sideId = rawSide === 'solid' ? null : rawSide;
         gpu.drawBox3DWall(
           t.sprite,
           sideId,
@@ -137,9 +138,10 @@ export class SceneTrue3DPass {
           t.wallColor,
           t.alpha ?? 1,
           defaultPaletteRow,
-          0.56,
-          0.1,
+          t.roughness ?? 0.56,
+          t.metallic ?? 0.1,
           t.castShadow === false ? 0 : obliqueShadowAlpha,
+          t.emissive ?? 0,
         );
       } else if (elevZ > 0 || t.h > t.w) {
         // Tall decorative prop (columns, torches, trees, banners) stands upright in 3D space
@@ -166,9 +168,9 @@ export class SceneTrue3DPass {
           0,
           false,
           defaultPaletteRow,
-          0,
-          0.55,
-          0.1,
+          t.emissive ?? 0,
+          t.roughness ?? 0.55,
+          t.metallic ?? 0.1,
           sway,
           true,
         );
@@ -185,9 +187,9 @@ export class SceneTrue3DPass {
           t.alpha ?? 1,
           defaultPaletteRow,
           0.98 * ambDim,
-          0.66,
-          0.06,
-          0,
+          t.roughness ?? 0.66,
+          t.metallic ?? 0.06,
+          t.emissive ?? 0,
         );
       }
     }

@@ -262,6 +262,7 @@ export class GpuQuad3DBatch {
     roughness = 0.58,
     metallic = 0.1,
     obliqueShadowAlpha = 0.35,
+    emissive = 0,
   ): void {
     if (
       !Number.isFinite(x) ||
@@ -327,7 +328,7 @@ export class GpuQuad3DBatch {
       topRect.page ?? 0,
       roughness,
       metallic,
-      0,
+      emissive,
     );
 
     const hasEast = (neighborMask & 2) !== 0;
@@ -367,7 +368,7 @@ export class GpuQuad3DBatch {
         sidePage,
         roughness,
         metallic,
-        0,
+        emissive,
       );
     }
 
@@ -402,7 +403,7 @@ export class GpuQuad3DBatch {
         sidePage,
         roughness,
         metallic,
-        0,
+        emissive,
       );
     }
 
@@ -437,7 +438,7 @@ export class GpuQuad3DBatch {
         sidePage,
         roughness,
         metallic,
-        0,
+        emissive,
       );
     }
 

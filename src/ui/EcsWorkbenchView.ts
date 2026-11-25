@@ -240,7 +240,16 @@ export class EcsWorkbenchView {
     this.element = this.dom.rootEl;
 
     // Dedicated preview GPU engine bound to shared TextureAtlas (lazy-initialized on first show)
-    this.previewGpu = new GpuEngine(this.dom.previewCanvas, undefined, this.atlas);
+    this.previewGpu = new GpuEngine(
+      this.dom.previewCanvas,
+      (_kind, nextCanvas) => {
+        if (nextCanvas) {
+          this.dom.previewCanvas = nextCanvas;
+        }
+        this.previewDirty = true;
+      },
+      this.atlas,
+    );
     this.mapCanvasCtrl = new EcsWorkbenchMapCanvasController({
       canvas: this.dom.mapOverlayCanvas,
       session: this.session,
@@ -471,7 +480,14 @@ export class EcsWorkbenchView {
       this.syncViewportSize(this.session.getProject());
       this.previewGpu.syncAtlasToGpu();
       this.previewDirty = true;
-      if (this.visible) this.renderPreviewNow();
+      if (this.visible) {
+        this.renderPreviewNow();
+        requestAnimationFrame(() => {
+          if (this.destroyed || !this.visible) return;
+          this.previewDirty = true;
+          this.renderPreviewNow();
+        });
+      }
     });
   }
 
@@ -627,6 +643,10 @@ export class EcsWorkbenchView {
   }
 
   private renderPreviewNow(): void {
+    if (!this.previewGpu.hasBackend()) {
+      this.mapCanvasCtrl.renderOverlay();
+      return;
+    }
     this.previewDirty = false;
     const snap = this.runtime.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
     this.lastRenderedScore = snap.score;
@@ -718,6 +738,11 @@ export class EcsWorkbenchView {
           },
           onEnterEditMode: () => {
             if (this.simRunning) this.setSimRunning(false);
+          },
+          onLiveTileDef: (tileDef) => {
+            this.runtime.getWorldMapController().patchLiveTileDef(tileDef, this.runtime.world.globals);
+            this.previewDirty = true;
+            this.renderPreviewNow();
           },
           onOpenSpriteAtelierForTile: () => {
             if (this.callbacks.onOpenSpriteAtelierForTile) {

@@ -8,9 +8,11 @@ import {
   BUILTIN_STARTER_PACK_SUMMARIES,
   exportProjectAsAssetPack,
   forgeImageToCustomSprites,
+  PIXEL_FORGE_BAKING_PROFILES,
   PIXEL_FORGE_PALETTES,
   validateAssetPackManifest,
   type BuiltinStarterPackGenre,
+  type PixelForgeBakingProfileId,
   type PixelForgeColorMode,
   type PixelForgeDownscaleMode,
   type PixelForgeOutput,
@@ -153,6 +155,7 @@ export class PixelForgeImportTab {
   private readonly callbacks: PixelForgeImportTabCallbacks;
 
   private readonly forgeFileInput: HTMLInputElement;
+  private readonly bakingProfileSelect: HTMLSelectElement;
   private readonly idInput: HTMLInputElement;
   private readonly sizeSelect: HTMLSelectElement;
   private readonly downscaleSelect: HTMLSelectElement;
@@ -165,6 +168,7 @@ export class PixelForgeImportTab {
   private readonly sheetColsInput: HTMLInputElement;
   private readonly sheetRowsInput: HTMLInputElement;
   private readonly registerPrefabChk: HTMLInputElement;
+  private readonly attachLightChk: HTMLInputElement;
   private readonly registerTileChk: HTMLInputElement;
   private readonly tileLayerSelect: HTMLSelectElement;
   private readonly forgeStatusEl: HTMLDivElement;
@@ -272,6 +276,17 @@ export class PixelForgeImportTab {
     const cfgCard = document.createElement('div');
     cfgCard.className = 'p7-rule-card';
 
+    this.bakingProfileSelect = document.createElement('select');
+    this.bakingProfileSelect.className = 'p7-select';
+    this.bakingProfileSelect.setAttribute('data-testid', 'pixel-forge-profile');
+    for (const prof of PIXEL_FORGE_BAKING_PROFILES) {
+      const o = document.createElement('option');
+      o.value = prof.id;
+      o.textContent = prof.label;
+      if (prof.id === 'custom') o.selected = true;
+      this.bakingProfileSelect.appendChild(o);
+    }
+
     this.idInput = document.createElement('input');
     this.idInput.type = 'text';
     this.idInput.className = 'p7-input p7-mono';
@@ -341,6 +356,7 @@ export class PixelForgeImportTab {
     sheetPair.append(this.sheetColsInput, this.sheetRowsInput);
 
     cfgCard.append(
+      this.wrapField('跨管線烘焙預設 (Baking Profile)', this.bakingProfileSelect),
       this.wrapField('精靈 ID', this.idInput),
       this.wrapField('目標像素規格 (最高 256×256)', this.sizeSelect),
       this.wrapField('降採樣策略', this.downscaleSelect),
@@ -357,6 +373,7 @@ export class PixelForgeImportTab {
     this.outlineChk = this.makeCheckRow(togglesBox, '1px 暗線輪廓描邊（強化剪影）', false);
     this.ditherChk = this.makeCheckRow(togglesBox, 'Bayer 4×4 有序抖動（細膩過渡）', true);
     this.registerPrefabChk = this.makeCheckRow(togglesBox, '同步註冊為物件庫 Prefab 印章', true);
+    this.attachLightChk = this.makeCheckRow(togglesBox, '自動偵測高光色並掛載動態 LightSource + 自發光', false);
 
     const tileRow = document.createElement('label');
     tileRow.className = 'p7-interop-check';
@@ -425,6 +442,15 @@ export class PixelForgeImportTab {
     this.commitForgeBtn.disabled = true;
     this.commitForgeBtn.addEventListener('click', () => this.commitForgedSprites(), { signal });
 
+    this.bakingProfileSelect.addEventListener(
+      'change',
+      () => {
+        this.applyBakingProfilePreset(this.bakingProfileSelect.value as PixelForgeBakingProfileId);
+        this.reprocessPreview();
+      },
+      { signal },
+    );
+
     for (const ctrl of [
       this.sizeSelect,
       this.downscaleSelect,
@@ -436,6 +462,7 @@ export class PixelForgeImportTab {
       this.ditherChk,
       this.sheetColsInput,
       this.sheetRowsInput,
+      this.attachLightChk,
     ]) {
       ctrl.addEventListener('change', () => {
         this.paletteSelect.disabled = this.colorModeSelect.value !== 'palette_lock';
@@ -555,6 +582,34 @@ export class PixelForgeImportTab {
     return chk;
   }
 
+  private applyBakingProfilePreset(profileId: PixelForgeBakingProfileId): void {
+    const prof = PIXEL_FORGE_BAKING_PROFILES.find((p) => p.id === profileId);
+    if (!prof || prof.id === 'custom') return;
+    this.sizeSelect.value = `${prof.targetWidth}x${prof.targetHeight}`;
+    this.downscaleSelect.value = prof.downscaleMode;
+    this.colorModeSelect.value =
+      prof.colorMode === 'adaptive_kmeans'
+        ? prof.maxColors >= 64
+          ? 'adaptive_kmeans_64'
+          : 'adaptive_kmeans_32'
+        : prof.colorMode;
+    this.paletteSelect.disabled = this.colorModeSelect.value !== 'palette_lock';
+    this.stripBgChk.checked = prof.stripBackground;
+    this.cropChk.checked = prof.cropOpaque;
+    this.outlineChk.checked = Boolean(prof.outlineHex);
+    this.ditherChk.checked = prof.dither;
+    this.registerPrefabChk.checked = prof.registerPrefab;
+    this.attachLightChk.checked = Boolean(prof.attachLight);
+    if (prof.registerTileLayer) {
+      this.registerTileChk.checked = true;
+      this.tileLayerSelect.disabled = false;
+      this.tileLayerSelect.value = prof.registerTileLayer;
+    } else {
+      this.registerTileChk.checked = false;
+      this.tileLayerSelect.disabled = true;
+    }
+  }
+
   private async loadExternalImageFile(file: File): Promise<void> {
     this.forgeStatusEl.className = 'p7-interop-status';
     this.forgeStatusEl.textContent = `正在讀取與洗圖：${file.name}...`;
@@ -593,6 +648,7 @@ export class PixelForgeImportTab {
       colorMode = 'true_color';
     }
 
+    const bakingProfile = this.bakingProfileSelect.value as PixelForgeBakingProfileId;
     const out = forgeImageToCustomSprites(
       {
         id: this.idInput.value.trim() || 'forged_sprite',
@@ -603,6 +659,7 @@ export class PixelForgeImportTab {
       },
       {
         id: this.idInput.value.trim() || 'forged_sprite',
+        bakingProfile,
         targetWidth: preset.w,
         targetHeight: preset.h,
         downscaleMode: this.downscaleSelect.value as PixelForgeDownscaleMode,
@@ -625,19 +682,35 @@ export class PixelForgeImportTab {
     }
     this.commitForgeBtn.disabled = out.sprites.length === 0;
     this.forgeStatusEl.className = 'p7-interop-status is-ok';
+    const extraNotes: string[] = [];
+    if (out.wallSideSpriteId) {
+      extraNotes.push(`牆頂/牆側雙貼圖 (${out.sprites[0]?.id} + ${out.wallSideSpriteId})`);
+    }
+    if (this.attachLightChk.checked && out.detectedLight) {
+      extraNotes.push(`自動光源 ${out.detectedLight.color} R=${out.detectedLight.radius}`);
+    }
+    if (out.animations.length > 0) {
+      extraNotes.push(`自動生成動畫 ${out.animations[0].id}`);
+    }
     this.forgeStatusEl.textContent =
       `已煉製 ${out.sprites.length} 張精靈 (${preset.w}×${preset.h}) · 偵測原圖像素塊=${out.detectedBlockSize}×` +
-      (out.animations.length > 0 ? ` · 自動生成動畫 ${out.animations[0].id}` : '');
+      (extraNotes.length > 0 ? ` · ${extraNotes.join(' · ')}` : '');
   }
 
   private commitForgedSprites(): void {
     if (!this.currentOutput) return;
     const project = this.callbacks.getProject();
+    const profId = this.bakingProfileSelect.value as PixelForgeBakingProfileId;
+    const prof = PIXEL_FORGE_BAKING_PROFILES.find((p) => p.id === profId);
     const cmds = buildPixelForgeCommitCommands(this.currentOutput, project, {
       registerPrefab: this.registerPrefabChk.checked,
+      attachLight: this.attachLightChk.checked,
+      prefabCategory: prof?.prefabCategory,
       registerTileLayer: this.registerTileChk.checked
         ? (this.tileLayerSelect.value as EcsMapLayerName)
         : undefined,
+      tileSolid: prof?.tileSolid,
+      tileExtrudeH: prof?.tileExtrudeH,
     });
     if (cmds.length === 0) return;
 

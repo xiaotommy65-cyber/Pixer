@@ -71,6 +71,10 @@ export interface EcsCutsceneShotDef {
   motivation?: string;
   /** Dialogue speaker badge label. */
   speaker?: string;
+  /** Optional 160x192 / 256x256 character portrait sprite ID rendered above the dialogue bar in Pass 1B. */
+  portraitSpriteId?: string;
+  /** Portrait screen side ('left' | 'right', default 'left'). */
+  portraitSide?: 'left' | 'right';
   /** Typewriter subtitle line. */
   subtitle?: string;
   /** Large act/boss introduction splash banner title. */
@@ -166,6 +170,15 @@ export function validateCutsceneDef(def: unknown, keyHint = 'cutscene'): string[
     }
     if (s.motion !== undefined && !VALID_MOTIONS.has(s.motion)) {
       errors.push(`${sLabel}.motion '${String(s.motion)}' is invalid`);
+    }
+    if (
+      s.portraitSpriteId !== undefined &&
+      (typeof s.portraitSpriteId !== 'string' || !/^[a-zA-Z0-9_-]{2,64}$/.test(s.portraitSpriteId))
+    ) {
+      errors.push(`${sLabel}.portraitSpriteId must match /^[a-zA-Z0-9_-]{2,64}$/`);
+    }
+    if (s.portraitSide !== undefined && s.portraitSide !== 'left' && s.portraitSide !== 'right') {
+      errors.push(`${sLabel}.portraitSide '${String(s.portraitSide)}' must be 'left' or 'right'`);
     }
   }
   return errors;

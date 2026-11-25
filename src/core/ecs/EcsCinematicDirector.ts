@@ -163,8 +163,10 @@ export class EcsCinematicDirector {
   public timeScale = 1.0;
   public establishedAxisSign: -1 | 0 | 1 = 0;
 
-  // Active overlay text state
+  // Active overlay text & portrait state
   private activeSpeaker = '';
+  private activePortraitSpriteId = '';
+  private activePortraitSide: 'left' | 'right' = 'left';
   private activeSubtitle = '';
   private subtitleProgressChars = 0;
   private activeSplashTitle = '';
@@ -209,6 +211,8 @@ export class EcsCinematicDirector {
     this.timeScale = 1.0;
     this.establishedAxisSign = 0;
     this.activeSpeaker = '';
+    this.activePortraitSpriteId = '';
+    this.activePortraitSide = 'left';
     this.activeSubtitle = '';
     this.subtitleProgressChars = 0;
     this.activeSplashTitle = '';
@@ -423,6 +427,11 @@ export class EcsCinematicDirector {
     stepSpringInto(state[0], state[1], target, prevTarget, freqHz, 1.0, response, dt, state);
   }
 
+  public getActivePortrait(): { spriteId: string; side: 'left' | 'right' } | null {
+    if (!this.activePortraitSpriteId || this.phase !== 'playing_shots') return null;
+    return { spriteId: this.activePortraitSpriteId, side: this.activePortraitSide };
+  }
+
   private enterShot(index: number, onShotStart?: (shot: EcsCutsceneShotDef) => void): void {
     if (!this.activeCutscene) return;
     const shot = this.activeCutscene.shots[index];
@@ -430,6 +439,8 @@ export class EcsCinematicDirector {
     this.shotIndex = index;
     this.shotElapsedSec = 0;
     this.activeSpeaker = shot.speaker ?? '';
+    this.activePortraitSpriteId = shot.portraitSpriteId ?? '';
+    this.activePortraitSide = shot.portraitSide ?? 'left';
     this.activeSubtitle = shot.subtitle ?? '';
     this.subtitleProgressChars = 0;
     if (shot.splashTitle) {
@@ -450,6 +461,8 @@ export class EcsCinematicDirector {
     this.handbackStartDarkness = this.spotlightDarkness;
     this.hasPrevGameplayCam = false;
     this.activeSpeaker = '';
+    this.activePortraitSpriteId = '';
+    this.activePortraitSide = 'left';
     this.activeSubtitle = '';
   }
 
@@ -908,38 +921,85 @@ export class EcsCinematicDirector {
       }
     }
 
-    // 3. Typewriter Dialogue Subtitle Overlay
-    if (this.activeSubtitle && this.phase === 'playing_shots') {
+    // 3. Pass 1B Portrait & Typewriter Dialogue Overlay
+    if (this.phase === 'playing_shots' && (this.activePortraitSpriteId || this.activeSubtitle)) {
       const barH = Math.round(vpH * 0.115 * this.letterboxRatio);
       const subY = vpH - Math.max(24, barH + 22);
-      const visibleText = this.activeSubtitle.slice(0, this.subtitleProgressChars);
-      const fullLine = this.activeSpeaker ? `${this.activeSpeaker}: ${visibleText}` : visibleText;
+      const plateTop = subY - 5;
 
-      const subPlate = acquireHud(hCount);
-      subPlate.kind = 'box';
-      subPlate.x = Math.round(vpW * 0.14);
-      subPlate.y = subY - 5;
-      subPlate.w = Math.round(vpW * 0.72);
-      subPlate.h = 20;
-      subPlate.color = '#090d16';
-      subPlate.alpha = 0.8;
-      subPlate.worldSpace = false;
-      outHud[hCount++] = subPlate;
+      if (this.activePortraitSpriteId) {
+        const pH = Math.max(48, Math.min(192, Math.round(vpH * 0.44)));
+        const pW = Math.round(pH * (160 / 192));
+        const marginX = Math.max(12, Math.round(vpW * 0.1));
+        const pX = this.activePortraitSide === 'right' ? vpW - marginX - pW : marginX;
+        const pY = Math.max(barH + 4, plateTop - pH + 4);
 
-      const txt = acquireHud(hCount);
-      txt.kind = 'text';
-      txt.x = Math.round(vpW * 0.5);
-      txt.y = subY;
-      txt.w = 0;
-      txt.h = 0;
-      txt.text = fullLine;
-      txt.scale = 1;
-      txt.align = 'center';
-      txt.color = '#f8fafc';
-      txt.shadowColor = '#020617';
-      txt.alpha = 0.98;
-      txt.worldSpace = false;
-      outHud[hCount++] = txt;
+        const pBack = acquireHud(hCount);
+        pBack.kind = 'box';
+        pBack.x = pX - 3;
+        pBack.y = pY - 3;
+        pBack.w = pW + 6;
+        pBack.h = pH + 6;
+        pBack.color = '#090d16';
+        pBack.alpha = 0.72;
+        pBack.worldSpace = false;
+        outHud[hCount++] = pBack;
+
+        const pBorder = acquireHud(hCount);
+        pBorder.kind = 'box';
+        pBorder.x = pX - 3;
+        pBorder.y = pY - 3;
+        pBorder.w = pW + 6;
+        pBorder.h = 2;
+        pBorder.color = accentHex;
+        pBorder.alpha = 0.92;
+        pBorder.worldSpace = false;
+        outHud[hCount++] = pBorder;
+
+        const portrait = acquireHud(hCount);
+        portrait.kind = 'sprite';
+        portrait.sprite = this.activePortraitSpriteId;
+        portrait.flipX = this.activePortraitSide === 'right';
+        portrait.x = pX;
+        portrait.y = pY;
+        portrait.w = pW;
+        portrait.h = pH;
+        portrait.color = '#ffffff';
+        portrait.alpha = 1;
+        portrait.worldSpace = false;
+        outHud[hCount++] = portrait;
+      }
+
+      if (this.activeSubtitle) {
+        const visibleText = this.activeSubtitle.slice(0, this.subtitleProgressChars);
+        const fullLine = this.activeSpeaker ? `${this.activeSpeaker}: ${visibleText}` : visibleText;
+
+        const subPlate = acquireHud(hCount);
+        subPlate.kind = 'box';
+        subPlate.x = Math.round(vpW * 0.12);
+        subPlate.y = plateTop;
+        subPlate.w = Math.round(vpW * 0.76);
+        subPlate.h = 20;
+        subPlate.color = '#090d16';
+        subPlate.alpha = 0.84;
+        subPlate.worldSpace = false;
+        outHud[hCount++] = subPlate;
+
+        const txt = acquireHud(hCount);
+        txt.kind = 'text';
+        txt.x = Math.round(vpW * 0.5);
+        txt.y = subY;
+        txt.w = 0;
+        txt.h = 0;
+        txt.text = fullLine;
+        txt.scale = 1;
+        txt.align = 'center';
+        txt.color = '#f8fafc';
+        txt.shadowColor = '#020617';
+        txt.alpha = 0.98;
+        txt.worldSpace = false;
+        outHud[hCount++] = txt;
+      }
     }
 
     return hCount;

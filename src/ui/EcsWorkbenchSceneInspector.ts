@@ -45,6 +45,9 @@ function buildSampleCutscene(proj: EcsProjectV2, runtime: EcsCartridgeRuntime): 
   const hasHero = proj.entities.some((e) => e.id === 'hero' || e.components.tag === 'hero');
   const roomEntity = proj.entities.find((e) => !activeRoomId || !e.roomId || e.roomId === activeRoomId);
   const primarySubject = hasHero ? 'hero' : (roomEntity?.id ?? proj.entities[0]?.id ?? 'point');
+  const portraitSprite = Object.values(proj.customSprites ?? {}).find(
+    (s) => (s.width >= 120 && s.height >= 140) || s.id.includes('portrait'),
+  );
 
   return {
     id: csId,
@@ -64,6 +67,14 @@ function buildSampleCutscene(proj: EcsProjectV2, runtime: EcsCartridgeRuntime): 
         motivation: 'scene_establishing',
         splashTitle: proj.meta.title.slice(0, 24) || 'SCENE PREVIEW',
         splashSubtitle: 'HD-2D DIRECTOR PREVIEW',
+        ...(portraitSprite
+          ? {
+              speaker: portraitSprite.name ?? '角色',
+              portraitSpriteId: portraitSprite.id,
+              portraitSide: 'left' as const,
+              subtitle: 'Pass 1B 立繪與對話欄同步渲染中...',
+            }
+          : {}),
         letterbox: 1.0,
       },
       {
@@ -71,9 +82,16 @@ function buildSampleCutscene(proj: EcsProjectV2, runtime: EcsCartridgeRuntime): 
         durationSec: 1.1,
         subject: primarySubject,
         shotSize: 'MS',
-        anchor: 'center',
+        anchor: portraitSprite ? 'right_third' : 'center',
         motion: 'push_in',
         motivation: 'character_focus',
+        ...(portraitSprite
+          ? {
+              speaker: portraitSprite.name ?? '角色',
+              portraitSpriteId: portraitSprite.id,
+              portraitSide: 'left' as const,
+            }
+          : {}),
         subtitle: '鏡頭推進預覽中...',
         letterbox: 1.0,
       },
@@ -132,7 +150,11 @@ export function buildSceneAndHistorySections(
       nameEl.textContent = cs.name;
       const subEl = document.createElement('span');
       subEl.className = 'p7-meta-line p7-mono';
-      subEl.textContent = `${cs.shots.length} 鏡頭 · ${cs.trigger ?? 'manual'}${cs.roomId ? ` · ${cs.roomId}` : ''}`;
+      const portraitShot = cs.shots.find((s) => s.portraitSpriteId);
+      subEl.textContent =
+        `${cs.shots.length} 鏡頭 · ${cs.trigger ?? 'manual'}` +
+        (cs.roomId ? ` · ${cs.roomId}` : '') +
+        (portraitShot?.portraitSpriteId ? ` · 立繪:${portraitShot.portraitSpriteId}` : '');
       meta.append(nameEl, subEl);
 
       const acts = document.createElement('div');

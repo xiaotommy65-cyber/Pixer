@@ -15,6 +15,7 @@ import {
 import { cloneEcsProject, validateCustomSpriteDef } from '../../src/core/ecs/EcsProjectSchema.ts';
 import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
 import {
+  PIXEL_FORGE_BAKING_PROFILES,
   PIXEL_FORGE_PALETTES,
   applyRgbaOutline,
   buildAssetPackInstallCommands,
@@ -25,6 +26,7 @@ import {
   buildSampleLdtkSample,
   buildSampleTiledZlibSample,
   cropOpaqueBoundsRgba,
+  detectEmissiveLightFromRgba,
   detectPixelBlockSize,
   downscaleToPixelGridRgba,
   encodeMinimalAsepriteBinary,
@@ -36,6 +38,7 @@ import {
   parseTiledMap,
   quantizeRgbaOklab,
   stripEdgeBackgroundRgba,
+  synthesizeWallTopCapRgba,
   validateAssetPackManifest,
   type DecodedPngImage,
 } from '../../src/core/interop/index.ts';
@@ -607,4 +610,87 @@ test('PixerAssetPack validates manifests, installs horror/vn/dungeon starter pac
   assert.equal(exportOut.isError, false);
   assert.equal(exportOut.structuredContent.ok, true);
   assert.equal(validateAssetPackManifest(exportOut.structuredContent.pack).ok, true);
+});
+
+test('Pixel Forge multi-pipeline baking profiles emit wall top/side pairs, emissive light props, and 160x192 portraits', () => {
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'wall_top_side'));
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'billboard_actor'));
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'emissive_light_prop'));
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'portrait_160x192'));
+
+  // 1. Wall top/side baking from a single 32x32 brick texture
+  const brickRgba = new Uint8Array(32 * 32 * 4);
+  for (let i = 0; i < 32 * 32; i++) {
+    brickRgba[i * 4] = 120;
+    brickRgba[i * 4 + 1] = 130;
+    brickRgba[i * 4 + 2] = 160;
+    brickRgba[i * 4 + 3] = 255;
+  }
+  const topCap = synthesizeWallTopCapRgba(brickRgba, 32, 32);
+  assert.ok(topCap[0] < brickRgba[0], 'Synthesized wall top border should be darker beveled cap');
+
+  const wallOut = forgeImageToCustomSprites(
+    { id: 'crypt_wall', rgba: brickRgba, width: 32, height: 32 },
+    {
+      id: 'crypt_wall',
+      bakingProfile: 'wall_top_side',
+      targetWidth: 32,
+      targetHeight: 32,
+      colorMode: 'palette_lock',
+      paletteId: 'obsidian_dungeon',
+      stripBackground: false,
+      cropOpaque: false,
+    },
+  );
+  assert.equal(wallOut.sprites.length, 2);
+  assert.equal(wallOut.sprites[0].id, 'crypt_wall_top');
+  assert.equal(wallOut.wallSideSpriteId, 'crypt_wall_side');
+
+  const session = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
+  const wallCmds = buildPixelForgeCommitCommands(wallOut, session.getProject(), {
+    registerTileLayer: 'wall',
+    tileSolid: true,
+    tileExtrudeH: 28,
+  });
+  const wallRes = session.dispatchBatch(wallCmds, 'Bake Wall Pair');
+  assert.equal(wallRes.ok, true);
+  const bakedTile = session.getProject().worldMap?.tileDefs?.find((t) => t.sprite === 'crypt_wall_top');
+  assert.ok(bakedTile && bakedTile.sideSprite === 'crypt_wall_side');
+
+  // 2. Emissive light prop auto-detection + LightSource prefab wiring
+  const lanternRgba = new Uint8Array(32 * 32 * 4);
+  for (let y = 8; y < 24; y++) {
+    for (let x = 8; x < 24; x++) {
+      const off = (y * 32 + x) * 4;
+      const isCore = x >= 12 && x <= 19 && y >= 12 && y <= 19;
+      lanternRgba[off] = isCore ? 255 : 40;
+      lanternRgba[off + 1] = isCore ? 210 : 45;
+      lanternRgba[off + 2] = isCore ? 90 : 60;
+      lanternRgba[off + 3] = 255;
+    }
+  }
+  const detected = detectEmissiveLightFromRgba(lanternRgba, 32, 32);
+  assert.ok(detected.brightRatio > 0.2 && detected.emissive > 0.6 && detected.radius >= 88);
+
+  const lanternOut = forgeImageToCustomSprites(
+    { id: 'amber_brazier', rgba: lanternRgba, width: 32, height: 32 },
+    {
+      id: 'amber_brazier',
+      bakingProfile: 'emissive_light_prop',
+      targetWidth: 32,
+      targetHeight: 32,
+      colorMode: 'true_color',
+      stripBackground: false,
+      cropOpaque: false,
+    },
+  );
+  const lightCmds = buildPixelForgeCommitCommands(lanternOut, session.getProject(), {
+    registerPrefab: true,
+    attachLight: true,
+  });
+  const lightRes = session.dispatchBatch(lightCmds, 'Bake Emissive Light Prop');
+  assert.equal(lightRes.ok, true);
+  const brazierPrefab = session.getProject().prefabs.prefab_amber_brazier;
+  assert.ok(brazierPrefab?.components.light, 'emissive_light_prop baking must attach LightSource component');
+  assert.ok((brazierPrefab.components.sprite?.emissive ?? 0) > 0.5);
 });

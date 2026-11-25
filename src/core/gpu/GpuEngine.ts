@@ -115,6 +115,10 @@ export class GpuEngine {
     this.screenFilterCode = Math.max(0, Math.min(2, Math.round(mode)));
   }
 
+  public hasBackend(): boolean {
+    return this.backend !== null;
+  }
+
   public supports3D(): boolean {
     return this.backend?.kind === 'webgpu' || this.backend?.kind === 'webgl2';
   }
@@ -1049,10 +1053,11 @@ export class GpuEngine {
     roughness = 0.58,
     metallic = 0.1,
     obliqueShadowAlpha = 0.35,
+    emissive = 0,
   ): void {
     this.quad3d.drawBox3DWall(
       this.atlas, topId, sideId, x, y, w, h, zBase, wallH, neighborMask,
-      tint, wallTint, alpha, paletteRow, roughness, metallic, obliqueShadowAlpha,
+      tint, wallTint, alpha, paletteRow, roughness, metallic, obliqueShadowAlpha, emissive,
     );
   }
 
