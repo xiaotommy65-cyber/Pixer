@@ -592,8 +592,8 @@ export function validateCustomSpriteDef(def: unknown, keyHint?: string): string[
   }
   const w = Number(s.width);
   const h = Number(s.height);
-  if (!Number.isInteger(w) || w < 8 || w > 128 || !Number.isInteger(h) || h < 8 || h > 128) {
-    errors.push(`${label} dimensions ${String(s.width)}x${String(s.height)} must be integers in 8..128`);
+  if (!Number.isInteger(w) || w < 8 || w > 256 || !Number.isInteger(h) || h < 8 || h > 256) {
+    errors.push(`${label} dimensions ${String(s.width)}x${String(s.height)} must be integers in 8..256`);
   }
   if (s.kind !== 'grid' && s.kind !== 'procedural' && s.kind !== 'rgba_b64') {
     errors.push(`${label}.kind must be 'grid', 'procedural', or 'rgba_b64'`);

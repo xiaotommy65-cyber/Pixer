@@ -80,3 +80,38 @@
   - Exposed Cutscene Director / 5-Axis Critic Oracle UI, `視野遮蔽預覽 (FOV Fog)` Zero-GC overlay, and idle Studio 0-draw GPU cap.
   - Live `http://localhost:3000/` Chromium check: **0** uncaught JS/console/shader errors; verified `PA-14` `真 3D 透視 (HD-2D)` rendering, `100/100 [S]` diagnostic banner, FOV fog toggle, and 21:9 letterbox cutscene playback.
 - **Full Gate**: `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`: `ColorMath 2.46ms / 13KB`, `240f Zero-GC: ECS 0.53ms / 37.3KB, Chunked 2.00ms / 26.7KB`) · `npm run test` (**64 pass / 0 fail**) · `bun run audit -- --strict` (**exit 0**, `critical=0`, `Math/Shader` 0 warn, `Perf/Arch` 0 warn) · `bun run build` (`211 modules`, `570ms`, `CapacitorNativeBridge` async chunk `2.86 kB`, note `ecs-workbench` chunk `510.77 kB > 500 kB`) · `bun run clean`.
+
+---
+
+## 7. Wave 3 Verification Log (Phase 6B · Chunk Polish, CJK Pass 1B Overlay & Cloud Publish UI)
+- **Status**: `PASSED` on `feat/swarm-p0-p1-hardening`
+- **Vite Chunking & `PwaBridge` Decoupling**:
+  - Removed static `@capacitor/core` import from `src/ui/PwaBridge.ts` (replaced with runtime `window.Capacitor?.isNativePlatform?.()` check, guarded by `ArchitectureTests.ts`).
+  - Lazy-loaded `EventGraphEditorView` and `CloudPublishModalView` in `EcsWorkbenchView.ts` (`dynamicImportCount`: `3 -> 5`).
+  - Split `vite.config.ts` groups into `ecs-workbench` (`339.23 kB`), `sprite-atelier` (`73.08 kB`), `external-import` (`70.15 kB`), `event-graph` (`32.95 kB`), `cloud-publish` (`14.82 kB`), `legacy-v1-sim` (`24.38 kB`), `cartridges` (`481.93 kB`), `index` (`225.98 kB`) — **0 Vite chunk size warnings** (all chunks `< 500 kB`).
+- **V1 Legacy Compatibility Tier Decision (Locked)**:
+  - `CardDeckEngine`, `FighterFrameEngine`, `GenreControllers`, `DataCartridgeRuntime`/`DataRuntime*`, and `src/core/editor/*` (`StudioSession` lazy in `AgentBridge`) are **frozen as a compatibility tier** isolated in Vite chunk `legacy-v1-sim` (still powering `PA-01`/`PA-02` and covered by `Engine10Core.test.ts`). No further feature expansion or deletion churn without an explicit architectural RFC.
+- **Cutscene `splashTitle` / `splashSubtitle` / `subtitle` Pass 1B Fix**:
+  - Root cause: `TextureAtlas` pre-packed ASCII 32..95 only (`GpuEngine.drawPixelText()` skipped non-ASCII/CJK glyphs with `totalW <= 0`), `EcsCinematicDirector` subtitle lacked a dark contrast backdrop, and `PA-14`/`PA-15` Shot 0 lacked an opening subtitle.
+  - Added `src/core/gpu/GpuDynamicGlyphCache.ts` (bounded 256-glyph LRU cache rasterizing crisp 16×16 CJK/Unicode glyphs onto dynamic `TextureAtlas` slots with headless fallback), updated `GpuEngine.drawPixelText()` (Zero-GC scratch glyph metrics) and `Canvas2DBackend.ts` (`paletteRow < -1.5` full tint opacity), added dark subtitle backdrop in `EcsCinematicDirector.appendCinemaOverlayHud()`, and added Shot 0 subtitles to `PA-14` (`citadel_gate_intro`) & `PA-15` (`grove_arrival`).
+- **Workstation Cloud Publish UI (`CloudPublishModalView`)**:
+  - Added lazy-loaded `src/ui/CloudPublishModalView.ts` wired from toolbar button `[data-testid="open-cloud-publish"]` (`雲端發佈`) via `CloudSyncClient`: supports Edge API URL, session-only Bearer token, validated slug (`?play=<slug>`), visibility, ETag `If-Match` conflict recovery, clipboard share URL copy, and offline `.pixer.json` export fallback.
+- **Live Browser & Full Gate**:
+  - Live Chromium check at `http://localhost:3000/`: **0** console/page/shader errors; visually verified Shot 0 (`CHRONICLE: 赤月籠罩黑曜城塞...` + 21:9 letterbox), Shot 1 (`黑曜魔王城` + `OBSIDIAN CITADEL` + accent rule over 3D scene), `CloudPublishModalView`, and lazy-loaded `EventGraphEditorView`.
+  - Full Gate: `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`) · `npm run test` (**66 pass / 0 fail**) · `bun run build` (213 modules, `319ms`, **0 chunk warnings**) · `bun run audit -- --strict` (exit 0, `critical=0`, `dynamicImportCount=5`, `circularDepsCount=0`).
+
+---
+
+## 8. Wave 4A Verification Log (Universal Pixel Forge & Cross-Genre `PixerAssetPack` Foundation)
+- **Status**: `PASSED` on `feat/swarm-p0-p1-hardening`
+- **`256×256` Custom Sprite & Portrait Ceiling**:
+  - Raised `EcsProjectSchema.validateCustomSpriteDef` & `EcsCustomSpriteCompiler` bounds from `8..128` to `8..256` (`MAX_CUSTOM_SPRITE_RGBA_BYTES = 256 * 256 * 4`, `MAX_CUSTOM_SPRITE_B64_CHARS = 512 * 1024`), enabling crisp `160×192` visual-novel portraits and `256×256` horror/dungeon bosses while preserving strict zip-bomb bounds (`Engine10Core.test.ts` updated to `300 KB` payload).
+- **DOM-Free Universal Pixel Forge (`src/core/interop/PixelForgeProcessor.ts`, 1,034L)**:
+  - Implemented `stripEdgeBackgroundRgba` (corner-consensus flood-fill + anti-fringe cleanup), `cropOpaqueBoundsRgba`, `detectPixelBlockSize` (X/Y transition periodicity `2..16`), `downscaleToPixelGridRgba` (`grid_majority` inset majority vote w/ hard alpha cutout + `lossless`), `quantizeRgbaOklab` (`true_color`, `adaptive_kmeans`, `palette_lock` + Bayer 4×4 across 5 curated `PIXEL_FORGE_PALETTES` — `asylum_horror`, `obsidian_dungeon`, `cozy_vn`, `cyber_neon`, `endesga_32`), `applyRgbaOutline`, `forgeImageToCustomSprites` (`cols×rows` sprite-sheet slicing + automatic `AnimationStateMachineDef`), and `buildPixelForgeCommitCommands`.
+- **Portable `PixerAssetPackManifest` v1 & MCP Integration (`src/core/interop/PixerAssetPack.ts`, 658L & `PixerMcpProtocol.ts`)**:
+  - Added schema validation (`validateAssetPackManifest`), collision-safe atomic install & export (`buildAssetPackInstallCommands`, `exportProjectAsAssetPack`), 3 built-in starter packs (`horror`, `visual_novel`, `dungeon` incl. `160×192` portraits & dark/warm atmospheres), and MCP tools `install_asset_pack` + `export_asset_pack`.
+- **Workstation Multi-Tab Import UI (`src/ui/PixelForgeImportTab.ts`, 706L + `ExternalImportModalView.ts` + `EcsWorkbenchView.ts`)**:
+  - Added **Pixel Forge 洗圖** and **題材資產包 (Asset Packs)** tabs inside lazy `external-import` Vite chunk (`113.62 kB`), guarded in `ArchitectureTests.ts` (`public destroy()` + `AbortController`) and `Interop.test.ts`.
+- **Live Browser & Full Gate**:
+  - Live Chromium check at `http://localhost:3000/`: **0** console/page/shader errors; verified demo forging (`已煉製 1 張精靈 (32×32) · 偵測原圖像素塊=4×` -> commit `gothic_lantern_forged`), Horror Asylum pack install (`6 張精靈 · 3 瓦片 · 2 Prefab` + dark horror atmosphere), and 1-step Undo rollback.
+  - Full Gate: `bun run lint` (0 err) · `bun run sim` (`[SIM ALL PASSED]`, `240f Zero-GC: ECS 0.58ms / 40.7KB, Chunked 2.25ms / 26.7KB`) · `npm run test` (**69 pass / 0 fail**) · `bun run build` (216 modules, `1.26s`, **0 chunk warnings**, `external-import 113.62 kB`, `ecs-workbench 339.93 kB`, `cartridges 481.93 kB`) · `bun run audit -- --strict` (exit 0, `critical=0`, `circularDepsCount=0`, `dynamicImportCount=5`).

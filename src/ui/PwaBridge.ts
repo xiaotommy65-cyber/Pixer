@@ -1,4 +1,3 @@
-import { Capacitor } from '@capacitor/core';
 import { registerSW } from 'virtual:pwa-register';
 import { appLogger } from '../core/runtime/AppLogger.ts';
 import { btn, el } from './dom.ts';
@@ -8,6 +7,13 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+function isNativeCapacitorPlatform(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    (window as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.(),
+  );
+}
+
 /**
  * Registers the Vite PWA service worker, mounts the mandatory in-app Install button
  * (supporting both Chromium beforeinstallprompt & iOS Safari Add-to-Home-Screen guide modal),
@@ -15,7 +21,7 @@ interface BeforeInstallPromptEvent extends Event {
  * Automatically bypassed inside Capacitor native iOS/Android binaries.
  */
 export function initPwaBridge(headerTools: HTMLElement, onInstallClick?: () => void): () => void {
-  if (typeof window === 'undefined' || typeof document === 'undefined' || Capacitor.isNativePlatform()) {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || isNativeCapacitorPlatform()) {
     return () => {};
   }
 

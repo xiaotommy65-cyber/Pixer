@@ -199,6 +199,8 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'ConsoleHudPresenter.ts',
     'ShmupOverlayView.ts',
     'ExternalImportModalView.ts',
+    'PixelForgeImportTab.ts',
+    'CloudPublishModalView.ts',
     'EcsWorldRulesInspectorPanel.ts',
     'EcsWorkbenchMapCanvasController.ts',
     'ConsoleSpatialController.ts',
@@ -214,6 +216,8 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   for (const overlayFile of [
     'ShmupOverlayView.ts',
     'ExternalImportModalView.ts',
+    'PixelForgeImportTab.ts',
+    'CloudPublishModalView.ts',
     'EcsWorldRulesInspectorPanel.ts',
     'EcsWorkbenchMapCanvasController.ts',
     'ConsoleSpatialController.ts',
@@ -301,13 +305,20 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       `Security invariant violation: ${rel} must not use eval() or new Function()`,
     );
   }
+  const pwaBridgeSrc = fs.readFileSync(path.join(rootDir, 'src/ui/PwaBridge.ts'), 'utf8');
   check(
-    dynamicImportCount >= 2 &&
+    !/from\s+['"]@capacitor\//.test(pwaBridgeSrc),
+    'PwaBridge.ts must not statically import @capacitor/core (use runtime global detection)',
+  );
+  check(
+    dynamicImportCount >= 4 &&
       mainSrc.includes("import('./ui/SpriteAtelierView.ts')") &&
       mainSrc.includes("import('./ui/CapacitorNativeBridge.ts')") &&
+      ecsWorkbenchSrc.includes("import('./EventGraphEditorView.ts')") &&
+      ecsWorkbenchSrc.includes("import('./CloudPublishModalView.ts')") &&
       !/\bnew\s+StudioSession\s*\(/.test(mainSrc) &&
       !/^\s*import\s+\{[^}]*\b(?:SpriteAtelierView|initCapacitorNativeBridge|StudioSession)\b/m.test(mainSrc),
-    `src/ must retain >=2 dynamic import() code-split boundaries (found ${dynamicImportCount}) and lazy-load SpriteAtelierView, CapacitorNativeBridge, and StudioSession`,
+    `src/ must retain >=4 dynamic import() code-split boundaries (found ${dynamicImportCount}) and lazy-load SpriteAtelierView, CapacitorNativeBridge, EventGraphEditorView, CloudPublishModalView, and StudioSession`,
   );
 
   const viteCfg = fs.readFileSync(path.join(rootDir, 'vite.config.ts'), 'utf8');

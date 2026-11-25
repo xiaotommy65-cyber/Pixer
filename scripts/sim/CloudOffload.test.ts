@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { ExternalAudioBank } from '../../src/core/audio/ExternalAudioBank.ts';
 import {
@@ -408,4 +410,20 @@ test('Cloud Edge API & Client edge cases: weak ETags, UTF-8 byte limit, SRAM fut
   assert.equal(failPub.ok, false);
   assert.equal(failPub.error, 'HTTP 502');
 });
+
+test('CloudPublishModalView wires CloudSyncClient cleanly behind lazy EcsWorkbenchView import', () => {
+  const rootDir = process.cwd();
+  const modalSrc = fs.readFileSync(path.join(rootDir, 'src/ui/CloudPublishModalView.ts'), 'utf8');
+  const workbenchSrc = fs.readFileSync(path.join(rootDir, 'src/ui/EcsWorkbenchView.ts'), 'utf8');
+  const shellSrc = fs.readFileSync(path.join(rootDir, 'src/ui/EcsWorkbenchShellBuilder.ts'), 'utf8');
+
+  assert.match(modalSrc, /CloudSyncClient/);
+  assert.match(modalSrc, /isValidShareSlug/);
+  assert.match(modalSrc, /new AbortController\(\)/);
+  assert.match(modalSrc, /public destroy\(\)/);
+  assert.match(modalSrc, /publishProject\(/);
+  assert.match(workbenchSrc, /import\(['"]\.\/CloudPublishModalView\.ts['"]\)/);
+  assert.match(shellSrc, /open-cloud-publish/);
+});
+
 

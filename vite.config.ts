@@ -16,9 +16,17 @@ export default defineConfig(() => {
               { name: 'vendor-capacitor', test: /node_modules\/@capacitor/ },
               { name: 'vendor-utils', test: /node_modules\/(fflate|maxrects-packer)/ },
               { name: 'cartridges', test: /src\/game\// },
+              { name: 'sprite-atelier', test: /src\/ui\/SpriteAtelier[A-Za-z]*/ },
+              { name: 'external-import', test: /src\/ui\/(ExternalImportModalView|InteropWorkerClient|PixelForgeImportTab)/ },
+              { name: 'event-graph', test: /src\/ui\/EventGraphEditorView/ },
+              { name: 'cloud-publish', test: /src\/ui\/CloudPublishModalView/ },
               {
                 name: 'ecs-workbench',
-                test: /src\/ui\/(EcsWorkbench[A-Za-z]*|EcsWorldRulesInspectorPanel|EcsMapDesignerPanel|EventGraphEditorView|ExternalImportModalView|InteropWorkerClient|SpriteAtelier[A-Za-z]*)/,
+                test: /src\/ui\/(EcsWorkbench[A-Za-z]*|EcsWorldRulesInspectorPanel|EcsMapDesignerPanel)/,
+              },
+              {
+                name: 'legacy-v1-sim',
+                test: /src\/core\/(editor\/|sim\/(CardDeckEngine|FighterFrameEngine|GenreControllers|DataCartridgeRuntime|DataRuntime[A-Za-z]*))/,
               },
               { name: 'core-ecs-interop', test: /src\/core\/(ecs|interop|ai)\// },
             ],

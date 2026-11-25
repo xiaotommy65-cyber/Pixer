@@ -858,7 +858,7 @@ export class EcsCinematicDirector {
       plate.x = Math.round(vpW * 0.18);
       plate.y = cardY - 6;
       plate.w = Math.round(vpW * 0.64);
-      plate.h = this.activeSplashSubtitle ? 42 : 28;
+      plate.h = this.activeSplashSubtitle ? 46 : 30;
       plate.color = '#090d16';
       plate.alpha = 0.78 * alpha;
       plate.worldSpace = false;
@@ -867,7 +867,7 @@ export class EcsCinematicDirector {
       const rule = acquireHud(hCount);
       rule.kind = 'box';
       rule.x = Math.round(vpW * 0.25);
-      rule.y = cardY + (this.activeSplashSubtitle ? 18 : 19);
+      rule.y = cardY + (this.activeSplashSubtitle ? 20 : 21);
       rule.w = Math.round(vpW * 0.5);
       rule.h = 2;
       rule.color = accentHex;
@@ -894,7 +894,7 @@ export class EcsCinematicDirector {
         const sub = acquireHud(hCount);
         sub.kind = 'text';
         sub.x = Math.round(vpW * 0.5);
-        sub.y = cardY + 23;
+        sub.y = cardY + 26;
         sub.w = 0;
         sub.h = 0;
         sub.text = this.activeSplashSubtitle;
@@ -911,9 +911,20 @@ export class EcsCinematicDirector {
     // 3. Typewriter Dialogue Subtitle Overlay
     if (this.activeSubtitle && this.phase === 'playing_shots') {
       const barH = Math.round(vpH * 0.115 * this.letterboxRatio);
-      const subY = vpH - Math.max(24, barH + 16);
+      const subY = vpH - Math.max(24, barH + 22);
       const visibleText = this.activeSubtitle.slice(0, this.subtitleProgressChars);
       const fullLine = this.activeSpeaker ? `${this.activeSpeaker}: ${visibleText}` : visibleText;
+
+      const subPlate = acquireHud(hCount);
+      subPlate.kind = 'box';
+      subPlate.x = Math.round(vpW * 0.14);
+      subPlate.y = subY - 5;
+      subPlate.w = Math.round(vpW * 0.72);
+      subPlate.h = 20;
+      subPlate.color = '#090d16';
+      subPlate.alpha = 0.8;
+      subPlate.worldSpace = false;
+      outHud[hCount++] = subPlate;
 
       const txt = acquireHud(hCount);
       txt.kind = 'text';

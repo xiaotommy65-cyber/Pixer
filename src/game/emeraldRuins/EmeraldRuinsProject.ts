@@ -1011,6 +1011,8 @@ export const EMERALD_RUINS_PROJECT: EcsProjectV2 = {
           anchor: 'center',
           motion: 'spring',
           motivation: 'establish_sunken_grove',
+          speaker: 'SANCTUM',
+          subtitle: '翠律古域甦醒，星露共鳴正呼喚旅者...',
           letterbox: 0.9,
           spotlightDarkness: 0.08,
         },

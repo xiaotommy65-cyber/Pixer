@@ -55,6 +55,7 @@ export interface EcsWorkbenchShellCallbacks {
   onUndo: () => void;
   onRedo: () => void;
   onRunDiagnostics: () => void;
+  onOpenCloudPublish: () => void;
   onSelectCenterMode: (mode: WorkbenchCenterMode) => void;
   onSwitchRoom: (roomId: string) => void;
   onHitActionA: () => void;
@@ -225,6 +226,14 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   diagBtn.title = 'AI 空間與試玩診斷';
   diagBtn.addEventListener('click', cb.onRunDiagnostics, { signal });
 
+  const cloudPublishBtn = document.createElement('button');
+  cloudPublishBtn.type = 'button';
+  cloudPublishBtn.className = 'p7-btn p7-btn-accent';
+  cloudPublishBtn.setAttribute('data-testid', 'open-cloud-publish');
+  cloudPublishBtn.textContent = '雲端發佈';
+  cloudPublishBtn.title = '發布專案至雲端 (?play=<slug>) 或匯出專案 JSON';
+  cloudPublishBtn.addEventListener('click', cb.onOpenCloudPublish, { signal });
+
   const centerModeSeg = document.createElement('div');
   centerModeSeg.className = 'p7-segmented';
   const centerTabViewportBtn = document.createElement('button');
@@ -240,7 +249,7 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   centerTabGraphBtn.addEventListener('click', () => cb.onSelectCenterMode('event_graph'), { signal });
   centerModeSeg.append(centerTabViewportBtn, centerTabGraphBtn);
 
-  rightGroup.append(centerModeSeg, undoBtn, redoBtn, diagBtn);
+  rightGroup.append(centerModeSeg, undoBtn, redoBtn, diagBtn, cloudPublishBtn);
   toolbar.append(leftGroup, rightGroup);
 
   const viewportStageEl = document.createElement('div');

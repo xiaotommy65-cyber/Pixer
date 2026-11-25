@@ -492,7 +492,7 @@ export class Canvas2DBackend implements IGpuBackend {
       if (flash > 0.05) {
         sctx.fillStyle = rgbCss(1, 1, 1, Math.min(1, flash));
       } else {
-        sctx.fillStyle = rgbCss(r, g, bl, 0.55);
+        sctx.fillStyle = rgbCss(r, g, bl, paletteRow < -1.5 ? 1.0 : 0.55);
       }
       sctx.fillRect(0, 0, sw, sh);
       sctx.globalCompositeOperation = 'source-over';

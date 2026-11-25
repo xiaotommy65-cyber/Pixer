@@ -172,8 +172,8 @@ test('Security hardening: Interop ZIP path-traversal, Tiled zlib bomb & custom s
     /超過安全上限/,
   );
 
-  // 3. Custom sprite rgba_b64 bomb (> 128x128x4 = 65536 bytes) must abort safely and return blank RGBA
-  const spriteBombPayload = zlibSync(new Uint8Array(256 * 1024), { level: 9 });
+  // 3. Custom sprite rgba_b64 bomb (> 256x256x4 = 262144 bytes) must abort safely and return blank RGBA
+  const spriteBombPayload = zlibSync(new Uint8Array(300 * 1024), { level: 9 });
   const decoded = decodeZlibB64ToRgba(uint8ToBase64(spriteBombPayload), 32 * 32 * 4);
   assert.equal(decoded.length, 32 * 32 * 4);
   assert.equal(decoded.every((b) => b === 0), true);

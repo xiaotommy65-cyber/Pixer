@@ -4,7 +4,7 @@ import { analyzeWorldMapReachability } from '../core/ai/EcsSpatialOracle.ts';
 import { EcsCartridgeRuntime } from '../core/ecs/EcsCartridgeRuntime.ts';
 import { syncProjectCustomSpritesToAtlas } from '../core/ecs/EcsCustomSpriteCompiler.ts';
 import type { EcsPrefabDef, EcsProjectV2 } from '../core/ecs/EcsProjectSchema.ts';
-import type { EcsStudioSession } from '../core/ecs/EcsStudioSession.ts';
+import type { EcsStudioCommand, EcsStudioSession } from '../core/ecs/EcsStudioSession.ts';
 import type { EcsMapLayerName } from '../core/ecs/EcsTilemapTypes.ts';
 import { GpuEngine } from '../core/gpu/GpuEngine.ts';
 import {
@@ -43,7 +43,8 @@ import {
   type WorkbenchLeftTab,
 } from './EcsWorkbenchShellBuilder.ts';
 import { EcsWorldRulesInspectorPanel } from './EcsWorldRulesInspectorPanel.ts';
-import { EventGraphEditorView } from './EventGraphEditorView.ts';
+import type { CloudPublishModalView } from './CloudPublishModalView.ts';
+import type { EventGraphEditorView } from './EventGraphEditorView.ts';
 import type { ExternalImportModalView } from './ExternalImportModalView.ts';
 
 export interface EcsWorkbenchCallbacks {
@@ -73,10 +74,14 @@ export class EcsWorkbenchView {
   private readonly runtime: EcsCartridgeRuntime;
   private readonly liveMutator: EcsWorkbenchLiveMutator;
   private readonly mapCanvasCtrl: EcsWorkbenchMapCanvasController;
-  private readonly eventGraphView: EventGraphEditorView;
+  private readonly eventGraphSlotEl: HTMLDivElement;
+  private eventGraphView: EventGraphEditorView | null = null;
+  private eventGraphLoadPromise: Promise<EventGraphEditorView | null> | null = null;
   private readonly externalImportSlotEl: HTMLDivElement;
   private externalImportModal: ExternalImportModalView | null = null;
   private externalImportLoadPromise: Promise<ExternalImportModalView> | null = null;
+  private cloudPublishModal: CloudPublishModalView | null = null;
+  private cloudPublishLoadPromise: Promise<CloudPublishModalView | null> | null = null;
   private readonly worldRulesPanel: EcsWorldRulesInspectorPanel;
   private readonly liveInput = createEmptyInputState();
 
@@ -137,8 +142,8 @@ export class EcsWorkbenchView {
       this.renderPreviewNow();
     });
 
-    this.eventGraphView = new EventGraphEditorView(this.session);
-    this.eventGraphView.element.classList.add('panel-hidden');
+    this.eventGraphSlotEl = document.createElement('div');
+    this.eventGraphSlotEl.className = 'p7-eg-root panel-hidden';
     this.externalImportSlotEl = document.createElement('div');
     this.externalImportSlotEl.hidden = true;
     this.worldRulesPanel = new EcsWorldRulesInspectorPanel({
@@ -151,7 +156,7 @@ export class EcsWorkbenchView {
       initialProject: initialProj,
       initialLeftTab: this.leftTab,
       initialPlayPauseLabel: this.getPlayPauseLabel(),
-      eventGraphEl: this.eventGraphView.element,
+      eventGraphEl: this.eventGraphSlotEl,
       externalImportModalEl: this.externalImportSlotEl,
       signal,
       onOpenExternalImport: () => {
@@ -199,6 +204,9 @@ export class EcsWorkbenchView {
       onRunDiagnostics: () => {
         this.lastDiagReport = runWorkbenchSpatialDiagnostics(this.session);
         this.renderRightPanel();
+      },
+      onOpenCloudPublish: () => {
+        void this.openCloudPublishModal();
       },
       onSelectCenterMode: (mode) => this.setCenterMode(mode),
       onSwitchRoom: (roomId) => this.switchActiveRoom(roomId),
@@ -291,7 +299,7 @@ export class EcsWorkbenchView {
     window.addEventListener(
       'keydown',
       (e) => {
-        if (!this.visible || this.externalImportModal?.isOpen()) return;
+        if (!this.visible || this.externalImportModal?.isOpen() || this.cloudPublishModal?.isOpen()) return;
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
         const proj = this.session.getProject();
@@ -492,17 +500,47 @@ export class EcsWorkbenchView {
     this.renderLeftPanel();
   }
 
+  private async ensureEventGraphView(): Promise<EventGraphEditorView | null> {
+    if (this.destroyed) return null;
+    if (this.eventGraphView) return this.eventGraphView;
+    if (!this.eventGraphLoadPromise) {
+      this.eventGraphLoadPromise = import('./EventGraphEditorView.ts')
+        .then(({ EventGraphEditorView }) => {
+          const view = new EventGraphEditorView(this.session);
+          if (this.destroyed) {
+            view.destroy();
+            return null;
+          }
+          this.eventGraphView = view;
+          this.eventGraphSlotEl.appendChild(view.element);
+          return view;
+        })
+        .finally(() => {
+          this.eventGraphLoadPromise = null;
+        });
+    }
+    return this.eventGraphLoadPromise;
+  }
+
   public setCenterMode(mode: WorkbenchCenterMode, focusScriptId?: string): void {
     this.centerMode = mode;
     this.dom.centerTabViewportBtn.classList.toggle('is-active', mode === 'viewport');
     this.dom.centerTabGraphBtn.classList.toggle('is-active', mode === 'event_graph');
     this.dom.viewportStageEl.classList.toggle('panel-hidden', mode !== 'viewport');
-    this.eventGraphView.element.classList.toggle('panel-hidden', mode !== 'event_graph');
+    this.eventGraphSlotEl.classList.toggle('panel-hidden', mode !== 'event_graph');
     if (mode === 'viewport') {
       this.previewDirty = true;
     } else if (mode === 'event_graph') {
-      this.eventGraphView.syncProject(this.session.getProject(), focusScriptId);
-      this.eventGraphView.updateLiveTrace(this.runtime.vm);
+      if (this.eventGraphView) {
+        this.eventGraphView.syncProject(this.session.getProject(), focusScriptId);
+        this.eventGraphView.updateLiveTrace(this.runtime.vm);
+      } else {
+        void this.ensureEventGraphView().then((view) => {
+          if (!view || this.destroyed || this.centerMode !== 'event_graph') return;
+          view.syncProject(this.session.getProject(), focusScriptId);
+          view.updateLiveTrace(this.runtime.vm);
+        });
+      }
     }
   }
 
@@ -578,7 +616,7 @@ export class EcsWorkbenchView {
         this.renderPreviewNow();
       }
     } else {
-      this.eventGraphView.updateLiveTrace(this.runtime.vm);
+      this.eventGraphView?.updateLiveTrace(this.runtime.vm);
     }
 
     this.lastStatusSyncAccum += dt;
@@ -649,7 +687,7 @@ export class EcsWorkbenchView {
     this.dom.undoBtn.disabled = !this.session.canUndo();
     this.dom.redoBtn.disabled = !this.session.canRedo();
     this.mapCanvasCtrl.syncInteractivity();
-    this.eventGraphView.syncProject(proj);
+    this.eventGraphView?.syncProject(proj);
     this.renderLeftPanel();
     this.renderRightPanel();
     this.updateStatusStrip();
@@ -956,6 +994,9 @@ export class EcsWorkbenchView {
           .then(({ ExternalImportModalView }) => {
             const modal = new ExternalImportModalView({
               onCommit: (result, options) => this.handleExternalImportCommit(result, options),
+              getProject: () => this.session.getProject(),
+              onCommitCommands: (cmds, summary, focusHint) =>
+                this.handleAtomicAssetCommands(cmds, summary, focusHint),
             });
             if (this.destroyed) {
               modal.destroy();
@@ -973,6 +1014,62 @@ export class EcsWorkbenchView {
     }
     if (this.destroyed || !this.externalImportModal) return;
     this.externalImportModal.open();
+  }
+
+  public async openCloudPublishModal(): Promise<void> {
+    if (this.destroyed) return;
+    if (!this.cloudPublishModal) {
+      if (!this.cloudPublishLoadPromise) {
+        this.cloudPublishLoadPromise = import('./CloudPublishModalView.ts')
+          .then(({ CloudPublishModalView }) => {
+            const modal = new CloudPublishModalView();
+            if (this.destroyed) {
+              modal.destroy();
+              return null;
+            }
+            this.cloudPublishModal = modal;
+            this.element.appendChild(modal.element);
+            return modal;
+          })
+          .finally(() => {
+            this.cloudPublishLoadPromise = null;
+          });
+      }
+      await this.cloudPublishLoadPromise;
+    }
+    if (this.destroyed || !this.cloudPublishModal) return;
+    this.cloudPublishModal.open(this.session.getProject());
+  }
+
+  private handleAtomicAssetCommands(
+    cmds: EcsStudioCommand[],
+    summary: string,
+    focusHint?: { leftTab?: 'map' | 'prefabs' | 'atlas' },
+  ): void {
+    if (cmds.length === 0) return;
+    const batchRes = this.session.dispatchBatch(cmds, summary);
+    if (!batchRes.ok) {
+      this.dom.statusLeftEl.textContent = `${summary} 失敗：${batchRes.errors.join('; ') || batchRes.summary}`;
+      return;
+    }
+
+    const updatedProj = this.session.getProject();
+    this.syncedCustomSpriteIds = syncProjectCustomSpritesToAtlas(
+      this.atlas,
+      updatedProj,
+      this.syncedCustomSpriteIds,
+    );
+    if (this.previewGpuInitialized) {
+      this.previewGpu.syncAtlasIfDirty();
+    }
+    this.callbacks.onAtlasMutated();
+    if (focusHint?.leftTab) {
+      this.setLeftTab(focusHint.leftTab);
+    }
+    this.previewDirty = true;
+    this.renderPreviewNow();
+    this.renderAllPanels();
+    this.dom.statusLeftEl.textContent = `${summary}（修訂 #${batchRes.revision} · 可按復原還原）`;
   }
 
   private handleExternalImportCommit(result: InteropImportResult, options: InteropCommitOptions): void {
@@ -1031,7 +1128,14 @@ export class EcsWorkbenchView {
       this.externalImportModal.destroy();
       this.externalImportModal = null;
     }
-    this.eventGraphView.destroy();
+    if (this.cloudPublishModal) {
+      this.cloudPublishModal.destroy();
+      this.cloudPublishModal = null;
+    }
+    if (this.eventGraphView) {
+      this.eventGraphView.destroy();
+      this.eventGraphView = null;
+    }
     this.previewGpu.dispose();
     this.element.remove();
   }

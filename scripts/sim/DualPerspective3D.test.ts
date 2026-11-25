@@ -7,6 +7,7 @@ import { TextureAtlas } from '../../src/assets/TextureAtlas.ts';
 import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
+import { GpuDynamicGlyphCache } from '../../src/core/gpu/GpuDynamicGlyphCache.ts';
 import { GpuEngine, hexToRgb01 } from '../../src/core/gpu/GpuEngine.ts';
 import type {
   GpuOcclusionState,
@@ -492,4 +493,95 @@ test('WGSL and GLSL shaders share F0/Schlick PBR, relief reuse, NaN-safe Quad3D 
   const clearLong = evalShaderDdaShadowRef(1.5, 1.5, 21.5, 1.5, 0.9, 0.36, () => false);
   assert.equal(clearLong.vis, 1.0, 'Clear 20-tile ray must return full visibility');
 });
+
+test('Cutscene subtitle/splash HUD emits Pass 1B overlays after 3D Pass 1A and GpuDynamicGlyphCache supports CJK safely', () => {
+  const atlas = new TextureAtlas();
+  const bridge = new SceneGpuBridge();
+  const input = createEmptyInputState();
+
+  // 1. Headless GpuDynamicGlyphCache must never throw without DOM and returns null gracefully
+  const headlessCache = new GpuDynamicGlyphCache();
+  assert.equal(headlessCache.resolve(0x9ed1, atlas), null);
+
+  // 2. Mock rasterizer verifies CJK glyph caching, dirty flagging, and 256-entry LRU eviction
+  const mockCache = new GpuDynamicGlyphCache((_cp, outRgba, size) => {
+    for (let i = 0; i < size * size; i++) {
+      outRgba[i * 4] = 255;
+      outRgba[i * 4 + 1] = 255;
+      outRgba[i * 4 + 2] = 255;
+      outRgba[i * 4 + 3] = 255;
+    }
+    return true;
+  });
+  const entryA = mockCache.resolve('黑'.codePointAt(0)!, atlas);
+  assert.ok(entryA && entryA.isWide && atlas.isDirty(), 'CJK codepoint must allocate dynamic glyph rect and dirty atlas');
+  assert.equal(mockCache.resolve('黑'.codePointAt(0)!, atlas), entryA, 'Repeated codepoint lookup must hit cache');
+  for (let i = 0; i < 260; i++) {
+    mockCache.resolve(0x4e00 + i, atlas);
+  }
+  assert.equal(mockCache.getCachedCount(), 256, 'GpuDynamicGlyphCache must stay bounded at 256 glyphs');
+  mockCache.dispose();
+
+  // 3. PA-14 cutscene Shot 0 (subtitle) and Shot 1 (splashTitle/splashSubtitle) emit Pass 1B overlays AFTER 3D Pass 1A
+  const rt = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
+  assert.ok(rt.playCutscene('citadel_gate_intro'));
+  for (let f = 0; f < 20; f++) {
+    rt.step(1 / 60, input, DEFAULT_RUNTIME_PARAMS);
+  }
+  const snapShot0 = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const subBoxes0 = (snapShot0.hudPrimitives ?? []).filter((p) => p.kind === 'box' && p.worldSpace === false);
+  const subTexts0 = (snapShot0.hudPrimitives ?? []).filter((p) => p.kind === 'text' && p.worldSpace === false);
+  assert.ok(subBoxes0.length >= 3, 'Shot 0 must emit 21:9 letterbox bars and subtitle backdrop plate');
+  assert.ok(
+    subTexts0.some((t) => (t.text ?? '').includes('CHRONICLE:')),
+    'Shot 0 must emit typewriter subtitle text primitive',
+  );
+
+  // Advance into Shot 1 (durationSec of Shot 0 is 1.4s -> ~95 frames total)
+  for (let f = 0; f < 85; f++) {
+    rt.step(1 / 60, input, DEFAULT_RUNTIME_PARAMS);
+  }
+  const snapShot1 = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const hudTexts1 = (snapShot1.hudPrimitives ?? []).filter((p) => p.kind === 'text' && p.worldSpace === false);
+  assert.ok(
+    hudTexts1.some((t) => t.text === '黑曜魔王城') && hudTexts1.some((t) => t.text === 'OBSIDIAN CITADEL'),
+    'Shot 1 must emit both splashTitle and splashSubtitle HUD primitives',
+  );
+
+  // Verify Pass 1A (3D quads) precedes Pass 1B (HUD rects & pixel text) and CJK text draws via injected cache
+  const { gpu, frames } = attachMockGpu('webgpu', atlas);
+  const drawEvents: string[] = [];
+  const origDrawBox3D = gpu.drawBox3DWall.bind(gpu);
+  const origDrawRect = gpu.drawRect.bind(gpu);
+  const origDrawText = gpu.drawPixelText.bind(gpu);
+  gpu.drawBox3DWall = (...args) => {
+    drawEvents.push('3d_wall');
+    return origDrawBox3D(...args);
+  };
+  gpu.drawRect = (...args) => {
+    drawEvents.push('2d_rect');
+    return origDrawRect(...args);
+  };
+  gpu.drawPixelText = (text, ...rest) => {
+    drawEvents.push(`text:${text}`);
+    return origDrawText(text, ...rest);
+  };
+  (gpu as unknown as { dynamicGlyphCache: GpuDynamicGlyphCache }).dynamicGlyphCache = new GpuDynamicGlyphCache(
+    (_cp, outRgba, size) => {
+      outRgba.fill(255, 0, size * size * 4);
+      return true;
+    },
+  );
+
+  bridge.render(gpu, snapShot1, null);
+  assert.equal(frames.length, 1);
+  assert.ok(frames[0].quad3d?.enabled && frames[0].quad3d.opaqueCount > 0, 'Pass 1A 3D scene must be populated');
+  assert.ok(frames[0].alphaCount > 0, 'Pass 1B overlay alpha batch must be non-empty');
+
+  const last3dIdx = drawEvents.lastIndexOf('3d_wall');
+  const titleIdx = drawEvents.indexOf('text:黑曜魔王城');
+  const subIdx = drawEvents.indexOf('text:OBSIDIAN CITADEL');
+  assert.ok(last3dIdx >= 0 && titleIdx > last3dIdx && subIdx > last3dIdx, 'Pass 1B splash text must be queued after Pass 1A 3D walls');
+});
+
 

@@ -22,11 +22,17 @@ import {
 } from './EcsSpatialOracle.ts';
 import { critiqueCutsceneAesthetics } from './EcsCinematicOracle.ts';
 import {
+  buildAssetPackInstallCommands,
+  buildBuiltinStarterPack,
   buildInteropStudioCommands,
   detectJsonInteropFormat,
+  exportProjectAsAssetPack,
   parseLdtkProject,
   parseTiledMap,
+  validateAssetPackManifest,
+  type BuiltinStarterPackGenre,
   type DecodedPngImage,
+  type PixerAssetPackGenre,
 } from '../interop/index.ts';
 
 export const PIXER_MCP_PROTOCOL_VERSION = '2024-11-05';
@@ -194,6 +200,45 @@ export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
       required: ['cutsceneId'],
       properties: {
         cutsceneId: { type: 'string', description: 'ID of the cutscene in project.cutscenes to evaluate.' },
+      },
+    },
+  },
+  {
+    name: 'install_asset_pack',
+    description:
+      'Installs a cross-genre PixerAssetPackManifest (either a built-in starter pack for horror / visual_novel / dungeon or a custom pack JSON) atomically into the active project via a single Undo step.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        builtinGenre: {
+          type: 'string',
+          enum: ['horror', 'visual_novel', 'dungeon'],
+          description: 'Optional built-in cross-genre starter pack to install.',
+        },
+        packJson: {
+          description: 'Optional custom PixerAssetPackManifest JSON string or object.',
+        },
+        applyAtmosphere: {
+          type: 'boolean',
+          description: 'Whether to apply the pack atmosphere preset (default false).',
+        },
+      },
+    },
+  },
+  {
+    name: 'export_asset_pack',
+    description:
+      'Exports the active project custom sprites, tileDefs, prefabs, animations, and atmosphere into a portable PixerAssetPackManifest v1 JSON.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional pack slug ID.' },
+        name: { type: 'string', description: 'Optional human-readable pack name.' },
+        genre: {
+          type: 'string',
+          enum: ['horror', 'visual_novel', 'dungeon', 'scifi', 'universal'],
+          description: 'Target pack genre tag.',
+        },
       },
     },
   },
@@ -491,6 +536,70 @@ export class PixerMcpSession {
         }
         const report = critiqueCutsceneAesthetics(this.session.getProject(), cutsceneId);
         return report.ok ? makeToolSuccess(report) : makeToolError(report.suggestions[0] ?? 'Cutscene critique failed', report);
+      }
+
+      case 'install_asset_pack': {
+        const builtinGenre =
+          args.builtinGenre === 'horror' ||
+          args.builtinGenre === 'visual_novel' ||
+          args.builtinGenre === 'dungeon'
+            ? (args.builtinGenre as BuiltinStarterPackGenre)
+            : null;
+        let pack;
+        if (builtinGenre) {
+          pack = buildBuiltinStarterPack(builtinGenre);
+        } else if (args.packJson !== undefined) {
+          let parsedRaw: unknown = args.packJson;
+          if (typeof args.packJson === 'string') {
+            try {
+              parsedRaw = JSON.parse(args.packJson);
+            } catch (err) {
+              return makeToolError(`Invalid packJson string: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          const valid = validateAssetPackManifest(parsedRaw);
+          if (!valid.ok) {
+            return makeToolError(`Asset pack validation failed: ${valid.errors[0] ?? 'invalid'}`, valid.errors);
+          }
+          pack = valid.pack;
+        } else {
+          return makeToolError('Expected either "builtinGenre" or "packJson"');
+        }
+
+        const applyAtmosphere = args.applyAtmosphere === true;
+        const cmds = buildAssetPackInstallCommands(pack, this.session.getProject(), { applyAtmosphere });
+        const res = this.session.dispatchBatch(cmds, `安裝資產包：${pack.name}`);
+        if (!res.ok) {
+          return makeToolError(res.summary, res);
+        }
+        return makeToolSuccess({
+          ok: true,
+          revision: res.revision,
+          packId: pack.id,
+          name: pack.name,
+          genre: pack.genre,
+          sprites: pack.sprites.length,
+          tileDefs: pack.tileDefs?.length ?? 0,
+          prefabs: pack.prefabs ? Object.keys(pack.prefabs).length : 0,
+          appliedAtmosphere: applyAtmosphere && Boolean(pack.atmospherePreset),
+        });
+      }
+
+      case 'export_asset_pack': {
+        const genre =
+          args.genre === 'horror' ||
+          args.genre === 'visual_novel' ||
+          args.genre === 'dungeon' ||
+          args.genre === 'scifi' ||
+          args.genre === 'universal'
+            ? (args.genre as PixerAssetPackGenre)
+            : 'universal';
+        const pack = exportProjectAsAssetPack(this.session.getProject(), {
+          id: typeof args.id === 'string' ? args.id : undefined,
+          name: typeof args.name === 'string' ? args.name : undefined,
+          genre,
+        });
+        return makeToolSuccess({ ok: true, pack });
       }
 
       case 'export_project_json':

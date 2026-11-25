@@ -54,7 +54,7 @@ flowchart LR
 | **無損事件圖 ↔ 腳本 VM** | `src/core/ecs/EcsEventGraph.ts` → `src/core/ecs/SandboxScriptVm.ts` → `src/ui/EventGraphEditorView.ts` | `scripts/sim/EcsCore.test.ts` |
 | **工作站 UI（架構/階層/地圖/規則/檢視器）** | `src/ui/EcsWorkbenchView.ts` → `EcsWorkbenchShellBuilder.ts` / `EcsWorkbenchMapCanvasController.ts` / `EcsWorkbenchHierarchyPanels.ts` / `EcsWorkbenchEntityInspector.ts` / `EcsWorkbenchSceneInspector.ts` / `EcsWorldRulesInspectorPanel.ts` / `EcsMapDesignerPanel.ts` / `EcsWorkbenchAtlasPanel.ts` / `EcsWorkbenchPrefabInspector.ts` | `scripts/sim/WorldMap.test.ts`, `ArchitectureTests.ts` |
 | **像素畫室（繪製精靈與一鍵發佈瓦片/印章）** | `src/ui/SpriteAtelierView.ts` → `src/ui/SpriteAtelierPixelOps.ts` → `src/main.ts` (`onPublishMapTile` / `onPublishPrefabStamp`) | `npm run build` |
-| **外部匯入（Aseprite / LDtk / Tiled / ZIP）** | `src/ui/ExternalImportModalView.ts` → `InteropWorkerClient.ts` → `src/workers/interop.worker.ts` → `src/core/interop/{InteropBundleLoader,AsepriteParser,LdtkImporter,TiledImporter}.ts` | `scripts/sim/Interop.test.ts` |
+| **外部匯入（Aseprite / LDtk / Tiled / ZIP / Pixel Forge / Asset Packs）** | `src/ui/ExternalImportModalView.ts` + `PixelForgeImportTab.ts` → `InteropWorkerClient.ts` → `src/workers/interop.worker.ts` → `src/core/interop/{PixelForgeProcessor,PixerAssetPack,InteropBundleLoader,AsepriteParser,LdtkImporter,TiledImporter}.ts` | `scripts/sim/Interop.test.ts` |
 | **掌機殼、輸入、震動、實體手把** | `src/ui/ConsoleView.ts` → `ConsoleSpatialController.ts` / `ConsoleShellRouter.ts` / `VirtualGamepadInput.ts` / `GamepadHardwareBridge.ts` → `src/core/input/*` & `src/core/hal/*` | `scripts/sim/HalAndInputTests.ts` |
 | **內建卡匣內容（PA-14/15/01/02/11/12）** | `src/game/BuiltinCartridges.ts` → `src/game/{obsidianCitadel,emeraldRuins,rhythmBastion,astralRift}/*` | `scripts/sim/CartridgeActionTests.ts`, `WorldMap.test.ts` |
 | **PA-01 / PA-02 資料卡匣與全品類子引擎（格鬥/卡牌/推箱）** | `src/core/sim/DataCartridgeRuntime.ts` → `DataRuntimePlatformer.ts` / `DataRuntimeSnapshot.ts` / `DataRuntimeShmup.ts` / `CardDeckEngine.ts` / `FighterFrameEngine.ts` / `GenreControllers.ts` / `CartridgeSchema.ts` | `scripts/sim/CartridgeActionTests.ts`, `Engine10Core.test.ts` |
@@ -68,9 +68,10 @@ flowchart LR
 ## 3. Layer-by-Layer Module Inventory
 
 ### A. Pure Engine Core (`src/core/` — Zero UI / Zero `src/game/` / Zero Capacitor)
-- **`src/core/gpu/` (9 files, 6,960L)** *(Canvas/WebGPU/WebGL2 DOM allowed)*
-  - `GpuEngine.ts` (1,117L) — Multi-backend coordinator, 24-float PBR 2D instancing, shadow grid, atlas sync.
-  - `GpuQuad3DBatch.ts` (750L) + `GpuColorCache.ts` (49L) — Zero-GC 3D Quad batching/geometry emitters & bounded packed hex RGB cache.
+- **`src/core/gpu/` (10 files)** *(Canvas/WebGPU/WebGL2 DOM allowed)*
+  - `GpuEngine.ts` — Multi-backend coordinator, 24-float PBR 2D instancing, shadow grid, atlas sync, Unicode pixel text.
+  - `GpuDynamicGlyphCache.ts` — Bounded 256-entry Zero-GC CJK/Unicode dynamic atlas bitmap glyph cache for Pass 1B `drawPixelText()`.
+  - `GpuQuad3DBatch.ts` + `GpuColorCache.ts` — Zero-GC 3D Quad batching/geometry emitters & bounded packed hex RGB cache.
   - `WebGpuBackend.ts` (1,357L) + `WebGpuShaders.ts` (1,060L) — Primary WGSL pipeline + 3-Pass Karis Bloom.
   - `WebGl2Backend.ts` (881L) + `WebGl2Shaders.ts` (1,035L) — GLSL ES 3.00 parity backend.
   - `Canvas2DBackend.ts` (517L) — Guaranteed software fallback.
@@ -85,8 +86,8 @@ flowchart LR
 - **`src/core/ai/` (11 files, 3,907L)** *(100% DOM-free)*
   - Authoring, Oracles & MCP: `AgentBridge.ts` (460L), `PixerMcpProtocol.ts` (507L), `EcsSpatialOracle.ts` (1,292L), `EcsCinematicOracle.ts` (390L, FilmFlow Headless Scout + 5-Axis Cinematography Critic & ASCII Viewfinder Storyboard), `EcsPlaytestVerifier.ts` (376L), `ObservationSerializer.ts` (153L).
   - Providers: `HybridAiDirector.ts` (182L), `LocalAiProvider.ts` (260L), `RemoteAiProvider.ts` (191L), `AiTypes.ts` (76L), `AiProvider.ts` (20L).
-- **`src/core/interop/` (6 files, 3,150L)** *(100% DOM-free; executed in Web Worker)*
-  - `InteropBundleLoader.ts` (573L), `AsepriteParser.ts` (669L), `LdtkImporter.ts` (766L), `TiledImporter.ts` (641L), `InteropTypes.ts` (495L), `index.ts` (6L).
+- **`src/core/interop/` (8 files)** *(100% DOM-free; Worker + Main-thread Pixel Forge & Asset Packs)*
+  - `PixelForgeProcessor.ts` (1,034L, edge bg strip, opaque crop, integer block detect, Oklab `adaptive_kmeans`/`palette_lock` + Bayer4 + outline, sprite-sheet `AnimationStateMachineDef`), `PixerAssetPack.ts` (658L, `schemaVersion: 1`, `horror`/`visual_novel`/`dungeon` starter packs w/ `160×192` portraits, atomic install & export), `InteropBundleLoader.ts` (573L), `AsepriteParser.ts` (669L), `LdtkImporter.ts` (766L), `TiledImporter.ts` (641L), `InteropTypes.ts` (495L), `index.ts`.
 - **`src/core/cloud/` (2 files, 306L)** *(100% DOM-free)*
   - `CloudSyncClient.ts` (295L) + `index.ts` (11L) — Shared project fetch/publish (ETag), R2 upload, SRAM merge.
 - **`src/core/audio/` (2 files, 458L)** *(Web Audio/HTMLAudio only; zero procedural oscillators)*
@@ -106,8 +107,8 @@ flowchart LR
 - **`src/game/` (5 files, 2,529L)**: `BuiltinCartridges.ts` (`PA-01` Cloudberry Hop + `PA-02` Sugar Starlight + ECS registrations) + `obsidianCitadel/` (`PA-14`), `emeraldRuins/` (`PA-15`), `rhythmBastion/` (`PA-11`), `astralRift/` (`PA-12`).
 - **`workers/api/` (3 TS + `wrangler.toml`, 732L)** & **`supabase/` (1 SQL, 122L)**: Edge API (`handleEdgeRequest`, `createSupabaseMetadataStore`) + PostgreSQL 4-table RLS migration.
 
-### C. UI Workstation, Arcade Shell & Styles (`src/ui/` 51 files + `src/styles/` 4 CSS = 24,280L)
-- **Workstation (`EcsWorkbench`)**: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts` (868L coordinator), `EcsWorkbenchShellBuilder.ts` (408L DOM layout), `EcsWorkbenchCatalog.ts` (305L registries/diagnostics), `EcsWorkbenchLiveMutator.ts` (183L live preview), `EcsWorkbenchMapCanvasController.ts` (366L 2D/3D map pointer/overlay), `EcsWorkbenchHierarchyPanels.ts` (274L), `EcsWorkbenchEntityInspector.ts` (772L), `EcsWorkbenchSceneInspector.ts` (250L), `EcsWorkbenchPrefabInspector.ts` (346L), `EcsWorkbenchAtlasPanel.ts` (259L), `EcsWorldRulesInspectorPanel.ts` (770L), `EcsMapDesignerPanel.ts` (664L), `EventGraphEditorView.ts` (1,148L), `ExternalImportModalView.ts` (560L), `InteropWorkerClient.ts` (149L), `SpriteAtelierView.ts` (1,313L), `SpriteAtelierPixelOps.ts` (494L).
+### C. UI Workstation, Arcade Shell & Styles (`src/ui/` 53 files + `src/styles/` 4 CSS)
+- **Workstation (`EcsWorkbench`)**: `PixerPlatformShell.ts`, `EcsWorkbenchView.ts`, `EcsWorkbenchShellBuilder.ts`, `EcsWorkbenchCatalog.ts`, `EcsWorkbenchLiveMutator.ts`, `EcsWorkbenchMapCanvasController.ts`, `EcsWorkbenchHierarchyPanels.ts`, `EcsWorkbenchEntityInspector.ts`, `EcsWorkbenchSceneInspector.ts`, `EcsWorkbenchPrefabInspector.ts`, `EcsWorkbenchAtlasPanel.ts`, `EcsWorldRulesInspectorPanel.ts`, `EcsMapDesignerPanel.ts`, `EventGraphEditorView.ts` (lazy), `ExternalImportModalView.ts` + `PixelForgeImportTab.ts` (lazy `external-import`), `CloudPublishModalView.ts` (lazy), `InteropWorkerClient.ts`, `SpriteAtelierView.ts` (lazy) + `SpriteAtelierPixelOps.ts`.
 - **Arcade Shell (`ConsoleView`)**: `ConsoleView.ts` (664L), `ConsoleSpatialController.ts` (150L), `ConsoleShellRouter.ts`, `ConsoleBodyBuilder.ts`, `ConsoleJoyconBuilder.ts`, `ConsoleHudPresenter.ts`, `CartridgeSlotController.ts`, `HomeLobbyView.ts`, `DeskWorldView.ts`, `WindowDioramaView.ts` (356L), `DioramaPalette.ts` (266L), `DioramaSceneRenderer.ts` (617L), `BootBlinkOverlay.ts`, `AngledSystemMenuView.ts`, `CartridgeDrawerView.ts`, `IrisWipeTransition.ts`, `ShmupOverlayView.ts`, `CardArt.ts`, `ProceduralSurfaceTextures.ts`, `MomoMascot.ts`, `TransitionMascot.ts`.
 - **Input / Settings / Native**: `VirtualGamepadInput.ts`, `GamepadHardwareBridge.ts`, `TouchControlsBuilder.ts`, `TouchStateMerger.ts`, `SystemSettingsDrawerView.ts`, `SettingsDrawerTypes.ts`, `SystemLogPanelView.ts`, `CapacitorNativeBridge.ts`, `PwaBridge.ts`, `BrowserAssetLoader.ts`, `PixelIcons.ts`, `dom.ts`.
 - **Styles**: `switch.css` (2,100L), `lobby.css` (1,856L), `studio7.css` (1,686L), `atelier.css` (1,192L).

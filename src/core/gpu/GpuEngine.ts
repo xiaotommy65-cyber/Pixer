@@ -3,6 +3,7 @@ import { mixOklabRgb01 } from '../math/ColorMath.ts';
 import { appLogger } from '../runtime/AppLogger.ts';
 import { Canvas2DBackend } from './Canvas2DBackend.ts';
 import { hexToRgb01, INV_255, packHexRgb } from './GpuColorCache.ts';
+import { GpuDynamicGlyphCache } from './GpuDynamicGlyphCache.ts';
 import { GpuQuad3DBatch } from './GpuQuad3DBatch.ts';
 import {
   FLOATS_PER_INSTANCE,
@@ -27,6 +28,14 @@ export class GpuEngine {
   private alphaItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
   private addItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
   private readonly quad3d = new GpuQuad3DBatch();
+  private readonly dynamicGlyphCache = new GpuDynamicGlyphCache();
+  private readonly glyphMeasureScratch = {
+    rect: null as SpriteRect | null,
+    drawW: 0,
+    drawH: 0,
+    advanceX: 0,
+    yOffset: 0,
+  };
   private readonly dynamicLights = new Float32Array(MAX_DYNAMIC_LIGHTS * 8);
   private dynamicLightCount = 0;
   private alphaCount = 0;
@@ -808,8 +817,43 @@ export class GpuEngine {
     this.pushInstanceHex(false, cx, cy, w, h, dir, power, 1, 1, colorHex, alpha, 0, 5, 0, power);
   }
 
+  private resolveGlyphInto(
+    rawCodePoint: number,
+    stepW: number,
+    drawH: number,
+    scale: number,
+  ): boolean {
+    const out = this.glyphMeasureScratch;
+    if (rawCodePoint === 32 || rawCodePoint === 0x3000) {
+      out.rect = null;
+      out.drawW = 0;
+      out.drawH = 0;
+      out.advanceX = rawCodePoint === 0x3000 ? Math.round(stepW * 1.45) : stepW;
+      out.yOffset = 0;
+      return true;
+    }
+    const ch = rawCodePoint >= 97 && rawCodePoint <= 122 ? rawCodePoint - 32 : rawCodePoint;
+    const builtinRect = this.atlas.getGlyphRect(ch);
+    if (builtinRect) {
+      out.rect = builtinRect;
+      out.drawW = stepW;
+      out.drawH = drawH;
+      out.advanceX = stepW;
+      out.yOffset = 0;
+      return true;
+    }
+    const dyn = this.dynamicGlyphCache.resolve(rawCodePoint, this.atlas);
+    if (!dyn) return false;
+    out.rect = dyn.rect;
+    out.drawW = Math.round(drawH * (dyn.isWide ? 1.125 : 0.95));
+    out.drawH = Math.round(drawH * 1.125);
+    out.advanceX = Math.round(stepW * dyn.advanceRatio);
+    out.yOffset = -Math.round(scale * 0.5);
+    return true;
+  }
+
   /**
-   * Zero-GC bitmap pixel text renderer using 6x8 atlas glyphs.
+   * Zero-GC bitmap pixel text renderer using 6x8 atlas glyphs + dynamic Unicode/CJK glyph cache.
    * Uses paletteRow = -2 so shaders skip Auto-Sobel/normal lighting on crisp UI text.
    */
   public drawPixelText(
@@ -823,10 +867,7 @@ export class GpuEngine {
     alpha = 1,
   ): void {
     if (!text || alpha <= 0.005) return;
-    const atlasWithGlyphs = this.atlas as TextureAtlas & {
-      getGlyphRect?: (charCode: number) => SpriteRect | undefined;
-    };
-    if (typeof atlasWithGlyphs.getGlyphRect !== 'function') return;
+    if (typeof this.atlas.getGlyphRect !== 'function') return;
 
     const ctor = this.atlas.constructor as { FONT_GLYPH_W?: number; FONT_GLYPH_H?: number };
     const glyphW = ctor.FONT_GLYPH_W ?? 6;
@@ -834,12 +875,15 @@ export class GpuEngine {
     const stepW = glyphW * scale;
     const drawH = glyphH * scale;
     const len = text.length;
+    const gm = this.glyphMeasureScratch;
 
     let totalW = 0;
-    for (let i = 0; i < len; i++) {
-      let ch = text.charCodeAt(i);
-      if (ch >= 97 && ch <= 122) ch -= 32;
-      if (atlasWithGlyphs.getGlyphRect(ch)) totalW += stepW;
+    for (let i = 0; i < len; ) {
+      const cp = text.codePointAt(i) ?? text.charCodeAt(i);
+      i += cp > 0xffff ? 2 : 1;
+      if (this.resolveGlyphInto(cp, stepW, drawH, scale)) {
+        totalW += gm.advanceX;
+      }
     }
     if (totalW <= 0) return;
 
@@ -850,19 +894,19 @@ export class GpuEngine {
     if (shadowColor) {
       let cx = startX;
       const shadowAlpha = alpha * 0.85;
-      for (let i = 0; i < len; i++) {
-        let ch = text.charCodeAt(i);
-        if (ch >= 97 && ch <= 122) ch -= 32;
-        const rect = atlasWithGlyphs.getGlyphRect(ch);
-        if (!rect) continue;
-        if (ch !== 32) {
+      for (let i = 0; i < len; ) {
+        const cp = text.codePointAt(i) ?? text.charCodeAt(i);
+        i += cp > 0xffff ? 2 : 1;
+        if (!this.resolveGlyphInto(cp, stepW, drawH, scale)) continue;
+        const rect = gm.rect;
+        if (rect) {
           this.spriteTotal++;
           this.pushInstanceHex(
             false,
             cx + scale,
-            y + scale,
-            stepW,
-            drawH,
+            y + scale + gm.yOffset,
+            gm.drawW,
+            gm.drawH,
             rect.u0,
             rect.v0,
             rect.u1,
@@ -883,24 +927,24 @@ export class GpuEngine {
             0,
           );
         }
-        cx += stepW;
+        cx += gm.advanceX;
       }
     }
 
     let cx = startX;
-    for (let i = 0; i < len; i++) {
-      let ch = text.charCodeAt(i);
-      if (ch >= 97 && ch <= 122) ch -= 32;
-      const rect = atlasWithGlyphs.getGlyphRect(ch);
-      if (!rect) continue;
-      if (ch !== 32) {
+    for (let i = 0; i < len; ) {
+      const cp = text.codePointAt(i) ?? text.charCodeAt(i);
+      i += cp > 0xffff ? 2 : 1;
+      if (!this.resolveGlyphInto(cp, stepW, drawH, scale)) continue;
+      const rect = gm.rect;
+      if (rect) {
         this.spriteTotal++;
         this.pushInstanceHex(
           false,
           cx,
-          y,
-          stepW,
-          drawH,
+          y + gm.yOffset,
+          gm.drawW,
+          gm.drawH,
           rect.u0,
           rect.v0,
           rect.u1,
@@ -921,7 +965,7 @@ export class GpuEngine {
           0,
         );
       }
-      cx += stepW;
+      cx += gm.advanceX;
     }
   }
 
@@ -1111,6 +1155,7 @@ export class GpuEngine {
   }
 
   public dispose(): void {
+    this.dynamicGlyphCache.dispose();
     this.backend?.dispose();
     this.backend = null;
   }

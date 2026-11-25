@@ -632,6 +632,8 @@ export const OBSIDIAN_CITADEL_PROJECT: EcsProjectV2 = {
           motion: 'spring',
           pitchDegOverride: 42,
           motivation: 'establish_citadel_courtyard',
+          speaker: 'CHRONICLE',
+          subtitle: '赤月籠罩黑曜城塞，古鑰深藏於外庭深處...',
           letterbox: 0.9,
           spotlightDarkness: 0.1,
         },

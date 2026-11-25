@@ -113,8 +113,8 @@ function setRampPixel(
 }
 
 function compileGridSprite(def: EcsCustomSpriteDef): Uint8Array {
-  const w = Math.max(8, Math.min(128, Math.round(def.width)));
-  const h = Math.max(8, Math.min(128, Math.round(def.height)));
+  const w = Math.max(8, Math.min(256, Math.round(def.width)));
+  const h = Math.max(8, Math.min(256, Math.round(def.height)));
   const rgba = new Uint8Array(w * h * 4);
   const themeIdx = Math.max(0, Math.min(PALETTE_THEMES.length - 1, def.paletteRow ?? 0));
   const rawPalette = def.palette && def.palette.length > 0 ? def.palette : PALETTE_THEMES[themeIdx].colors;
@@ -165,8 +165,8 @@ function applyOutlinePass(
 }
 
 function compileProceduralSprite(def: EcsCustomSpriteDef): Uint8Array {
-  const w = Math.max(8, Math.min(128, Math.round(def.width)));
-  const h = Math.max(8, Math.min(128, Math.round(def.height)));
+  const w = Math.max(8, Math.min(256, Math.round(def.width)));
+  const h = Math.max(8, Math.min(256, Math.round(def.height)));
   const rgba = new Uint8Array(w * h * 4);
   const recipe: EcsProceduralSpriteRecipe = def.recipe ?? { pattern: 'cobble', baseHex: '#64748b' };
   const seed = recipe.seed ?? 1337;
@@ -485,8 +485,8 @@ export function encodeRgbaToZlibB64(rgba: Uint8Array): string {
   return uint8ToBase64(compressed);
 }
 
-const MAX_CUSTOM_SPRITE_RGBA_BYTES = 128 * 128 * 4;
-const MAX_CUSTOM_SPRITE_B64_CHARS = 256 * 1024;
+const MAX_CUSTOM_SPRITE_RGBA_BYTES = 256 * 256 * 4;
+const MAX_CUSTOM_SPRITE_B64_CHARS = 512 * 1024;
 
 /** Decodes zlib-compressed Base64 RGBA8 sprite bytes safely with strict decompressed size bounds. */
 export function decodeZlibB64ToRgba(b64: string, expectedBytes: number): Uint8Array {
@@ -500,7 +500,7 @@ export function decodeZlibB64ToRgba(b64: string, expectedBytes: number): Uint8Ar
     let written = 0;
     const stream = new Unzlib((chunk) => {
       if (written + chunk.byteLength > MAX_CUSTOM_SPRITE_RGBA_BYTES) {
-        throw new Error('Custom sprite zlib payload exceeds 128x128 RGBA limit');
+        throw new Error('Custom sprite zlib payload exceeds 256x256 RGBA limit');
       }
       const copyLen = Math.min(chunk.byteLength, safeExpected - written);
       if (copyLen > 0) {
@@ -520,8 +520,8 @@ export function decodeZlibB64ToRgba(b64: string, expectedBytes: number): Uint8Ar
  * OR Oklab + Bayer 4x4 procedural recipe) into raw RGBA bytes ready for Pixer's TextureAtlas.
  */
 export function compileCustomSpriteToRgba(def: EcsCustomSpriteDef): CompiledCustomSpriteRgba {
-  const width = Math.max(8, Math.min(128, Math.round(def.width)));
-  const height = Math.max(8, Math.min(128, Math.round(def.height)));
+  const width = Math.max(8, Math.min(256, Math.round(def.width)));
+  const height = Math.max(8, Math.min(256, Math.round(def.height)));
   let rgba: Uint8Array;
   if (def.kind === 'grid') {
     rgba = compileGridSprite(def);
