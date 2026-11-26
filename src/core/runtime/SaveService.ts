@@ -167,20 +167,23 @@ export class SaveService {
    * Updates stored high score / star count when beaten; returns true if changed.
    */
   public recordProgress(id: CartridgeId, snap: RenderSceneSnapshot): boolean {
+    const score = Number.isFinite(snap.score) ? snap.score : 0;
+    const stars = Number.isFinite(snap.starsCollected) ? snap.starsCollected : 0;
+    const starsTotal = Number.isFinite(snap.starsTotal) ? snap.starsTotal : 0;
     const prev = this.records[id];
-    const next: CardRecord = {
-      bestScore: Math.max(prev?.bestScore ?? 0, snap.score),
-      bestStars: Math.max(prev?.bestStars ?? 0, snap.starsCollected),
-      starsTotal: Math.max(prev?.starsTotal ?? 0, snap.starsTotal),
-    };
     if (
       prev &&
-      next.bestScore === prev.bestScore &&
-      next.bestStars === prev.bestStars &&
-      next.starsTotal === prev.starsTotal
+      score <= prev.bestScore &&
+      stars <= prev.bestStars &&
+      starsTotal <= prev.starsTotal
     ) {
       return false;
     }
+    const next: CardRecord = {
+      bestScore: Math.max(prev?.bestScore ?? 0, score),
+      bestStars: Math.max(prev?.bestStars ?? 0, stars),
+      starsTotal: Math.max(prev?.starsTotal ?? 0, starsTotal),
+    };
     this.records[id] = next;
     if (this.writeJson(RECORDS_KEY, this.records)) {
       appLogger.success('storage', 'save.recordProgress', `已刷新卡匣最佳紀錄 (${id})`, {

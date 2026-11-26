@@ -1,5 +1,8 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import type { SimEvent } from '../types/SceneTypes.ts';
+import { MAX_VOXEL_STORIES, type EcsVoxelCellDef, type EcsVoxelShape } from './EcsVoxelVolume.ts';
+
+export type { EcsVoxelCellDef, EcsVoxelShape };
 
 /**
  * Pure, DOM-free Multi-Room HD-2D Tilemap, Portal & Top-Down Adventure Schema for Pixer ECS V2.
@@ -24,6 +27,8 @@ export interface EcsTileDef {
   readonly name: string;
   readonly layer: EcsMapLayerName;
   readonly sprite: SpriteId;
+  /** Optional vertical wall side-face sprite for `hd2d_3d` / `hd2d_iso` extruded walls (defaults to `sprite`). */
+  readonly sideSprite?: SpriteId;
   readonly solid: boolean;
   readonly hazard?: boolean;
   readonly extrudeH?: number;
@@ -67,12 +72,16 @@ export interface EcsMapRoomDef {
   skyTop?: string;
   skyBottom?: string;
   wallExtrudeH?: number;
+  /** Story vertical height in world px for multi-story 3D voxels (default 24). */
+  storyHeight?: number;
   /** Optional initial editor camera Y focus when viewing this room in Map Designer mode. */
   editorFocusY?: number;
   /** Row-major flat arrays of length cols * rows (0 = empty). */
   ground: number[];
   wall: number[];
   decor: number[];
+  /** Optional sparse multi-story 3D voxel cells (up to MAX_VOXEL_STORIES). */
+  voxels?: EcsVoxelCellDef[];
 }
 
 export interface EcsTopDownHeroConfig {
@@ -576,4 +585,86 @@ export function isRoomCellHazard(
   if (decDef?.hazard) return true;
   const gDef = getCastleTileDef(room.ground[idx] ?? 0, customDefs);
   return Boolean(gDef?.hazard);
+}
+
+/**
+ * Sets or removes (when `cell.tileId <= 0`) a multi-story 3D voxel cell at `(col, row, zLevel)`.
+ */
+export function setRoomVoxel(room: EcsMapRoomDef, cell: EcsVoxelCellDef): void {
+  const col = cell.col | 0;
+  const row = cell.row | 0;
+  const zLevel = cell.zLevel | 0;
+  if (col < 0 || col >= room.cols || row < 0 || row >= room.rows || zLevel < 0 || zLevel >= MAX_VOXEL_STORIES) {
+    return;
+  }
+  const tileId = cell.tileId | 0;
+  if (!room.voxels) {
+    if (tileId <= 0) return;
+    room.voxels = [];
+  }
+  let existingIdx = -1;
+  for (let i = 0; i < room.voxels.length; i++) {
+    const v = room.voxels[i];
+    if ((v.col | 0) === col && (v.row | 0) === row && (v.zLevel | 0) === zLevel) {
+      existingIdx = i;
+      break;
+    }
+  }
+  if (tileId <= 0) {
+    if (existingIdx >= 0) {
+      room.voxels.splice(existingIdx, 1);
+    }
+    return;
+  }
+  const nextCell: EcsVoxelCellDef = {
+    col,
+    row,
+    zLevel,
+    tileId,
+    ...(cell.shape ? { shape: cell.shape } : {}),
+    ...(cell.rotZ !== undefined ? { rotZ: cell.rotZ } : {}),
+  };
+  if (existingIdx >= 0) {
+    room.voxels[existingIdx] = nextCell;
+  } else {
+    room.voxels.push(nextCell);
+  }
+}
+
+/**
+ * Fills a 3D rectangular voxel box across `[c0..c1, r0..r1, z0..z1]`.
+ */
+export function fillRoomBox3D(
+  room: EcsMapRoomDef,
+  c0: number,
+  r0: number,
+  z0: number,
+  c1: number,
+  r1: number,
+  z1: number,
+  tileId: number,
+  shape?: EcsVoxelShape,
+): number {
+  const minC = Math.max(0, Math.min(c0, c1) | 0);
+  const maxC = Math.min(room.cols - 1, Math.max(c0, c1) | 0);
+  const minR = Math.max(0, Math.min(r0, r1) | 0);
+  const maxR = Math.min(room.rows - 1, Math.max(r0, r1) | 0);
+  const minZ = Math.max(0, Math.min(z0, z1) | 0);
+  const maxZ = Math.min(MAX_VOXEL_STORIES - 1, Math.max(z0, z1) | 0);
+  let count = 0;
+  for (let z = minZ; z <= maxZ; z++) {
+    for (let r = minR; r <= maxR; r++) {
+      for (let c = minC; c <= maxC; c++) {
+        setRoomVoxel(room, {
+          col: c,
+          row: r,
+          zLevel: z,
+          tileId,
+          ...(shape ? { shape } : {}),
+        });
+        count++;
+      }
+    }
+  }
+  return count;
 }

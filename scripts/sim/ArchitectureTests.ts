@@ -11,7 +11,7 @@ import {
   resolveLogicalViewport,
   type IGpuBackend,
 } from '../../src/core/gpu/GpuTypes.ts';
-import { InputPipeline } from '../../src/core/input/InputPipeline.ts';
+import { InputPipeline, WebGamepadSampler } from '../../src/core/input/InputPipeline.ts';
 import { AppLogger, appLogger } from '../../src/core/runtime/AppLogger.ts';
 import {
   embedCartridgeIntoPng,
@@ -24,6 +24,8 @@ import { DisplayThermalGovernor } from '../../src/core/runtime/DisplayThermalGov
 import { EngineHost } from '../../src/core/runtime/EngineHost.ts';
 import { parseJsonlEntries, serializeEntriesToJsonl } from '../../src/core/runtime/LogPersistence.ts';
 import { SaveService } from '../../src/core/runtime/SaveService.ts';
+import { ConsoleHudPresenter, type ConsoleHudRefs } from '../../src/ui/ConsoleHudPresenter.ts';
+import type { ShmupOverlayView } from '../../src/ui/ShmupOverlayView.ts';
 import { buildDepthDrawOrder, computeParallaxScreenCoord, SceneGpuBridge } from '../../src/core/runtime/SceneGpuBridge.ts';
 import { SeededRng } from '../../src/core/runtime/SeededRng.ts';
 import {
@@ -197,10 +199,13 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     'ConsoleHudPresenter.ts',
     'ShmupOverlayView.ts',
     'ExternalImportModalView.ts',
+    'PixelForgeImportTab.ts',
+    'CloudPublishModalView.ts',
     'EcsWorldRulesInspectorPanel.ts',
     'EcsWorkbenchMapCanvasController.ts',
     'ConsoleSpatialController.ts',
     'InteropWorkerClient.ts',
+    'ModelAtelierModalView.ts',
   ];
   for (const viewFile of newUiViews) {
     const viewSrc = fs.readFileSync(path.join(rootDir, 'src/ui', viewFile), 'utf8');
@@ -212,9 +217,12 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   for (const overlayFile of [
     'ShmupOverlayView.ts',
     'ExternalImportModalView.ts',
+    'PixelForgeImportTab.ts',
+    'CloudPublishModalView.ts',
     'EcsWorldRulesInspectorPanel.ts',
     'EcsWorkbenchMapCanvasController.ts',
     'ConsoleSpatialController.ts',
+    'ModelAtelierModalView.ts',
   ]) {
     const ovSrc = fs.readFileSync(path.join(rootDir, 'src/ui', overlayFile), 'utf8');
     check(
@@ -282,11 +290,14 @@ export function testArchitectureBoundariesAndLifecycle(): void {
     `Engine-First guardrail: photorealistic JPEG/WebP assets are forbidden in src/assets/ (found: ${srcAssetImages.join(', ')})`,
   );
 
-  // 3b. Security, test-hygiene, CI/lockfile, PWA subpath, and public/ hygiene guards
+  // 3b. Security, test-hygiene, CI/lockfile, PWA subpath, code-splitting, and public/ hygiene guards
   const allSrcFiles = collectTsFiles(path.join(rootDir, 'src'));
+  let dynamicImportCount = 0;
   for (const file of allSrcFiles) {
     const src = fs.readFileSync(file, 'utf8');
     const rel = path.relative(rootDir, file);
+    const dynMatches = src.match(/\bimport\s*\(/g);
+    if (dynMatches) dynamicImportCount += dynMatches.length;
     check(
       !file.endsWith('.test.ts'),
       `Production directory src/ must not contain test files (move ${rel} to scripts/sim/)`,
@@ -296,6 +307,21 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       `Security invariant violation: ${rel} must not use eval() or new Function()`,
     );
   }
+  const pwaBridgeSrc = fs.readFileSync(path.join(rootDir, 'src/ui/PwaBridge.ts'), 'utf8');
+  check(
+    !/from\s+['"]@capacitor\//.test(pwaBridgeSrc),
+    'PwaBridge.ts must not statically import @capacitor/core (use runtime global detection)',
+  );
+  check(
+    dynamicImportCount >= 4 &&
+      mainSrc.includes("import('./ui/SpriteAtelierView.ts')") &&
+      mainSrc.includes("import('./ui/CapacitorNativeBridge.ts')") &&
+      ecsWorkbenchSrc.includes("import('./EventGraphEditorView.ts')") &&
+      ecsWorkbenchSrc.includes("import('./CloudPublishModalView.ts')") &&
+      !/\bnew\s+StudioSession\s*\(/.test(mainSrc) &&
+      !/^\s*import\s+\{[^}]*\b(?:SpriteAtelierView|initCapacitorNativeBridge|StudioSession)\b/m.test(mainSrc),
+    `src/ must retain >=4 dynamic import() code-split boundaries (found ${dynamicImportCount}) and lazy-load SpriteAtelierView, CapacitorNativeBridge, EventGraphEditorView, CloudPublishModalView, and StudioSession`,
+  );
 
   const viteCfg = fs.readFileSync(path.join(rootDir, 'vite.config.ts'), 'utf8');
   if (viteCfg.includes("base: './'")) {
@@ -399,6 +425,91 @@ export function testArchitectureBoundariesAndLifecycle(): void {
   check(host.getParams().gravityScale === 1.25, 'EngineHost.setParam updates runtime params');
   host.resetParams();
   check(host.getParams().gravityScale === 1.0, 'EngineHost.resetParams restores default runtime params');
+
+  // 4b. SaveService.recordProgress no-op fast path & ConsoleHudPresenter dirty/throttle checks
+  check(
+    saveSvc.recordProgress('cloudberry-hop', { ...beforePauseSnap, score: 120, starsCollected: 2, starsTotal: 24 }),
+    'SaveService.recordProgress must persist initial/improved score record',
+  );
+  check(
+    !saveSvc.recordProgress('cloudberry-hop', { ...beforePauseSnap, score: 90, starsCollected: 1, starsTotal: 24 }) &&
+      saveSvc.getRecord('cloudberry-hop')?.bestScore === 120,
+    'SaveService.recordProgress must skip write when score/stars/starsTotal do not improve',
+  );
+  check(
+    saveSvc.recordProgress('cloudberry-hop', { ...beforePauseSnap, score: 180, starsCollected: 2, starsTotal: 24 }) &&
+      saveSvc.getRecord('cloudberry-hop')?.bestScore === 180,
+    'SaveService.recordProgress must persist when bestScore increases',
+  );
+
+  const counters = { scoreWrites: 0, saveCalls: 0 };
+  const stubEl = () => ({
+    _text: '',
+    get textContent() {
+      return this._text;
+    },
+    set textContent(v: string) {
+      this._text = v;
+    },
+    classList: { toggle: () => false, add: () => {}, remove: () => {} },
+  });
+  const scoreEl = {
+    _text: '',
+    get textContent() {
+      return this._text;
+    },
+    set textContent(v: string) {
+      counters.scoreWrites++;
+      this._text = v;
+    },
+    classList: { toggle: () => false, add: () => {}, remove: () => {} },
+  };
+  const stubRefs = {
+    stageTag: stubEl(),
+    scoreTag: scoreEl,
+    starTag: stubEl(),
+    spriteStatTag: stubEl(),
+    fpsTag: stubEl(),
+    statusHintEl: stubEl(),
+    resultOverlay: stubEl(),
+    resultTitle: stubEl(),
+    resultDesc: stubEl(),
+    clearSaveBtn: stubEl(),
+    bodyLegendEl: stubEl(),
+    aSubEl: stubEl(),
+    bSubEl: stubEl(),
+    xSubEl: stubEl(),
+    ySubEl: stubEl(),
+    lSubEl: stubEl(),
+    rSubEl: stubEl(),
+    auxLSubEl: stubEl(),
+    auxRSubEl: stubEl(),
+    shmupOverlay: { render: () => {}, reset: () => {}, destroy: () => {} } as unknown as ShmupOverlayView,
+  } as unknown as ConsoleHudRefs;
+  const origSaveRecord = host.saveRecord.bind(host);
+  host.saveRecord = (id, snap) => {
+    counters.saveCalls++;
+    return origSaveRecord(id, snap);
+  };
+  const hudPresenter = new ConsoleHudPresenter(host, stubRefs, {
+    setAutofireBlocked: () => {},
+    onRecordSaved: () => {},
+  });
+  const hudStats = { spriteCount: 12, drawCalls: 2, lightCount: 1, frameTimeMs: 1.5, backend: 'webgpu' as const, batchOverflowCount: 0 };
+  const snapPlay0 = { ...beforePauseSnap, score: 100, starsCollected: 1, starsTotal: 24, status: 'playing' as const };
+  hudPresenter.updateHud(snapPlay0, hudStats, 60, true, 'cloudberry-hop');
+  hudPresenter.updateHud(snapPlay0, hudStats, 60.2, true, 'cloudberry-hop');
+  const snapPlay1 = { ...snapPlay0, score: 110 };
+  hudPresenter.updateHud(snapPlay1, hudStats, 60.1, true, 'cloudberry-hop');
+  const getSaveCalls = () => counters.saveCalls;
+  check(
+    counters.scoreWrites === 2 && getSaveCalls() === 1,
+    `ConsoleHudPresenter must skip unchanged DOM text writes (scoreWrites=${counters.scoreWrites}) and throttle playing saveRecord (saveCalls=${getSaveCalls()})`,
+  );
+  hudPresenter.updateHud({ ...snapPlay1, status: 'won' }, hudStats, 60, true, 'cloudberry-hop');
+  check(getSaveCalls() === 2, `ConsoleHudPresenter must flush saveRecord immediately on won/lost (saveCalls=${getSaveCalls()})`);
+  hudPresenter.destroy();
+
   host.destroy();
   check(host.events.listenerCount() === 0, 'EngineHost.destroy() must detach all EventBus listeners');
 
@@ -430,6 +541,15 @@ export function testArchitectureBoundariesAndLifecycle(): void {
       !cleared.shoulderR,
     'InputPipeline.reset() must eliminate all latched, SOCD, prediction, and autofire states',
   );
+
+  // Zero-GC non-aliasing verification for InputPipeline & WebGamepadSampler
+  const rPipeA = pipe.resolve({ ...emptyInput(), right: true }, false);
+  const rPipeB = pipe.resolve({ ...emptyInput(), left: true }, false);
+  check(rPipeA !== rPipeB && rPipeA.right && !rPipeB.right && rPipeB.left, 'InputPipeline.resolve must avoid cross-frame aliasing');
+  const sampler = new WebGamepadSampler({ clock: () => clock, gamepadReader: () => [] });
+  const gpA = sampler.sample();
+  const gpB = sampler.sample();
+  check(gpA !== gpB && gpA.input !== gpB.input && gpA.justPressed !== gpB.justPressed, 'WebGamepadSampler.sample must avoid cross-frame aliasing');
 
   console.log(
     `[SIM OK] Architecture boundaries (${coreFiles.length} core + ${assetFiles.length} assets + ${gameFiles.length} game + ${uiFiles.length} UI), EngineHost facade & InputPipeline reset verified`,
@@ -1367,11 +1487,15 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
   // 4. Pre-warmed 240-Frame Zero-GC Benchmarks (EcsCartridgeRuntime + large-world DataCartridgeRuntime)
   const ecsRt = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
 
-  // Warmup (300 frames to stabilize TurboFan JIT & pool capacities)
+  // Warmup (300 sim+snapshot frames + 1000 snapshot frames to stabilize TurboFan JIT & pool capacities)
   for (let i = 0; i < 300; i++) {
     ecsRt.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
     ecsRt.snapshot(params);
     rtA.step(1 / 60, { ...emptyInput(), right: i % 2 === 0 }, params);
+    rtA.snapshot(params);
+  }
+  for (let i = 0; i < 1000; i++) {
+    ecsRt.snapshot(params);
     rtA.snapshot(params);
   }
 
@@ -1419,6 +1543,11 @@ export function testM42M43ChunkedWorldsAndMultiLayerDepth(): void {
   const rtMs = performance.now() - rtT0;
   maybeGc?.();
   const rtHeapDeltaKb = (process.memoryUsage().heapUsed - heapBeforeRt) / 1024;
+
+  check(
+    ecsHeapDeltaKb < 768 && rtHeapDeltaKb < 768,
+    `240f Snapshot Zero-GC heapDelta exceeded 768KB budget (ecs=${ecsHeapDeltaKb.toFixed(1)}KB, chunked=${rtHeapDeltaKb.toFixed(1)}KB)`,
+  );
 
   console.log(
     `[SIM OK] M4.2/M4.3 Chunked Worlds & Multi-Layer HD-2D -> Tilemap(1024x256, allocated=${grid.getAllocatedChunkCount()}/1024), SpatialHash(2048 ent: rebuild=${spRunA.tRebuildMs.toFixed(2)}ms, 32 queries=${spRunA.tQueryMs.toFixed(2)}ms), 1024x1024 Atlas (300x32px dyn, 10k pass batch)`,

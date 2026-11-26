@@ -8,12 +8,19 @@ import {
   type EcsMapLayerName,
   type EcsMapPortalDef,
   type EcsMapRoomDef,
+  type EcsTileDef,
 } from '../core/ecs/EcsTilemapTypes.ts';
+import {
+  ECS_VOXEL_SHAPES,
+  MAX_VOXEL_STORIES,
+  type EcsVoxelShape,
+} from '../core/ecs/EcsVoxelVolume.ts';
 import {
   projectWorld3DToScreen,
   type ComputedCamera3D,
   type ScreenPoint3D,
 } from '../core/math/Perspective3DMath.ts';
+import { collectProjectSpriteOptions, createWorkbenchSliderRow } from './EcsWorkbenchCatalog.ts';
 
 export type MapToolMode = 'brush' | 'rect' | 'fill' | 'erase' | 'eyedropper' | 'stamp' | 'pan';
 
@@ -22,8 +29,11 @@ export interface MapDesignerState {
   layer: EcsMapLayerName;
   selectedTileId: number;
   selectedStampPrefabId: string | null;
+  activeZLevel: number;
+  voxelShape: EcsVoxelShape;
   showGrid: boolean;
   showPortals: boolean;
+  showFovPreview: boolean;
 }
 
 export interface MapDesignerPanelCallbacks {
@@ -31,6 +41,7 @@ export interface MapDesignerPanelCallbacks {
   onSwitchRoom: (roomId: string) => void;
   onSelectEntity: (entityId: string) => void;
   onEnterEditMode: () => void;
+  onLiveTileDef?: (tileDef: EcsTileDef) => void;
   onOpenSpriteAtelierForTile?: () => void;
   onOpenExternalImport?: () => void;
 }
@@ -48,6 +59,8 @@ export interface MapOverlayContext {
   hoverRow: number;
   rectDrag: { c0: number; r0: number; c1: number; r1: number } | null;
   camera3D?: ComputedCamera3D | null;
+  fovMask?: Uint8Array | null;
+  showEditingAffordances?: boolean;
 }
 
 const TOOL_BUTTONS: readonly { id: MapToolMode; label: string; title: string }[] = [
@@ -71,8 +84,11 @@ export function createDefaultMapDesignerState(): MapDesignerState {
     layer: 'ground',
     selectedTileId: CASTLE_TILE_IDS.CARPET_V,
     selectedStampPrefabId: null,
+    activeZLevel: 0,
+    voxelShape: 'cube',
     showGrid: true,
     showPortals: true,
+    showFovPreview: false,
   };
 }
 
@@ -223,6 +239,74 @@ export function renderMapDesignerPane(
 
   roomSec.append(roomHead, roomSelect, roomMeta);
 
+  if (proj.projection?.mode === 'hd2d_3d') {
+    const storyH = activeRoom.storyHeight ?? 32;
+    const zSliceWrap = document.createElement('div');
+    zSliceWrap.className = 'p7-slider-group';
+
+    const zHead = document.createElement('div');
+    zHead.className = 'p7-section-head';
+    const zLabel = document.createElement('span');
+    zLabel.className = 'p7-mono';
+    zLabel.textContent = `3D 樓層切片 Z = L${state.activeZLevel} (+${state.activeZLevel * storyH}px)`;
+    const clearZBtn = document.createElement('button');
+    clearZBtn.type = 'button';
+    clearZBtn.className = 'p7-btn p7-btn-xs';
+    clearZBtn.textContent = '清除此層';
+    clearZBtn.addEventListener('click', () => {
+      cb.onEnterEditMode();
+      session.dispatch({ type: 'clear_room_voxels', roomId: activeRoom.id, zLevel: state.activeZLevel });
+    });
+    zHead.append(zLabel, clearZBtn);
+
+    const zSlider = document.createElement('input');
+    zSlider.type = 'range';
+    zSlider.min = '0';
+    zSlider.max = String(MAX_VOXEL_STORIES - 1);
+    zSlider.step = '1';
+    zSlider.value = String(state.activeZLevel);
+    zSlider.className = 'p7-range';
+    zSlider.dataset.testid = 'z-slice-slider';
+    zSlider.setAttribute('aria-label', '3D 體素樓層切片 Z');
+    zSlider.addEventListener('input', () => {
+      state.activeZLevel = Math.max(0, Math.min(MAX_VOXEL_STORIES - 1, Math.round(Number(zSlider.value) || 0)));
+      zLabel.textContent = `3D 樓層切片 Z = L${state.activeZLevel} (+${state.activeZLevel * storyH}px)`;
+      cb.onStateChange();
+    });
+
+    const shapeSelect = document.createElement('select');
+    shapeSelect.className = 'p7-select p7-select-full p7-mono';
+    shapeSelect.dataset.testid = 'voxel-shape-select';
+    shapeSelect.setAttribute('aria-label', '3D 體素形狀');
+    const shapeLabels: Readonly<Record<EcsVoxelShape, string>> = {
+      cube: '方塊 cube',
+      half_slab: '半磚 half_slab',
+      slope_n: '斜坡北 slope_n',
+      slope_e: '斜坡東 slope_e',
+      slope_s: '斜坡南 slope_s',
+      slope_w: '斜坡西 slope_w',
+      stair_n: '階梯北 stair_n',
+      stair_e: '階梯東 stair_e',
+      stair_s: '階梯南 stair_s',
+      stair_w: '階梯西 stair_w',
+      arch: '拱門 arch',
+    };
+    for (const sh of ECS_VOXEL_SHAPES) {
+      const o = document.createElement('option');
+      o.value = sh;
+      o.textContent = shapeLabels[sh];
+      shapeSelect.appendChild(o);
+    }
+    shapeSelect.value = state.voxelShape;
+    shapeSelect.addEventListener('change', () => {
+      state.voxelShape = shapeSelect.value as EcsVoxelShape;
+      cb.onStateChange();
+    });
+
+    zSliceWrap.append(zHead, zSlider, shapeSelect);
+    roomSec.appendChild(zSliceWrap);
+  }
+
   // 2. Active Map Layer & Drawing Tools
   const toolSec = document.createElement('div');
   toolSec.className = 'p7-section';
@@ -349,6 +433,162 @@ export function renderMapDesignerPane(
   }
   palSec.append(palHead, tileGrid);
 
+  // 3b. Selected Tile PBR Material & Top/Side Texture Inspector
+  const selectedTile = mergedTiles.get(state.selectedTileId);
+  if (state.tool !== 'stamp' && selectedTile && selectedTile.layer === state.layer) {
+    const pbrCard = document.createElement('div');
+    pbrCard.className = 'p7-rule-card';
+    pbrCard.setAttribute('data-testid', 'tile-pbr-inspector');
+
+    const pbrHead = document.createElement('div');
+    pbrHead.className = 'p7-rule-card-head';
+    const pbrTitle = document.createElement('strong');
+    pbrTitle.textContent = `瓦片材質：${selectedTile.name}`;
+    const pbrIdTag = document.createElement('span');
+    pbrIdTag.className = 'p7-meta-line p7-mono';
+    pbrIdTag.textContent = `#${selectedTile.id}`;
+    pbrHead.append(pbrTitle, pbrIdTag);
+    pbrCard.appendChild(pbrHead);
+
+    const spriteOpts = collectProjectSpriteOptions(proj, atlas);
+    const liveTile = (patch: Partial<EcsTileDef>) => {
+      cb.onLiveTileDef?.({ ...selectedTile, ...patch });
+    };
+    const commitTile = (patch: Partial<EcsTileDef>) => {
+      session.dispatch({ type: 'upsert_tile_def', tileDef: { ...selectedTile, ...patch } });
+    };
+
+    const makeSpriteSelect = (
+      label: string,
+      value: string,
+      allowEmptyLabel: string | null,
+      onChange: (val: string) => void,
+      testId: string,
+    ) => {
+      const row = document.createElement('label');
+      row.className = 'p7-rule-field';
+      const sp = document.createElement('span');
+      sp.textContent = label;
+      const sel = document.createElement('select');
+      sel.className = 'p7-select p7-mono';
+      sel.setAttribute('data-testid', testId);
+      if (allowEmptyLabel) {
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = allowEmptyLabel;
+        sel.appendChild(emptyOpt);
+      }
+      for (const opt of spriteOpts) {
+        const o = document.createElement('option');
+        o.value = opt.id;
+        o.textContent = opt.label;
+        sel.appendChild(o);
+      }
+      if (value && !spriteOpts.some((o) => o.id === value)) {
+        const cur = document.createElement('option');
+        cur.value = value;
+        cur.textContent = value;
+        sel.appendChild(cur);
+      }
+      sel.value = value;
+      sel.addEventListener('change', () => onChange(sel.value));
+      row.append(sp, sel);
+      return row;
+    };
+
+    pbrCard.appendChild(
+      makeSpriteSelect(
+        selectedTile.layer === 'wall' ? '牆頂貼圖 (Top)' : '瓦片貼圖 (Sprite)',
+        selectedTile.sprite,
+        null,
+        (v) => commitTile({ sprite: (v || selectedTile.sprite) as SpriteId }),
+        'tile-pbr-sprite',
+      ),
+    );
+
+    if (selectedTile.layer === 'wall') {
+      pbrCard.appendChild(
+        makeSpriteSelect(
+          '牆側貼圖 (Side)',
+          selectedTile.sideSprite ?? '',
+          '(同牆頂貼圖)',
+          (v) => commitTile({ sideSprite: (v || undefined) as SpriteId | undefined }),
+          'tile-pbr-side-sprite',
+        ),
+      );
+      const matRow = document.createElement('label');
+      matRow.className = 'p7-rule-field';
+      const matLbl = document.createElement('span');
+      matLbl.textContent = '牆體材質 (Material)';
+      const matSel = document.createElement('select');
+      matSel.className = 'p7-select p7-mono';
+      for (const [mId, mTxt] of [
+        ['stone', '石砌 (stone)'],
+        ['earth', '岩土 (earth)'],
+        ['timber', '木構 (timber)'],
+        ['astral', '星晶 (astral)'],
+      ] as const) {
+        const o = document.createElement('option');
+        o.value = mId;
+        o.textContent = mTxt;
+        matSel.appendChild(o);
+      }
+      matSel.value = selectedTile.wallMaterial ?? 'stone';
+      matSel.addEventListener('change', () => {
+        commitTile({ wallMaterial: matSel.value as EcsTileDef['wallMaterial'] });
+      });
+      matRow.append(matLbl, matSel);
+      pbrCard.appendChild(matRow);
+
+      pbrCard.appendChild(
+        createWorkbenchSliderRow(
+          '牆高 ExtrudeH',
+          4,
+          48,
+          1,
+          selectedTile.extrudeH ?? 26,
+          (v) => `${Math.round(v)}px`,
+          (v) => liveTile({ extrudeH: Math.round(v) }),
+          (v) => commitTile({ extrudeH: Math.round(v) }),
+        ),
+      );
+    }
+
+    pbrCard.append(
+      createWorkbenchSliderRow(
+        '粗糙度 Roughness',
+        0.05,
+        1.0,
+        0.02,
+        selectedTile.roughness ?? 0.62,
+        (v) => v.toFixed(2),
+        (v) => liveTile({ roughness: Number(v.toFixed(2)) }),
+        (v) => commitTile({ roughness: Number(v.toFixed(2)) }),
+      ),
+      createWorkbenchSliderRow(
+        '金屬度 Metallic',
+        0.0,
+        1.0,
+        0.02,
+        selectedTile.metallic ?? 0.1,
+        (v) => v.toFixed(2),
+        (v) => liveTile({ metallic: Number(v.toFixed(2)) }),
+        (v) => commitTile({ metallic: Number(v.toFixed(2)) }),
+      ),
+      createWorkbenchSliderRow(
+        '自發光 Emissive',
+        0.0,
+        2.0,
+        0.05,
+        selectedTile.emissive ?? 0,
+        (v) => v.toFixed(2),
+        (v) => liveTile({ emissive: Number(v.toFixed(2)) }),
+        (v) => commitTile({ emissive: Number(v.toFixed(2)) }),
+      ),
+    );
+    palSec.appendChild(pbrCard);
+  }
+
   // 4. Castle Object / Prop / Enemy Prefab Stamp Palette
   const stampSec = document.createElement('div');
   stampSec.className = 'p7-section';
@@ -448,6 +688,30 @@ const _p1: ScreenPoint3D = { x: 0, y: 0, scale: 1, depth: 1, visible: true };
 const _p2: ScreenPoint3D = { x: 0, y: 0, scale: 1, depth: 1, visible: true };
 const _p3: ScreenPoint3D = { x: 0, y: 0, scale: 1, depth: 1, visible: true };
 
+function appendProjectedQuadSubpath(
+  ctx: CanvasRenderingContext2D,
+  wx0: number,
+  wy0: number,
+  wx1: number,
+  wy1: number,
+  cam3d: ComputedCamera3D,
+  sx: number,
+  sy: number,
+  planeZ = 0,
+): boolean {
+  projectWorld3DToScreen(wx0, wy0, planeZ, cam3d, _p0);
+  projectWorld3DToScreen(wx1, wy0, planeZ, cam3d, _p1);
+  projectWorld3DToScreen(wx1, wy1, planeZ, cam3d, _p2);
+  projectWorld3DToScreen(wx0, wy1, planeZ, cam3d, _p3);
+  if (!_p0.visible || !_p1.visible || !_p2.visible || !_p3.visible) return false;
+  ctx.moveTo(_p0.x * sx, _p0.y * sy);
+  ctx.lineTo(_p1.x * sx, _p1.y * sy);
+  ctx.lineTo(_p2.x * sx, _p2.y * sy);
+  ctx.lineTo(_p3.x * sx, _p3.y * sy);
+  ctx.closePath();
+  return true;
+}
+
 function traceProjectedQuad(
   ctx: CanvasRenderingContext2D,
   wx0: number,
@@ -457,19 +721,62 @@ function traceProjectedQuad(
   cam3d: ComputedCamera3D,
   sx: number,
   sy: number,
+  planeZ = 0,
 ): boolean {
-  projectWorld3DToScreen(wx0, wy0, 0, cam3d, _p0);
-  projectWorld3DToScreen(wx1, wy0, 0, cam3d, _p1);
-  projectWorld3DToScreen(wx1, wy1, 0, cam3d, _p2);
-  projectWorld3DToScreen(wx0, wy1, 0, cam3d, _p3);
-  if (!_p0.visible || !_p1.visible || !_p2.visible || !_p3.visible) return false;
   ctx.beginPath();
-  ctx.moveTo(_p0.x * sx, _p0.y * sy);
-  ctx.lineTo(_p1.x * sx, _p1.y * sy);
-  ctx.lineTo(_p2.x * sx, _p2.y * sy);
-  ctx.lineTo(_p3.x * sx, _p3.y * sy);
-  ctx.closePath();
-  return true;
+  return appendProjectedQuadSubpath(ctx, wx0, wy0, wx1, wy1, cam3d, sx, sy, planeZ);
+}
+
+function drawFovFogOverlay(
+  ctx: CanvasRenderingContext2D,
+  room: EcsMapRoomDef,
+  fovMask: Uint8Array,
+  ts: number,
+  camX: number,
+  camY: number,
+  viewW: number,
+  viewH: number,
+  sx: number,
+  sy: number,
+  cam3d: ComputedCamera3D | null,
+): void {
+  const cols = room.cols;
+  const rows = room.rows;
+  if (fovMask.length < cols * rows) return;
+
+  ctx.beginPath();
+  if (cam3d) {
+    const margin = ts * 4;
+    const minCol = Math.max(0, Math.floor((camX - margin) / ts));
+    const maxCol = Math.min(cols - 1, Math.ceil((camX + viewW + margin) / ts));
+    const minRow = Math.max(0, Math.floor((camY - margin) / ts));
+    const maxRow = Math.min(rows - 1, Math.ceil((camY + viewH + margin) / ts));
+    for (let r = minRow; r <= maxRow; r++) {
+      const rowOff = r * cols;
+      const wy0 = r * ts;
+      for (let c = minCol; c <= maxCol; c++) {
+        if (fovMask[rowOff + c] !== 0) continue;
+        appendProjectedQuadSubpath(ctx, c * ts, wy0, (c + 1) * ts, wy0 + ts, cam3d, sx, sy);
+      }
+    }
+  } else {
+    const minCol = Math.max(0, Math.floor(camX / ts));
+    const maxCol = Math.min(cols - 1, Math.ceil((camX + viewW) / ts));
+    const minRow = Math.max(0, Math.floor(camY / ts));
+    const maxRow = Math.min(rows - 1, Math.ceil((camY + viewH) / ts));
+    const tw = ts * sx;
+    const th = ts * sy;
+    for (let r = minRow; r <= maxRow; r++) {
+      const rowOff = r * cols;
+      const py = (r * ts - camY) * sy;
+      for (let c = minCol; c <= maxCol; c++) {
+        if (fovMask[rowOff + c] !== 0) continue;
+        ctx.rect((c * ts - camX) * sx, py, tw, th);
+      }
+    }
+  }
+  ctx.fillStyle = 'rgba(10, 22, 52, 0.56)';
+  ctx.fill();
 }
 
 export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, info: MapOverlayContext): void {
@@ -482,10 +789,19 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
   const ts = info.tileSize;
   const { room, portals, camX, camY, state } = info;
   const cam3d = info.camera3D ?? null;
+  const editing = info.showEditingAffordances !== false;
+  const planeZ = state.activeZLevel * (room.storyHeight ?? 32);
+
+  // 0. Phase 4 Symmetric Shadowcasting FOV Fog-of-War Preview
+  if (state.showFovPreview && info.fovMask) {
+    drawFovFogOverlay(ctx, room, info.fovMask, ts, camX, camY, info.viewW, info.viewH, sx, sy, cam3d);
+  }
+
+  if (!editing) return;
 
   // 1. Subtle 32px Tile Grid
   if (state.showGrid) {
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.16)';
+    ctx.strokeStyle = state.activeZLevel > 0 ? 'rgba(56, 189, 248, 0.28)' : 'rgba(148, 163, 184, 0.16)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     if (cam3d) {
@@ -500,8 +816,8 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
       const xMax = maxCol * ts;
       for (let c = minCol; c <= maxCol; c++) {
         const wx = c * ts;
-        projectWorld3DToScreen(wx, yMin, 0, cam3d, _p0);
-        projectWorld3DToScreen(wx, yMax, 0, cam3d, _p1);
+        projectWorld3DToScreen(wx, yMin, planeZ, cam3d, _p0);
+        projectWorld3DToScreen(wx, yMax, planeZ, cam3d, _p1);
         if (_p0.visible && _p1.visible) {
           ctx.moveTo(_p0.x * sx, _p0.y * sy);
           ctx.lineTo(_p1.x * sx, _p1.y * sy);
@@ -509,8 +825,8 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
       }
       for (let r = minRow; r <= maxRow; r++) {
         const wy = r * ts;
-        projectWorld3DToScreen(xMin, wy, 0, cam3d, _p0);
-        projectWorld3DToScreen(xMax, wy, 0, cam3d, _p1);
+        projectWorld3DToScreen(xMin, wy, planeZ, cam3d, _p0);
+        projectWorld3DToScreen(xMax, wy, planeZ, cam3d, _p1);
         if (_p0.visible && _p1.visible) {
           ctx.moveTo(_p0.x * sx, _p0.y * sy);
           ctx.lineTo(_p1.x * sx, _p1.y * sy);
@@ -595,7 +911,7 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
     ctx.lineWidth = 2;
     ctx.setLineDash([5, 3]);
     if (cam3d) {
-      if (traceProjectedQuad(ctx, cMin * ts, rMin * ts, (cMax + 1) * ts, (rMax + 1) * ts, cam3d, sx, sy)) {
+      if (traceProjectedQuad(ctx, cMin * ts, rMin * ts, (cMax + 1) * ts, (rMax + 1) * ts, cam3d, sx, sy, planeZ)) {
         ctx.fill();
         ctx.stroke();
       }
@@ -636,6 +952,7 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
           cam3d,
           sx,
           sy,
+          planeZ,
         )
       ) {
         ctx.stroke();
@@ -661,3 +978,5 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
     ctx.fillText(coordText, tx + 4, ty + 10);
   }
 }
+
+export const renderMapOverlay = drawMapEditorOverlay;

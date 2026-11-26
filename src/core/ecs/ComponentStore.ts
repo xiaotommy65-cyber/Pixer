@@ -334,7 +334,7 @@ export interface VerletChainData {
 
 /**
  * Pure-data Multi-Dimensional Spatial3D component (Zero-GC runtime fields).
- * Adds true Z-axis elevation, vertical thickness, Z-gravity/jump, and parallel-world dimension bitmasks.
+ * Adds true Z-axis elevation, vertical thickness, Z-gravity/jump, 3D orientation, and parallel-world dimension bitmasks.
  */
 export interface Spatial3DData {
   z: number;
@@ -346,6 +346,29 @@ export interface Spatial3DData {
   jumpZVelocity: number;
   dimensionMask: number;
   shadowScale: number;
+  yaw: number;
+  pitch: number;
+  roll: number;
+  depth: number;
+  stepHeight: number;
+  ceilingZ: number;
+  slopeNormalX: number;
+  slopeNormalY: number;
+  slopeNormalZ: number;
+}
+
+/**
+ * Pure-data 3D Mesh / Cuboid Model & Camera-Relative Billboard component.
+ */
+export interface MeshRenderer3DData {
+  modelId: string;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  animClip: string;
+  animTime: number;
+  castShadow: boolean;
+  billboardYawMode: 'fixed' | 'camera_4way' | 'camera_8way';
 }
 
 export function createStandardComponentRegistry(): {
@@ -367,6 +390,7 @@ export function createStandardComponentRegistry(): {
   TriggerZone: ComponentTypeDef<TriggerZoneData>;
   VerletChain: ComponentTypeDef<VerletChainData>;
   Spatial3D: ComponentTypeDef<Spatial3DData>;
+  MeshRenderer3D: ComponentTypeDef<MeshRenderer3DData>;
 } {
   const registry = new ComponentRegistry();
   const Transform2D = registry.define<Transform2DData>('Transform2D', () => ({
@@ -531,6 +555,25 @@ export function createStandardComponentRegistry(): {
     jumpZVelocity: 190,
     dimensionMask: 1,
     shadowScale: 1,
+    yaw: 0,
+    pitch: 0,
+    roll: 0,
+    depth: 16,
+    stepHeight: 10,
+    ceilingZ: 9999,
+    slopeNormalX: 0,
+    slopeNormalY: 0,
+    slopeNormalZ: 1,
+  }));
+  const MeshRenderer3D = registry.define<MeshRenderer3DData>('MeshRenderer3D', () => ({
+    modelId: '',
+    scaleX: 1,
+    scaleY: 1,
+    scaleZ: 1,
+    animClip: '',
+    animTime: 0,
+    castShadow: true,
+    billboardYawMode: 'fixed',
   }));
 
   return {
@@ -552,5 +595,6 @@ export function createStandardComponentRegistry(): {
     TriggerZone,
     VerletChain,
     Spatial3D,
+    MeshRenderer3D,
   };
 }

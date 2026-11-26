@@ -187,7 +187,13 @@ export function createAgentBridge(
       ? { onLoadCartridge: onLoadCartridgeOrOpts }
       : (onLoadCartridgeOrOpts ?? {});
   const onLoadCartridge = bridgeOpts.onLoadCartridge;
-  const studioSession = bridgeOpts.studioSession ?? new StudioSession('parkour_flagship');
+  let studioSession: StudioSession | null = bridgeOpts.studioSession ?? null;
+  const getStudioSession = (): StudioSession => {
+    if (!studioSession) {
+      studioSession = new StudioSession('parkour_flagship');
+    }
+    return studioSession;
+  };
   const ecsSession = bridgeOpts.ecsSession ?? null;
 
   const getTurnKernel = (): TurnKernelContract | null => {
@@ -231,31 +237,32 @@ export function createAgentBridge(
   };
 
   const studioApi: PixelAtelierStudioAgentApi = {
-    dispatch: (cmd) => studioSession.dispatch(cmd),
-    batch: (cmds, label) => studioSession.batch(cmds, label),
-    undo: () => studioSession.undo(),
-    redo: () => studioSession.redo(),
-    canUndo: () => studioSession.canUndo(),
-    canRedo: () => studioSession.canRedo(),
-    getRevision: () => studioSession.getRevision(),
-    getDocument: () => studioSession.getDocument(),
-    getHistory: () => studioSession.getHistory(),
-    playtest: (opts) => studioSession.playtest(opts),
-    inspectVisual: (frames) => studioSession.inspectVisual(frames),
+    dispatch: (cmd) => getStudioSession().dispatch(cmd),
+    batch: (cmds, label) => getStudioSession().batch(cmds, label),
+    undo: () => getStudioSession().undo(),
+    redo: () => getStudioSession().redo(),
+    canUndo: () => getStudioSession().canUndo(),
+    canRedo: () => getStudioSession().canRedo(),
+    getRevision: () => getStudioSession().getRevision(),
+    getDocument: () => getStudioSession().getDocument(),
+    getHistory: () => getStudioSession().getHistory(),
+    playtest: (opts) => getStudioSession().playtest(opts),
+    inspectVisual: (frames) => getStudioSession().inspectVisual(frames),
     capturePreviewPng: () => (bridgeOpts.onCapturePreviewPng ? bridgeOpts.onCapturePreviewPng() : null),
-    mountToConsole: (opts) => loadCartridgeFn(studioSession.getDocument(), { mount: true, ...opts }),
+    mountToConsole: (opts) => loadCartridgeFn(getStudioSession().getDocument(), { mount: true, ...opts }),
     loadFromActiveCartridge: () => {
+      const session = getStudioSession();
       const activeId = runner.getCartridgeId();
       const activeJson = getCartridgeJson(activeId);
       if (!activeJson) {
         return {
           ok: false,
-          revision: studioSession.getRevision(),
+          revision: session.getRevision(),
           summary: `目前卡匣「${activeId}」非資料驅動 JSON 卡匣`,
           errors: [`Cartridge '${activeId}' does not expose CartridgeJsonV1`],
         };
       }
-      return studioSession.loadDocument(activeJson);
+      return session.loadDocument(activeJson);
     },
   };
 

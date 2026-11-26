@@ -93,6 +93,34 @@ export function renderSceneHudOverlay(
         const bw = Math.max(1, isWorld ? p.w * zoom : p.w);
         const bh = Math.max(1, isWorld ? p.h * zoom : p.h);
         gpu.drawRect(cx, cy, bw, bh, p.color, p.alpha ?? 0.9, 0, false, 0, 1);
+      } else if (p.kind === 'sprite' && p.sprite) {
+        const isWorld = p.worldSpace === true;
+        const wcx = p.x + p.w * 0.5;
+        const wcy = p.y + p.h * 0.5;
+        const cx = isWorld ? projector.projectWorldX(wcx, wcy) : wcx + camFracX;
+        const cy = isWorld ? projector.projectWorldY(wcy, wcx, 2) : wcy + camFracY;
+        const dw = Math.max(1, isWorld ? p.w * zoom : p.w);
+        const dh = Math.max(1, isWorld ? p.h * zoom : p.h);
+        gpu.drawSpriteRaw(
+          p.sprite,
+          cx,
+          cy,
+          dw,
+          dh,
+          p.flipX ?? false,
+          0,
+          p.color || '#ffffff',
+          p.alpha ?? 1,
+          0,
+          false,
+          0.5,
+          0.5,
+          0,
+          -2,
+          0,
+          1.0,
+          0.0,
+        );
       } else if (p.kind === 'text') {
         const isWorld = p.worldSpace === true;
         const sx = isWorld ? projector.projectWorldX(p.x, p.y) : p.x + camFracX;

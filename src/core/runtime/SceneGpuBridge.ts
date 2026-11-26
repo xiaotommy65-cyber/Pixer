@@ -262,18 +262,41 @@ export class SceneGpuBridge implements HudWorldProjector {
 
         // Exposed South Vertical Facade ([yBot - wallFaceH .. yBot])
         if (!hasSouth || neighborMask === 0) {
-          const matKind = resolveWallMaterialCode(t);
           const faceCy = yBot - wallFaceH * 0.5;
-          gpu.drawBeveledWall(
-            sx,
-            faceCy,
-            dw + 0.5,
-            wallFaceH + 0.5,
-            t.wallColor ?? '#3a3552',
-            matKind,
-            0.98,
-            t.x * 0.13 + t.y * 0.07,
-          );
+          if (t.sideSprite && t.sideSprite !== 'solid') {
+            gpu.drawSpriteRaw(
+              t.sideSprite,
+              sx,
+              faceCy,
+              dw + 0.5,
+              wallFaceH + 0.5,
+              t.flipX ?? false,
+              0,
+              t.tint,
+              t.alpha ?? 1,
+              0,
+              false,
+              0.5,
+              0.5,
+              0,
+              this.defaultPaletteRow,
+              t.emissive ?? 0,
+              t.roughness ?? 0.56,
+              t.metallic ?? 0.1,
+            );
+          } else {
+            const matKind = resolveWallMaterialCode(t);
+            gpu.drawBeveledWall(
+              sx,
+              faceCy,
+              dw + 0.5,
+              wallFaceH + 0.5,
+              t.wallColor ?? '#3a3552',
+              matKind,
+              0.98,
+              t.x * 0.13 + t.y * 0.07,
+            );
+          }
           // Grounded wall-base dark crease & bright top cornice lip
           gpu.drawRect(sx, yBot - 1.5 * this.zoom, dw, 3 * this.zoom, '#090714', 0.42);
           gpu.drawRect(sx, yBot - wallFaceH + 1.2 * this.zoom, dw, 2 * this.zoom, '#e2e8f0', 0.16);
@@ -304,7 +327,9 @@ export class SceneGpuBridge implements HudWorldProjector {
       tilePivotY,
       skewX,
       this.defaultPaletteRow,
-      0,
+      t.emissive ?? 0,
+      t.roughness ?? 0.62,
+      t.metallic ?? 0.06,
     );
   }
 

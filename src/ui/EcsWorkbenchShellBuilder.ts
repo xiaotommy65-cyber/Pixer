@@ -1,9 +1,11 @@
 import type { EcsProjectionMode, EcsProjectV2 } from '../core/ecs/EcsProjectSchema.ts';
 import type { ViewportPreset } from '../core/gpu/GpuTypes.ts';
+import type { Camera3DProjectionMode } from '../core/math/Perspective3DMath.ts';
 import { BUILTIN_ECS_PROJECTS, VIEWPORT_OPTIONS } from './EcsWorkbenchCatalog.ts';
 
 export type WorkbenchLeftTab = 'map' | 'rules' | 'hierarchy' | 'prefabs' | 'atlas';
 export type WorkbenchCenterMode = 'viewport' | 'event_graph';
+export type WorkbenchCamera3DViewChoice = Camera3DProjectionMode | 'quad';
 
 export interface EcsWorkbenchShellRefs {
   rootEl: HTMLElement;
@@ -32,6 +34,11 @@ export interface EcsWorkbenchShellRefs {
   centerTabViewportBtn: HTMLButtonElement;
   centerTabGraphBtn: HTMLButtonElement;
   viewportStageEl: HTMLDivElement;
+  spatial3dBarEl: HTMLDivElement;
+  spatial3dViewBtns: Partial<Record<WorkbenchCamera3DViewChoice, HTMLButtonElement>>;
+  toggleAxisGizmoBtn: HTMLButtonElement;
+  toggleOrthoGridBtn: HTMLButtonElement;
+  toggleShadowMapBtn: HTMLButtonElement;
   previewCanvas: HTMLCanvasElement;
   mapOverlayCanvas: HTMLCanvasElement;
 }
@@ -44,6 +51,7 @@ export interface EcsWorkbenchShellCallbacks {
   externalImportModalEl: HTMLElement;
   signal: AbortSignal;
   onOpenExternalImport: () => void;
+  onOpenModelAtelier: () => void;
   onOpenClassicWorkshop: () => void;
   onSelectBuiltinProject: (project: EcsProjectV2) => void;
   onSelectLeftTab: (tab: WorkbenchLeftTab) => void;
@@ -55,6 +63,7 @@ export interface EcsWorkbenchShellCallbacks {
   onUndo: () => void;
   onRedo: () => void;
   onRunDiagnostics: () => void;
+  onOpenCloudPublish: () => void;
   onSelectCenterMode: (mode: WorkbenchCenterMode) => void;
   onSwitchRoom: (roomId: string) => void;
   onHitActionA: () => void;
@@ -63,6 +72,10 @@ export interface EcsWorkbenchShellCallbacks {
   onLaunchArcade: () => void;
   onSelectProjection: (mode: EcsProjectionMode) => void;
   onSelectDimensionMask: (mask: number) => void;
+  onSelectCamera3DView: (view: WorkbenchCamera3DViewChoice) => void;
+  onToggleAxisGizmo3d: () => void;
+  onToggleOrthoGrid3d: () => void;
+  onToggleShadowMap3d: () => void;
 }
 
 /**
@@ -101,13 +114,21 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   importBtn.title = '匯入 Aseprite / LDtk / Tiled 外部專案與範例';
   importBtn.addEventListener('click', cb.onOpenExternalImport, { signal });
 
+  const modelBtn = document.createElement('button');
+  modelBtn.type = 'button';
+  modelBtn.className = 'p7-btn p7-btn-xs';
+  modelBtn.dataset.testid = 'open-model-atelier';
+  modelBtn.textContent = '3D 建模';
+  modelBtn.title = '開啟 Blockbench 風格 3D 模型與 glTF 匯入工坊';
+  modelBtn.addEventListener('click', cb.onOpenModelAtelier, { signal });
+
   const classicBtn = document.createElement('button');
   classicBtn.type = 'button';
   classicBtn.className = 'p7-btn p7-btn-xs';
   classicBtn.textContent = '像素畫室';
   classicBtn.title = '開啟經典像素畫室與積木正交工坊';
   classicBtn.addEventListener('click', cb.onOpenClassicWorkshop, { signal });
-  headBtns.append(importBtn, classicBtn);
+  headBtns.append(importBtn, modelBtn, classicBtn);
   leftHeadRow.append(leftTitle, headBtns);
 
   const projectSelectEl = document.createElement('select');
@@ -225,6 +246,14 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   diagBtn.title = 'AI 空間與試玩診斷';
   diagBtn.addEventListener('click', cb.onRunDiagnostics, { signal });
 
+  const cloudPublishBtn = document.createElement('button');
+  cloudPublishBtn.type = 'button';
+  cloudPublishBtn.className = 'p7-btn p7-btn-accent';
+  cloudPublishBtn.setAttribute('data-testid', 'open-cloud-publish');
+  cloudPublishBtn.textContent = '雲端發佈';
+  cloudPublishBtn.title = '發布專案至雲端 (?play=<slug>) 或匯出專案 JSON';
+  cloudPublishBtn.addEventListener('click', cb.onOpenCloudPublish, { signal });
+
   const centerModeSeg = document.createElement('div');
   centerModeSeg.className = 'p7-segmented';
   const centerTabViewportBtn = document.createElement('button');
@@ -240,7 +269,7 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   centerTabGraphBtn.addEventListener('click', () => cb.onSelectCenterMode('event_graph'), { signal });
   centerModeSeg.append(centerTabViewportBtn, centerTabGraphBtn);
 
-  rightGroup.append(centerModeSeg, undoBtn, redoBtn, diagBtn);
+  rightGroup.append(centerModeSeg, undoBtn, redoBtn, diagBtn, cloudPublishBtn);
   toolbar.append(leftGroup, rightGroup);
 
   const viewportStageEl = document.createElement('div');
@@ -348,7 +377,52 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
     dimensionSelectEl,
     launchArcadeBtn,
   );
-  viewportStageEl.append(canvasFrame, playBar);
+
+  const spatial3dBarEl = document.createElement('div');
+  spatial3dBarEl.className = 'p7-spatial3d-bar';
+  const spatial3dViewBtns: Partial<Record<WorkbenchCamera3DViewChoice, HTMLButtonElement>> = {};
+  const viewChoices: readonly { id: WorkbenchCamera3DViewChoice; label: string; testId?: string }[] = [
+    { id: 'perspective', label: '透視' },
+    { id: 'ortho_top', label: '頂視 XY' },
+    { id: 'ortho_front', label: '前視 XZ' },
+    { id: 'ortho_side', label: '側視 YZ' },
+    { id: 'ortho_iso', label: '等軸' },
+    { id: 'quad', label: '四視圖', testId: 'toggle-quad-view' },
+  ];
+  for (const vc of viewChoices) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'p7-btn p7-btn-xs';
+    b.textContent = vc.label;
+    if (vc.testId) b.dataset.testid = vc.testId;
+    b.addEventListener('click', () => cb.onSelectCamera3DView(vc.id), { signal });
+    spatial3dViewBtns[vc.id] = b;
+    spatial3dBarEl.appendChild(b);
+  }
+
+  const toggleAxisGizmoBtn = document.createElement('button');
+  toggleAxisGizmoBtn.type = 'button';
+  toggleAxisGizmoBtn.className = 'p7-btn p7-btn-xs';
+  toggleAxisGizmoBtn.dataset.testid = 'toggle-axis-gizmo';
+  toggleAxisGizmoBtn.textContent = 'XYZ 軸';
+  toggleAxisGizmoBtn.addEventListener('click', cb.onToggleAxisGizmo3d, { signal });
+
+  const toggleOrthoGridBtn = document.createElement('button');
+  toggleOrthoGridBtn.type = 'button';
+  toggleOrthoGridBtn.className = 'p7-btn p7-btn-xs';
+  toggleOrthoGridBtn.dataset.testid = 'toggle-ortho-grid';
+  toggleOrthoGridBtn.textContent = '正交格線';
+  toggleOrthoGridBtn.addEventListener('click', cb.onToggleOrthoGrid3d, { signal });
+
+  const toggleShadowMapBtn = document.createElement('button');
+  toggleShadowMapBtn.type = 'button';
+  toggleShadowMapBtn.className = 'p7-btn p7-btn-xs';
+  toggleShadowMapBtn.dataset.testid = 'toggle-shadow-map';
+  toggleShadowMapBtn.textContent = '陰影貼圖';
+  toggleShadowMapBtn.addEventListener('click', cb.onToggleShadowMap3d, { signal });
+
+  spatial3dBarEl.append(toggleAxisGizmoBtn, toggleOrthoGridBtn, toggleShadowMapBtn);
+  viewportStageEl.append(canvasFrame, spatial3dBarEl, playBar);
 
   const statusStrip = document.createElement('div');
   statusStrip.className = 'p7-status-strip p7-mono';
@@ -402,6 +476,11 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
     centerTabViewportBtn,
     centerTabGraphBtn,
     viewportStageEl,
+    spatial3dBarEl,
+    spatial3dViewBtns,
+    toggleAxisGizmoBtn,
+    toggleOrthoGridBtn,
+    toggleShadowMapBtn,
     previewCanvas,
     mapOverlayCanvas,
   };

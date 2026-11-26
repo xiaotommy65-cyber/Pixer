@@ -1,18 +1,14 @@
-# Pixer — 新對話開局速讀詞（Phase 5 Complete · 本機 Antigravity IDE / App 接手版）
+# Pixer — 新對話開局速讀詞（Wave 1–4B Complete · `feat/swarm-p0-p1-hardening`）
 
-請先閱讀 [`AGENTS.md`](../AGENTS.md)（引擎原教旨憲法）、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)（零 Grep 檔案路由與依賴圖）、[`docs/ROADMAP.md`](ROADMAP.md) 與 [`docs/HANDOFF.md`](HANDOFF.md)，避免耗費大量探索時間。
+請先閱讀 [`AGENTS.md`](../AGENTS.md)（引擎憲法）、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)（零 Grep 檔案路由）、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與 [`docs/HANDOFF.md`](HANDOFF.md)，接著第一時間執行 `bun run audit -- --strict`（<1s 唯讀體檢），切勿重新全倉搜尋消耗額度。
 
-## 當前已驗收基線（Phase 0 → Phase 5 Complete）
-- **HD-2D Pixel PBR-Lite 引擎與外部音訊層**：`WebGPU` / `WebGL2` / `Canvas2DBackend`、`1280×720`、8 頁 `1024×1024` 圖集池、完全移除 AI 程序合成器並以 [`ExternalAudioBank.ts`](../src/core/audio/ExternalAudioBank.ts) 外部 `.opus`/`.mp3` 資源層取代；保留旗艦卡匣 `PA-14`、`PA-15`、`PA-01`、`PA-02`、`PA-11`、`PA-12`。
-- **真 ECS 運行時與全品類軍火庫**：[`EcsCartridgeRuntime.ts`](../src/core/ecs/EcsCartridgeRuntime.ts) + [`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts) 已接通 Zero-GC `GridPathfinder` A*、`Visibility2D` LOS/FOV、`CameraRigDirector`、`GameFlowController` 與 [`EcsCinematicDirector.ts`](../src/core/ecs/EcsCinematicDirector.ts)（Auteur DSL + Toric Two-Shot + 3 階段彈簧切回），並附無頭審美預言機 [`EcsCinematicOracle.ts`](../src/core/ai/EcsCinematicOracle.ts) 與完整 MCP（`critique_cutscene_aesthetics`）。
-- **單一模組化工作站與雲端疏導層**：[`EcsWorkbenchView.ts`](../src/ui/EcsWorkbenchView.ts)（868L 協調層）+ M2 規則檢視器 + [`src/workers/interop.worker.ts`](../src/workers/interop.worker.ts) + Cloudflare Workers/R2 + Supabase RLS（[`CloudSyncClient.ts`](../src/core/cloud/CloudSyncClient.ts)）。
-- **本機 Antigravity 整備**：已配置 `.agents/mcp_config.json`（`pixer-ecs` 預設啟用，另附 `context7` / `chrome-devtools` 範本）、`.agents/rules/`（5 份）與 `.agents/skills/`（`pixer-verify-and-pr`、`pixer-ecs-authoring`）。
+## 當前已驗收基線（Wave 1–4B 完成，待推送開 PR 合入 `main`）
+- **審計與驗證全綠**：`bun run audit -- --strict`（`critical=0`、Math/Shader `0` warn、Perf/Arch `0` warn、`circularDepsCount=0`、`42/42` 指令目錄一致、`dynamicImportCount=5`）、`bun run lint`（0 err）、`bun run sim`（`[SIM ALL PASSED]`）、`npm run test`（**72/72 PASS**）、`bun run build`（216 modules，**0 chunk warnings**，`external-import 121.35 kB`、`ecs-workbench 344.10 kB`、`cartridges 483.85 kB`）。
+- **Wave 4B（多管線烘焙、瓦片 PBR 頂側分離、Pass 1B 立繪與首幀修復）**：
+  - `EcsTileDef.sideSprite` + `roughness`/`metallic`/`emissive` 貫穿 `EcsWorldMapController` → `SceneTrue3DPass` / `SceneGpuBridge` / `GpuQuad3DBatch` 及 `EcsMapDesignerPanel` 瓦片材質檢查器。
+  - `PixelForgeProcessor` / `PixelForgeImportTab` 新增 `wall_top_side`、`billboard_actor`、`emissive_light_prop`、`portrait_160x192` 烘焙預設；`EcsCinematicDirector` + `SceneHudOverlayPass` 完成 Pass 1B `160×192` 立繪 (`portraitSpriteId`) 渲染與初始視口自動出畫修復。
+- **本機環境就緒**：Windows 本機已備齊 `Node v26.13.0`、`Bun 1.4.5`、`Git 2.56.1`。
 
-## 本機開工快速檢查
-1. 確認本機工具鏈：`bun --version` >= `1.4.5`、`node -v` >= `22`；執行 `bun install --frozen-lockfile`。
-2. 驗證基線：`bun run lint && bun run sim && npm run test && bun run build && bun run clean`。
-3. 如需從手機／網頁遠端操控本機完整環境（含 GPU 與 MCP），可使用 Antigravity **Remote Control**（`agy remote-control start`）。
-
-## 下階段建議任務（Phase 6）
-1. **工作站 UI 開放 Phase 4/5 能力 & 實機 GPU 驗收**：在 `EcsWorkbenchView` 檢視器開放分鏡編輯／試映（`critiqueCutsceneAesthetics`）、`CameraRigDirector` 鏡頭預設與 `computeRoomFovMask` 視野預覽；為 `PA-14` / `PA-15` 編排首支過場演出並以本機瀏覽器 / `chrome-devtools` MCP 實測 WebGPU/WebGL2。
-2. **工作站雲端發佈 UI 與正式環境佈建**：在 `EcsWorkbenchView` 串接 `CloudSyncClient` 提供「登入與一鍵發佈複製 `?play=<slug>`」，並依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase、Cloudflare R2 (`pixer-assets`) 與 Workers。
+## 建議下一階段任務（PR 合入 & Cloud 聯調）
+1. **合入 PR（`feat/swarm-p0-p1-hardening` → `main`）**：推送分支並確認 GitHub Actions CI 全綠後合入 `main`。
+2. **正式環境雲端佈建 / BYOK AI 生圖**：依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Cloudflare R2 + Supabase 與實測 `?play=<slug>` 遠端同步，或選配接橋外部生圖 API 至 Pixel Forge。

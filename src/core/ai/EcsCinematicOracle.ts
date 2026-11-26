@@ -1,9 +1,11 @@
 import { EcsCartridgeRuntime } from '../ecs/EcsCartridgeRuntime.ts';
 import {
   resolveScreenAnchorNorm,
+  solveToricTwoShotInto,
   type EcsCutsceneShotDef,
   type EcsScreenAnchor,
   type EcsShotSize,
+  type ToricTwoShotSolution,
 } from '../ecs/EcsCinematicDirector.ts';
 import type { EcsProjectV2 } from '../ecs/EcsProjectSchema.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../types/WorldTypes.ts';
@@ -114,22 +116,32 @@ export function critiqueCutsceneAesthetics(
   for (let sIdx = 0; sIdx < cutscene.shots.length; sIdx++) {
     const shot = cutscene.shots[sIdx];
     const shotFrames = Math.max(6, Math.round(shot.durationSec * 60));
-    const sampleFrame = Math.max(2, Math.floor(shotFrames * 0.65));
+    const f25 = Math.max(1, Math.min(shotFrames - 1, Math.floor(shotFrames * 0.25)));
+    const f55 = Math.max(1, Math.min(shotFrames - 1, Math.floor(shotFrames * 0.55)));
+    const f85 = Math.max(1, Math.min(shotFrames - 2, Math.floor(shotFrames * 0.85)));
+    const sampleTargets: number[] = [];
+    for (const cand of [f25, f55, f85]) {
+      if (!sampleTargets.includes(cand)) sampleTargets.push(cand);
+    }
 
-    let sampled = false;
+    const samples: EcsShotAestheticAudit[] = [];
+    let midSample: EcsShotAestheticAudit | null = null;
+
     for (let f = 0; f < shotFrames; f++) {
-      if (dir.getPhase() === 'playing_shots' && dir.getActiveShotIndex() > sIdx) {
+      if (dir.getPhase() !== 'playing_shots' || dir.getActiveShotIndex() > sIdx) {
         break;
       }
       runtime.step(dt, emptyIn, DEFAULT_RUNTIME_PARAMS);
       framesSimulated++;
 
-      if (!sampled && (f === sampleFrame || f === shotFrames - 1)) {
-        sampled = true;
+      const isTarget = sampleTargets.includes(f);
+      const endedEarly = dir.getPhase() !== 'playing_shots' || dir.getActiveShotIndex() > sIdx;
+      if (isTarget || (samples.length === 0 && (f === shotFrames - 1 || endedEarly))) {
         const audit = evaluateShotAtFrame(
           shot,
           sIdx,
           sIdx > 0 ? cutscene.shots[sIdx - 1] : null,
+          project,
           runtime,
           vpW,
           vpH,
@@ -138,40 +150,162 @@ export function critiqueCutsceneAesthetics(
           actorB,
           expectedUv,
         );
-        if (audit.secondaryScreenU !== undefined) {
-          prevTwoShotAxisSign = audit.secondaryScreenU >= audit.subjectScreenU ? 1 : -1;
+        samples.push(audit);
+        if (f === f55 || midSample === null) {
+          if (f === f55) midSample = audit;
         }
-        shotAudits.push(audit);
-        asciiStoryboard.push(audit.asciiViewfinder);
-        for (let k = 0; k < audit.issues.length; k++) {
-          suggestions.push(`[Shot #${sIdx + 1} '${shot.id}'] ${audit.issues[k]}`);
+      }
+    }
+
+    const rep = midSample ?? samples[Math.floor(samples.length / 2)];
+    if (rep) {
+      let worstOcclusion = rep.occlusionScore;
+      const mergedIssues = [...rep.issues];
+      for (let i = 0; i < samples.length; i++) {
+        const smp = samples[i];
+        if (smp.occlusionScore < worstOcclusion) {
+          worstOcclusion = smp.occlusionScore;
         }
+        if (smp !== rep) {
+          for (let k = 0; k < smp.issues.length; k++) {
+            const iss = smp.issues[k];
+            if (
+              (iss.includes('occluded by') || iss.includes('near/outside screen edge')) &&
+              !mergedIssues.includes(iss)
+            ) {
+              mergedIssues.push(iss);
+            }
+          }
+        }
+      }
+
+      if (worstOcclusion !== rep.occlusionScore || mergedIssues.length !== rep.issues.length) {
+        rep.occlusionScore = worstOcclusion;
+        rep.issues = mergedIssues;
+        rep.shotScore = Math.round(
+          rep.occlusionScore * 0.32 +
+            rep.compositionScore * 0.30 +
+            rep.axisContinuityScore * 0.18 +
+            rep.dramaturgyScore * 0.20,
+        );
+        rep.asciiViewfinder = renderAsciiViewfinderCard(
+          sIdx,
+          shot,
+          rep.shotSize,
+          rep.anchor,
+          rep.subjectScreenU,
+          rep.subjectScreenV,
+          rep.secondaryScreenU,
+          rep.secondaryScreenV,
+          rep.cameraZoom,
+          rep.shotScore,
+        );
+      }
+
+      if (rep.secondaryScreenU !== undefined) {
+        prevTwoShotAxisSign = rep.secondaryScreenU >= rep.subjectScreenU ? 1 : -1;
+      }
+      shotAudits.push(rep);
+      asciiStoryboard.push(rep.asciiViewfinder);
+      for (let k = 0; k < rep.issues.length; k++) {
+        suggestions.push(`[Shot #${sIdx + 1} '${shot.id}'] ${rep.issues[k]}`);
       }
     }
   }
 
-  // Step through Phase-3 Seamless Spring Handback and measure convergence back to gameplay camera
+  // Step through Phase-3 Seamless Spring Handback and measure convergence back to live gameplay camera
   const handbackSec = Math.max(0.15, cutscene.handbackDurationSec ?? 0.45);
-  const handbackFrames = Math.ceil((handbackSec + 0.25) * 60);
+  const handbackFrames = Math.ceil((handbackSec * 1.65 + 0.15) * 60);
   for (let f = 0; f < handbackFrames; f++) {
     runtime.step(dt, emptyIn, DEFAULT_RUNTIME_PARAMS);
     framesSimulated++;
     if (dir.getPhase() === 'idle') break;
   }
 
-  // Measure handback residual vs canonical hero camera
+  // Measure handback residual vs director's live gameplay target (hero + legitimate lead-room + boss Toric framing)
   dir.resolveSubjectInWorld('hero', runtime.world, vpW * 0.5, vpH * 0.5, actorA);
   const room = wm.getActiveRoom();
   const ts = project.worldMap?.tileSize ?? 32;
   const worldW = room ? room.cols * ts : vpW;
   const worldH = room ? room.rows * ts : vpH;
-  const idealHeroCamX = Math.max(0, Math.min(Math.max(0, worldW - vpW), actorA[0] - vpW * 0.5));
-  const idealHeroCamY = Math.max(0, Math.min(Math.max(0, worldH - vpH), actorA[1] - vpH * 0.5));
+  const heroCx = actorA[0];
+  const heroCy = actorA[1];
+
+  let bossCx: number | null = null;
+  let bossCy: number | null = null;
+  const aiProfiles = project.worldMap?.aiProfiles;
+  if (aiProfiles) {
+    const core = runtime.world.core;
+    const tagStore = core.getStore(core.components.Tag);
+    for (let i = 0; i < tagStore.size(); i++) {
+      const td = tagStore.getDenseDataAt(i);
+      if (aiProfiles[td.tag]?.isBoss) {
+        const bTr = core.getComponent(tagStore.getDenseEntityAt(i), core.components.Transform2D);
+        if (bTr) {
+          bossCx = bTr.x + bTr.w * 0.5;
+          bossCy = bTr.y + bTr.h * 0.5;
+          break;
+        }
+      }
+    }
+  }
+
+  let targetZoom = 1.0;
+  let bossBlend = 0;
+  const toricOut: ToricTwoShotSolution = {
+    centerX: heroCx,
+    centerY: heroCy,
+    zoom: 1,
+    axisSign: 1,
+    axisPreserved: true,
+  };
+  if (bossCx !== null && bossCy !== null) {
+    const bossDist = Math.hypot(bossCx - heroCx, bossCy - heroCy);
+    if (bossDist < 360) {
+      bossBlend = Math.max(0, Math.min(0.65, (1 - bossDist / 360) * 0.85));
+      solveToricTwoShotInto(
+        heroCx,
+        heroCy,
+        bossCx,
+        bossCy,
+        vpW,
+        vpH,
+        dir.establishedAxisSign,
+        0.62,
+        toricOut,
+      );
+      targetZoom = 1.0 * (1 - bossBlend * 0.5) + toricOut.zoom * (bossBlend * 0.5);
+    }
+  }
+
+  const baseCenterX = heroCx * (1 - bossBlend) + toricOut.centerX * bossBlend;
+  const baseCenterY = heroCy * (1 - bossBlend) + toricOut.centerY * bossBlend;
+  const baseCamX = clampAxisOracle(baseCenterX - vpW * 0.5, vpW, worldW, targetZoom);
+  const baseCamY = clampAxisOracle(baseCenterY - vpH * 0.5, vpH, worldH, targetZoom);
+
+  // Legitimate idle lead-room look-ahead is bounded by |dx|<=14, |dy|<=10 scaled by (1 - bossBlend)
+  const impliedLeadX =
+    bossBlend < 0.99 ? Math.max(-14, Math.min(14, (dir.cameraX - baseCamX) / (1 - bossBlend))) : 0;
+  const impliedLeadY =
+    bossBlend < 0.99 ? Math.max(-10, Math.min(10, (dir.cameraY - baseCamY) / (1 - bossBlend))) : 0;
+  const idealHeroCamX = clampAxisOracle(
+    (heroCx + impliedLeadX) * (1 - bossBlend) + toricOut.centerX * bossBlend - vpW * 0.5,
+    vpW,
+    worldW,
+    targetZoom,
+  );
+  const idealHeroCamY = clampAxisOracle(
+    (heroCy + impliedLeadY) * (1 - bossBlend) + toricOut.centerY * bossBlend - vpH * 0.5,
+    vpH,
+    worldH,
+    targetZoom,
+  );
 
   const handbackResidualPx = Math.hypot(dir.cameraX - idealHeroCamX, dir.cameraY - idealHeroCamY);
-  const handbackResidualZoom = Math.abs(dir.cameraZoom - 1.0);
+  const handbackResidualZoom = Math.abs(dir.cameraZoom - targetZoom);
+  const phasePenalty = dir.getPhase() === 'idle' ? 0 : 25;
   const handbackContinuityScore = Math.round(
-    Math.max(0, Math.min(100, 100 - handbackResidualPx * 0.8 - handbackResidualZoom * 120)),
+    Math.max(0, Math.min(100, 100 - handbackResidualPx * 0.8 - handbackResidualZoom * 120 - phasePenalty)),
   );
 
   if (handbackContinuityScore < 80) {
@@ -218,10 +352,21 @@ export function critiqueCutsceneAesthetics(
   };
 }
 
+function clampAxisOracle(pos: number, viewSpan: number, worldSpan: number, zoom = 1.0): number {
+  const effSpan = viewSpan / Math.max(0.25, zoom);
+  if (effSpan >= worldSpan) {
+    return (worldSpan - viewSpan) * 0.5;
+  }
+  const minPos = (effSpan - viewSpan) * 0.5;
+  const maxPos = worldSpan - (viewSpan + effSpan) * 0.5;
+  return Math.max(minPos, Math.min(maxPos, pos));
+}
+
 function evaluateShotAtFrame(
   shot: EcsCutsceneShotDef,
   shotIndex: number,
   prevShot: EcsCutsceneShotDef | null,
+  project: EcsProjectV2,
   runtime: EcsCartridgeRuntime,
   vpW: number,
   vpH: number,
@@ -264,26 +409,45 @@ function evaluateShotAtFrame(
     vB = 0.5 + (actorB[1] - camCenterY) / effH;
   }
 
-  // 1. HD-2D Wall Extrusion Occlusion Audit
+  // 1. HD-2D Wall Extrusion Occlusion Audit (aware of hd2d_3d pitchDeg & wallHeightScale, and secondary subject in two_shot)
   let occlusionScore = 100;
-  for (let i = 0; i < wm.outTiles.length; i++) {
-    const t = wm.outTiles[i];
-    const ext = t.extrudeH ?? 0;
-    if (ext <= 8) continue;
-    // South-wall occlusion: a wall tile immediately south of the actor (t.y > subAy) whose extruded top reaches above subAy
-    const horizOverlap = subAx >= t.x - 6 && subAx <= t.x + t.w + 6;
-    const vertOccludes = t.y > subAy - 4 && t.y - ext < subAy + 6;
-    if (horizOverlap && vertOccludes) {
-      occlusionScore -= 45;
-      issues.push(
-        `Primary subject is partially occluded by extruded south wall at (${t.x}, ${t.y}, extrudeH=${ext}).`,
-      );
-      break;
+  const isMode3d = (project.projection?.mode ?? 'hd2d_iso') === 'hd2d_3d';
+  const wallHeightScale = project.projection?.wallHeightScale ?? 1.25;
+  const basePitchDeg = project.projection?.pitchDeg ?? 42;
+  const livePitchDeg = Math.max(20, Math.min(72, basePitchDeg + dir.pitchDeltaDeg));
+  const pitchRad = (livePitchDeg * Math.PI) / 180;
+  const pitchTan = Math.max(0.35, Math.tan(pitchRad));
+
+  const checkWallOcclusion = (wx: number, wy: number, label: 'Primary' | 'Secondary', penalty: number): void => {
+    for (let i = 0; i < wm.outTiles.length; i++) {
+      const t = wm.outTiles[i];
+      const ext = t.extrudeH ?? 0;
+      if (ext <= 8) continue;
+      const reach = isMode3d ? (ext * wallHeightScale) / pitchTan : ext;
+      // South-wall occlusion: a wall tile immediately south of the actor (t.y > wy) whose projected top reaches above wy
+      const horizOverlap = wx >= t.x - 6 && wx <= t.x + t.w + 6;
+      const vertOccludes = t.y > wy - 4 && t.y - reach < wy + 6;
+      if (horizOverlap && vertOccludes) {
+        occlusionScore -= penalty;
+        issues.push(
+          `${label} subject is partially occluded by extruded south wall at (${t.x}, ${t.y}, extrudeH=${ext}, reach=${reach.toFixed(1)}).`,
+        );
+        break;
+      }
     }
-  }
+  };
+
+  checkWallOcclusion(subAx, subAy, 'Primary', 45);
   if (uA < 0.06 || uA > 0.94 || vA < 0.08 || vA > 0.92) {
     occlusionScore -= 50;
     issues.push(`Primary subject is near/outside screen edge (u=${uA.toFixed(2)}, v=${vA.toFixed(2)}).`);
+  }
+  if (anchor === 'two_shot' && uB !== undefined && vB !== undefined) {
+    checkWallOcclusion(actorB[0], actorB[1], 'Secondary', 40);
+    if (uB < 0.06 || uB > 0.94 || vB < 0.08 || vB > 0.92) {
+      occlusionScore -= 45;
+      issues.push(`Secondary subject is near/outside screen edge (u=${uB.toFixed(2)}, v=${vB.toFixed(2)}).`);
+    }
   }
   occlusionScore = Math.max(0, Math.min(100, occlusionScore));
 

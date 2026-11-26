@@ -1,4 +1,5 @@
 import type { EcsCartridgeRuntime } from '../core/ecs/EcsCartridgeRuntime.ts';
+import type { EcsCutsceneDef } from '../core/ecs/EcsCutsceneSchema.ts';
 import type {
   EcsAmbientParticleTheme,
   EcsProjectionMode,
@@ -7,6 +8,13 @@ import type {
 import type { EcsStudioSession } from '../core/ecs/EcsStudioSession.ts';
 import { DEFAULT_HD2D_3D_FOV_DEG, DEFAULT_HD2D_3D_PITCH_DEG } from '../core/math/Perspective3DMath.ts';
 import { createWorkbenchSliderRow, type WorkbenchDiagReport } from './EcsWorkbenchCatalog.ts';
+
+export interface SceneInspectorOptions {
+  onPlayCutscene?: (cutsceneId: string) => void;
+  onCritiqueCutscene?: (cutsceneId: string) => void;
+  fovPreviewEnabled?: boolean;
+  onToggleFovPreview?: () => void;
+}
 
 /** Renders the diagnostic banner produced by Spatial Oracle / External Import into the right inspector. */
 export function buildDiagReportBox(report: WorkbenchDiagReport): HTMLElement {
@@ -25,17 +33,161 @@ export function buildDiagReportBox(report: WorkbenchDiagReport): HTMLElement {
   return diagBox;
 }
 
+function buildSampleCutscene(proj: EcsProjectV2, runtime: EcsCartridgeRuntime): EcsCutsceneDef {
+  const existing = new Set((proj.cutscenes ?? []).map((c) => c.id));
+  let seq = 1;
+  let csId = 'sample_preview_pv';
+  while (existing.has(csId)) {
+    seq++;
+    csId = `sample_preview_pv_${seq}`;
+  }
+  const activeRoomId = runtime.getActiveRoomId() || proj.worldMap?.startRoomId || '';
+  const hasHero = proj.entities.some((e) => e.id === 'hero' || e.components.tag === 'hero');
+  const roomEntity = proj.entities.find((e) => !activeRoomId || !e.roomId || e.roomId === activeRoomId);
+  const primarySubject = hasHero ? 'hero' : (roomEntity?.id ?? proj.entities[0]?.id ?? 'point');
+  const portraitSprite = Object.values(proj.customSprites ?? {}).find(
+    (s) => (s.width >= 120 && s.height >= 140) || s.id.includes('portrait'),
+  );
+
+  return {
+    id: csId,
+    name: seq === 1 ? '引擎運鏡範例 PV' : `引擎運鏡範例 PV #${seq}`,
+    trigger: 'manual',
+    ...(activeRoomId ? { roomId: activeRoomId } : {}),
+    handbackDurationSec: 0.45,
+    skippable: true,
+    shots: [
+      {
+        id: 'shot_establishing',
+        durationSec: 1.0,
+        subject: primarySubject,
+        shotSize: 'WS',
+        anchor: 'lead_room',
+        motion: 'spring',
+        motivation: 'scene_establishing',
+        splashTitle: proj.meta.title.slice(0, 24) || 'SCENE PREVIEW',
+        splashSubtitle: 'HD-2D DIRECTOR PREVIEW',
+        ...(portraitSprite
+          ? {
+              speaker: portraitSprite.name ?? '角色',
+              portraitSpriteId: portraitSprite.id,
+              portraitSide: 'left' as const,
+              subtitle: 'Pass 1B 立繪與對話欄同步渲染中...',
+            }
+          : {}),
+        letterbox: 1.0,
+      },
+      {
+        id: 'shot_focus_push',
+        durationSec: 1.1,
+        subject: primarySubject,
+        shotSize: 'MS',
+        anchor: portraitSprite ? 'right_third' : 'center',
+        motion: 'push_in',
+        motivation: 'character_focus',
+        ...(portraitSprite
+          ? {
+              speaker: portraitSprite.name ?? '角色',
+              portraitSpriteId: portraitSprite.id,
+              portraitSide: 'left' as const,
+            }
+          : {}),
+        subtitle: '鏡頭推進預覽中...',
+        letterbox: 1.0,
+      },
+    ],
+  };
+}
+
 /**
  * Builds the Right-Pane Scene-Level Inspector sections:
- * HD-2D 3D/Iso/Ortho projection controls, shadow/water/dimension toggles,
- * GPU ambient particles, DoF/Juice sliders, and transactional revision history.
+ * Phase 6 Cutscene Director & 5-Axis Critic, HD-2D 3D/Iso/Ortho projection controls,
+ * FOV Fog-of-War & atmosphere toggles, GPU ambient particles, DoF/Juice sliders, and revision history.
  */
 export function buildSceneAndHistorySections(
   proj: EcsProjectV2,
   session: EcsStudioSession,
   runtime: EcsCartridgeRuntime,
   onPreviewDirty: () => void,
+  options: SceneInspectorOptions = {},
 ): HTMLElement[] {
+  // 0. Phase 6 Cutscene Director & 5-Axis Aesthetic Critic Panel
+  const cutsceneSec = document.createElement('div');
+  cutsceneSec.className = 'p7-section';
+  const cutsceneHead = document.createElement('div');
+  cutsceneHead.className = 'p7-section-head';
+  const cutsceneTitle = document.createElement('h3');
+  cutsceneTitle.className = 'p7-section-title';
+  cutsceneTitle.textContent = '電影級過場導演與審美預言機';
+
+  const addSampleBtn = document.createElement('button');
+  addSampleBtn.type = 'button';
+  addSampleBtn.className = 'p7-btn p7-btn-xs p7-btn-accent';
+  addSampleBtn.setAttribute('data-testid', 'cutscene-add-sample');
+  addSampleBtn.textContent = '+ 新增範例過場';
+  addSampleBtn.addEventListener('click', () => {
+    const sample = buildSampleCutscene(session.getProject(), runtime);
+    session.dispatch({ type: 'upsert_cutscene', cutscene: sample });
+  });
+  cutsceneHead.append(cutsceneTitle, addSampleBtn);
+  cutsceneSec.appendChild(cutsceneHead);
+
+  const cutscenes = proj.cutscenes ?? [];
+  if (cutscenes.length === 0) {
+    const emptyCs = document.createElement('p');
+    emptyCs.className = 'p7-empty-note';
+    emptyCs.textContent = '尚未建立過場腳本，可點擊「+ 新增範例過場」或透過 MCP 寫入分鏡。';
+    cutsceneSec.appendChild(emptyCs);
+  } else {
+    for (const cs of cutscenes) {
+      const row = document.createElement('div');
+      row.className = 'p7-cutscene-row';
+
+      const meta = document.createElement('div');
+      meta.className = 'p7-cutscene-meta';
+      const nameEl = document.createElement('strong');
+      nameEl.className = 'p7-item-title';
+      nameEl.textContent = cs.name;
+      const subEl = document.createElement('span');
+      subEl.className = 'p7-meta-line p7-mono';
+      const portraitShot = cs.shots.find((s) => s.portraitSpriteId);
+      subEl.textContent =
+        `${cs.shots.length} 鏡頭 · ${cs.trigger ?? 'manual'}` +
+        (cs.roomId ? ` · ${cs.roomId}` : '') +
+        (portraitShot?.portraitSpriteId ? ` · 立繪:${portraitShot.portraitSpriteId}` : '');
+      meta.append(nameEl, subEl);
+
+      const acts = document.createElement('div');
+      acts.className = 'p7-prefab-actions';
+
+      const playBtn = document.createElement('button');
+      playBtn.type = 'button';
+      playBtn.className = 'p7-btn p7-btn-xs p7-btn-accent';
+      playBtn.setAttribute('data-testid', `cutscene-play-${cs.id}`);
+      playBtn.textContent = '試映';
+      playBtn.addEventListener('click', () => options.onPlayCutscene?.(cs.id));
+
+      const criticBtn = document.createElement('button');
+      criticBtn.type = 'button';
+      criticBtn.className = 'p7-btn p7-btn-xs';
+      criticBtn.setAttribute('data-testid', `cutscene-critic-${cs.id}`);
+      criticBtn.textContent = '審美評分';
+      criticBtn.addEventListener('click', () => options.onCritiqueCutscene?.(cs.id));
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'p7-btn p7-btn-xs p7-btn-danger';
+      delBtn.textContent = '刪除';
+      delBtn.addEventListener('click', () => {
+        session.dispatch({ type: 'remove_cutscene', cutsceneId: cs.id });
+      });
+
+      acts.append(playBtn, criticBtn, delBtn);
+      row.append(meta, acts);
+      cutsceneSec.appendChild(row);
+    }
+  }
+
   const atmSec = document.createElement('div');
   atmSec.className = 'p7-section';
   const atmTitle = document.createElement('h3');
@@ -71,8 +223,8 @@ export function buildSceneAndHistorySections(
   projSliders.append(
     createWorkbenchSliderRow(
       '相機俯角 Pitch',
-      22,
-      70,
+      -45,
+      85,
       1,
       proj.projection?.pitchDeg ?? DEFAULT_HD2D_3D_PITCH_DEG,
       (v) => `${Math.round(v)}°`,
@@ -81,6 +233,45 @@ export function buildSceneAndHistorySections(
         onPreviewDirty();
       },
       (v) => commitProj({ pitchDeg: v }),
+    ),
+    createWorkbenchSliderRow(
+      '水平旋轉 Yaw',
+      0,
+      360,
+      1,
+      proj.projection?.yawDeg ?? 0,
+      (v) => `${Math.round(v)}°`,
+      (v) => {
+        runtime.patchLiveProjection({ yawDeg: v });
+        onPreviewDirty();
+      },
+      (v) => commitProj({ yawDeg: v }),
+    ),
+    createWorkbenchSliderRow(
+      '焦點高度 Target Z',
+      0,
+      224,
+      4,
+      proj.projection?.camCenterZ ?? 0,
+      (v) => `${Math.round(v)}px`,
+      (v) => {
+        runtime.patchLiveProjection({ camCenterZ: v });
+        onPreviewDirty();
+      },
+      (v) => commitProj({ camCenterZ: v }),
+    ),
+    createWorkbenchSliderRow(
+      '方向光陰影強度',
+      0,
+      0.9,
+      0.05,
+      proj.projection?.shadowMapStrength ?? 0.45,
+      (v) => `${Math.round(v * 100)}%`,
+      (v) => {
+        runtime.patchLiveProjection({ shadowMapStrength: v });
+        onPreviewDirty();
+      },
+      (v) => commitProj({ shadowMapStrength: v }),
     ),
     createWorkbenchSliderRow(
       '透視視野 FOV',
@@ -152,7 +343,17 @@ export function buildSceneAndHistorySections(
   toggleShiftBtn.addEventListener('click', () => {
     session.dispatch({ type: 'set_projection', patch: { allowDimensionShift: !shiftOn } });
   });
-  waterRow.append(toggleShadowBtn, toggleWaterBtn, toggleShiftBtn);
+
+  const fovOn = Boolean(options.fovPreviewEnabled);
+  const toggleFovBtn = document.createElement('button');
+  toggleFovBtn.type = 'button';
+  toggleFovBtn.className = fovOn ? 'p7-btn p7-btn-accent' : 'p7-btn';
+  toggleFovBtn.setAttribute('data-testid', 'toggle-fov-preview');
+  toggleFovBtn.textContent = fovOn ? '視野遮蔽預覽 (FOV Fog)：開' : '視野遮蔽預覽 (FOV Fog)：關';
+  toggleFovBtn.addEventListener('click', () => {
+    options.onToggleFovPreview?.();
+  });
+  waterRow.append(toggleShadowBtn, toggleWaterBtn, toggleShiftBtn, toggleFovBtn);
 
   const particleField = document.createElement('div');
   particleField.className = 'p7-field';
@@ -224,6 +425,7 @@ export function buildSceneAndHistorySections(
       (v) => `${v.toFixed(1)}×`,
       (v) => {
         runtime.patchLiveAtmosphere({ juiceScale: v });
+        onPreviewDirty();
       },
       (v) => commitAtm({ juiceScale: v }),
     ),
@@ -246,5 +448,5 @@ export function buildSceneAndHistorySections(
     histSec.appendChild(row);
   }
 
-  return [atmSec, histSec];
+  return [cutsceneSec, atmSec, histSec];
 }

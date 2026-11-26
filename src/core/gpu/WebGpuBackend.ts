@@ -1,23 +1,33 @@
 import {
   buildCamera3DViewProjMatrix,
+  buildDirectionalLightViewProjMatrix,
   computeCamera3D,
   createComputedCamera3D,
 } from '../math/Perspective3DMath.ts';
 import { appLogger } from '../runtime/AppLogger.ts';
 import {
   FLOATS_PER_INSTANCE,
+  FLOATS_PER_MESH3D_VERTEX,
   FLOATS_PER_QUAD3D,
   GAME_H,
   GAME_W,
   MAX_ATLAS_PAGES,
   MAX_DYNAMIC_LIGHTS,
   MAX_INSTANCES_PER_PASS,
+  MAX_LINE3D_VERTICES,
+  MAX_MESH3D_ALPHA_INDICES,
+  MAX_MESH3D_ALPHA_VERTICES,
+  MAX_MESH3D_INDICES,
+  MAX_MESH3D_VERTICES,
   MAX_QUAD3D_INSTANCES,
   OCCLUSION_GRID_MAX,
   OVERSCAN_PAD,
+  SHADOW_MAP_SIZE,
   type AtlasPageData,
+  type GpuCamera3DState,
   type GpuOcclusionState,
   type IGpuBackend,
+  type Mesh3DPassData,
   type Quad3DPassData,
   type SkyGradient,
 } from './GpuTypes.ts';
@@ -27,6 +37,27 @@ const MAX_QUAD3D_BLEND_INSTANCES = 4096;
 
 const DEFAULT_PALETTE_ROWS = 8;
 const LUT_ALIGNED_ROW_BYTES = 256;
+
+interface Mesh3dGpuResources {
+  shadowDepthTexture: GPUTexture;
+  shadowDepthView: GPUTextureView;
+  shadowSampler: GPUSampler;
+  shadowBindGroup: GPUBindGroup;
+  shadowMeshPipeline: GPURenderPipeline;
+  shadowQuadPipeline: GPURenderPipeline;
+  meshOpaquePipeline: GPURenderPipeline;
+  meshAlphaPipeline: GPURenderPipeline;
+  line3dPipeline: GPURenderPipeline;
+  opaqueVertBuf: GPUBuffer;
+  opaqueIdxBuf: GPUBuffer;
+  alphaVertBuf: GPUBuffer;
+  alphaIdxBuf: GPUBuffer;
+  lineVertBuf: GPUBuffer;
+  quadViewOpaqueUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer];
+  quadViewBlendUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer];
+  quadViewOpaqueBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup];
+  quadViewBlendBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup];
+}
 
 interface PostRenderTargets {
   w: number;
@@ -72,14 +103,17 @@ export class WebGpuBackend implements IGpuBackend {
   private skyUniformBuffer: GPUBuffer;
   private skyUniformData = new Float32Array(16);
   private lightUniformBuffer: GPUBuffer;
+  private overlayLightUniformBuffer: GPUBuffer;
   private lightUniformData = new Float32Array(200);
   private quad3dOpaqueUniBuf: GPUBuffer;
   private quad3dBlendUniBuf: GPUBuffer;
   private quad3dOpaqueBindGroup: GPUBindGroup;
   private quad3dBlendBindGroup: GPUBindGroup;
-  private quad3dUniformData = new Float32Array(24);
+  private quad3dUniformData = new Float32Array(72);
   private readonly cam3dScratch = createComputedCamera3D();
   private readonly viewProj3d = new Float32Array(16);
+  private readonly lightViewProj3d = new Float32Array(16);
+  private readonly mesh3dRes: Mesh3dGpuResources;
   private alphaBuffer: GPUBuffer;
   private addBuffer: GPUBuffer;
   private quad3dOpaqueBuffer: GPUBuffer;
@@ -94,6 +128,7 @@ export class WebGpuBackend implements IGpuBackend {
   private nearestSampler: GPUSampler;
   private pass1BindGroupLayout: GPUBindGroupLayout;
   private pass1BindGroup: GPUBindGroup;
+  private pass1OverlayBindGroup: GPUBindGroup;
   private postBindGroupLayout: GPUBindGroupLayout;
   private postDownBuf: GPUBuffer;
   private postBlurHBuf: GPUBuffer;
@@ -132,6 +167,7 @@ export class WebGpuBackend implements IGpuBackend {
     compositePipeline: GPURenderPipeline,
     skyUniformBuffer: GPUBuffer,
     lightUniformBuffer: GPUBuffer,
+    overlayLightUniformBuffer: GPUBuffer,
     quad3dOpaqueUniBuf: GPUBuffer,
     quad3dBlendUniBuf: GPUBuffer,
     quad3dOpaqueBindGroup: GPUBindGroup,
@@ -150,6 +186,7 @@ export class WebGpuBackend implements IGpuBackend {
     nearestSampler: GPUSampler,
     pass1BindGroupLayout: GPUBindGroupLayout,
     pass1BindGroup: GPUBindGroup,
+    pass1OverlayBindGroup: GPUBindGroup,
     postBindGroupLayout: GPUBindGroupLayout,
     postDownBuf: GPUBuffer,
     postBlurHBuf: GPUBuffer,
@@ -159,6 +196,7 @@ export class WebGpuBackend implements IGpuBackend {
     atlasLayerCount: number,
     atlasW: number,
     atlasH: number,
+    mesh3dRes: Mesh3dGpuResources,
     onLost?: () => void,
   ) {
     this.device = device;
@@ -176,6 +214,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.compositePipeline = compositePipeline;
     this.skyUniformBuffer = skyUniformBuffer;
     this.lightUniformBuffer = lightUniformBuffer;
+    this.overlayLightUniformBuffer = overlayLightUniformBuffer;
     this.quad3dOpaqueUniBuf = quad3dOpaqueUniBuf;
     this.quad3dBlendUniBuf = quad3dBlendUniBuf;
     this.quad3dOpaqueBindGroup = quad3dOpaqueBindGroup;
@@ -194,6 +233,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.nearestSampler = nearestSampler;
     this.pass1BindGroupLayout = pass1BindGroupLayout;
     this.pass1BindGroup = pass1BindGroup;
+    this.pass1OverlayBindGroup = pass1OverlayBindGroup;
     this.postBindGroupLayout = postBindGroupLayout;
     this.postDownBuf = postDownBuf;
     this.postBlurHBuf = postBlurHBuf;
@@ -203,6 +243,7 @@ export class WebGpuBackend implements IGpuBackend {
     this.atlasLayerCount = atlasLayerCount;
     this.atlasW = atlasW;
     this.atlasH = atlasH;
+    this.mesh3dRes = mesh3dRes;
     this.onLostCallback = onLost;
 
     void device.lost.then((info) => {
@@ -243,6 +284,32 @@ export class WebGpuBackend implements IGpuBackend {
       { width, height, depthOrArrayLayers: 1 },
     );
     return buf;
+  }
+
+  private static buildPass1BindGroup(
+    device: GPUDevice,
+    layout: GPUBindGroupLayout,
+    skyUniformBuffer: GPUBuffer,
+    atlasTexture: GPUTexture,
+    atlasSampler: GPUSampler,
+    indexAtlasTexture: GPUTexture,
+    paletteLutTexture: GPUTexture,
+    lightBuffer: GPUBuffer,
+    occlusionTexture: GPUTexture,
+    layerCount: number,
+  ): GPUBindGroup {
+    return device.createBindGroup({
+      layout,
+      entries: [
+        { binding: 0, resource: { buffer: skyUniformBuffer } },
+        { binding: 1, resource: atlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
+        { binding: 2, resource: atlasSampler },
+        { binding: 3, resource: indexAtlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
+        { binding: 4, resource: paletteLutTexture.createView() },
+        { binding: 5, resource: { buffer: lightBuffer } },
+        { binding: 6, resource: occlusionTexture.createView() },
+      ],
+    });
   }
 
   private static writePaddedLutTexture(
@@ -411,6 +478,14 @@ export class WebGpuBackend implements IGpuBackend {
         size: 800,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      const overlayLightUniformBuffer = device.createBuffer({
+        size: 800,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      const zeroOverlayLights = new Float32Array(200);
+      zeroOverlayLights[6] = 32;
+      zeroOverlayLights[7] = 0.35;
+      device.queue.writeBuffer(overlayLightUniformBuffer, 0, zeroOverlayLights);
       const makePostBuf = () =>
         device.createBuffer({
           size: 80,
@@ -432,11 +507,11 @@ export class WebGpuBackend implements IGpuBackend {
       });
 
       const quad3dOpaqueUniBuf = device.createBuffer({
-        size: 96,
+        size: 288,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       const quad3dBlendUniBuf = device.createBuffer({
-        size: 96,
+        size: 288,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       const quad3dOpaqueBuffer = device.createBuffer({
@@ -452,6 +527,40 @@ export class WebGpuBackend implements IGpuBackend {
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       });
 
+      const shadowDepthTexture = device.createTexture({
+        size: [SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1],
+        format: 'depth24plus',
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+      });
+      const shadowDepthView = shadowDepthTexture.createView();
+      const shadowSampler = device.createSampler({
+        compare: 'less-equal',
+        magFilter: 'linear',
+        minFilter: 'linear',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge',
+      });
+      const meshOpaqueVertBuf = device.createBuffer({
+        size: MAX_MESH3D_VERTICES * FLOATS_PER_MESH3D_VERTEX * 4,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      const meshOpaqueIdxBuf = device.createBuffer({
+        size: MAX_MESH3D_INDICES * 4,
+        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+      });
+      const meshAlphaVertBuf = device.createBuffer({
+        size: MAX_MESH3D_ALPHA_VERTICES * FLOATS_PER_MESH3D_VERTEX * 4,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      const meshAlphaIdxBuf = device.createBuffer({
+        size: MAX_MESH3D_ALPHA_INDICES * 4,
+        usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+      });
+      const line3dVertBuf = device.createBuffer({
+        size: MAX_LINE3D_VERTICES * FLOATS_PER_MESH3D_VERTEX * 4,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+
       const pass1BindGroupLayout = device.createBindGroupLayout({
         entries: [
           { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
@@ -463,32 +572,88 @@ export class WebGpuBackend implements IGpuBackend {
           { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         ],
       });
-      const pass1BindGroup = device.createBindGroup({
-        layout: pass1BindGroupLayout,
+      const pass1BindGroup = WebGpuBackend.buildPass1BindGroup(
+        device,
+        pass1BindGroupLayout,
+        skyUniformBuffer,
+        atlasTexture,
+        atlasSampler,
+        indexAtlasTexture,
+        paletteLutTexture,
+        lightUniformBuffer,
+        occlusionTexture,
+        layerCount,
+      );
+      const pass1OverlayBindGroup = WebGpuBackend.buildPass1BindGroup(
+        device,
+        pass1BindGroupLayout,
+        skyUniformBuffer,
+        atlasTexture,
+        atlasSampler,
+        indexAtlasTexture,
+        paletteLutTexture,
+        overlayLightUniformBuffer,
+        occlusionTexture,
+        layerCount,
+      );
+
+      const shadowBindGroupLayout = device.createBindGroupLayout({
         entries: [
-          { binding: 0, resource: { buffer: skyUniformBuffer } },
-          { binding: 1, resource: atlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
-          { binding: 2, resource: atlasSampler },
-          { binding: 3, resource: indexAtlasTexture.createView({ dimension: '2d-array', arrayLayerCount: layerCount }) },
-          { binding: 4, resource: paletteLutTexture.createView() },
-          { binding: 5, resource: { buffer: lightUniformBuffer } },
-          { binding: 6, resource: occlusionTexture.createView() },
+          { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
         ],
+      });
+      const shadowBindGroup = device.createBindGroup({
+        layout: shadowBindGroupLayout,
+        entries: [{ binding: 0, resource: { buffer: quad3dOpaqueUniBuf } }],
       });
 
       const quad3dBindGroupLayout = device.createBindGroupLayout({
         entries: [
           { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+          { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
+          { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'comparison' } },
         ],
       });
-      const quad3dOpaqueBindGroup = device.createBindGroup({
-        layout: quad3dBindGroupLayout,
-        entries: [{ binding: 0, resource: { buffer: quad3dOpaqueUniBuf } }],
-      });
-      const quad3dBlendBindGroup = device.createBindGroup({
-        layout: quad3dBindGroupLayout,
-        entries: [{ binding: 0, resource: { buffer: quad3dBlendUniBuf } }],
-      });
+      const mkQuad3dUniBuf = () =>
+        device.createBuffer({
+          size: 288,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+      const mkQuad3dBindGroup = (buf: GPUBuffer) =>
+        device.createBindGroup({
+          layout: quad3dBindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: buf } },
+            { binding: 1, resource: shadowDepthView },
+            { binding: 2, resource: shadowSampler },
+          ],
+        });
+      const quad3dOpaqueBindGroup = mkQuad3dBindGroup(quad3dOpaqueUniBuf);
+      const quad3dBlendBindGroup = mkQuad3dBindGroup(quad3dBlendUniBuf);
+      const quadViewOpaqueUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer] = [
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+      ];
+      const quadViewBlendUniBufs: readonly [GPUBuffer, GPUBuffer, GPUBuffer, GPUBuffer] = [
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+        mkQuad3dUniBuf(),
+      ];
+      const quadViewOpaqueBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup] = [
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[0]),
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[1]),
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[2]),
+        mkQuad3dBindGroup(quadViewOpaqueUniBufs[3]),
+      ];
+      const quadViewBlendBindGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup, GPUBindGroup] = [
+        mkQuad3dBindGroup(quadViewBlendUniBufs[0]),
+        mkQuad3dBindGroup(quadViewBlendUniBufs[1]),
+        mkQuad3dBindGroup(quadViewBlendUniBufs[2]),
+        mkQuad3dBindGroup(quadViewBlendUniBufs[3]),
+      ];
 
       const postBindGroupLayout = device.createBindGroupLayout({
         entries: [
@@ -502,6 +667,9 @@ export class WebGpuBackend implements IGpuBackend {
 
       const pass1PipelineLayout = device.createPipelineLayout({
         bindGroupLayouts: [pass1BindGroupLayout],
+      });
+      const shadowPipelineLayout = device.createPipelineLayout({
+        bindGroupLayouts: [pass1BindGroupLayout, shadowBindGroupLayout],
       });
       const quad3dPipelineLayout = device.createPipelineLayout({
         bindGroupLayouts: [pass1BindGroupLayout, quad3dBindGroupLayout],
@@ -537,6 +705,18 @@ export class WebGpuBackend implements IGpuBackend {
         ],
       };
 
+      const mesh3dLayout: GPUVertexBufferLayout = {
+        arrayStride: FLOATS_PER_MESH3D_VERTEX * 4,
+        stepMode: 'vertex',
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x4' },
+          { shaderLocation: 1, offset: 16, format: 'float32x4' },
+          { shaderLocation: 2, offset: 32, format: 'float32x4' },
+          { shaderLocation: 3, offset: 48, format: 'float32x4' },
+          { shaderLocation: 4, offset: 64, format: 'float32x4' },
+        ],
+      };
+
       const mrtFormat: GPUTextureFormat = 'rgba8unorm';
       const alphaBlend: GPUBlendState = {
         color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
@@ -555,6 +735,11 @@ export class WebGpuBackend implements IGpuBackend {
         quad3dOpaquePipeline,
         quad3dAlphaPipeline,
         quad3dAddPipeline,
+        shadowMeshPipeline,
+        shadowQuadPipeline,
+        meshOpaquePipeline,
+        meshAlphaPipeline,
+        line3dPipeline,
         bloomDownPipeline,
         bloomBlurPipeline,
         compositePipeline,
@@ -631,6 +816,66 @@ export class WebGpuBackend implements IGpuBackend {
           depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
         }),
         device.createRenderPipelineAsync({
+          layout: shadowPipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsShadowMesh3D', buffers: [mesh3dLayout] },
+          depthStencil: {
+            format: 'depth24plus',
+            depthWriteEnabled: true,
+            depthCompare: 'less-equal',
+            depthBias: 2,
+            depthBiasSlopeScale: 2.0,
+          },
+        }),
+        device.createRenderPipelineAsync({
+          layout: shadowPipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsShadowQuad3D', buffers: [quad3dLayout] },
+          fragment: { module: sceneModule, entryPoint: 'fsShadowQuad3D', targets: [] },
+          depthStencil: {
+            format: 'depth24plus',
+            depthWriteEnabled: true,
+            depthCompare: 'less-equal',
+            depthBias: 2,
+            depthBiasSlopeScale: 2.0,
+          },
+        }),
+        device.createRenderPipelineAsync({
+          layout: quad3dPipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsMesh3D', buffers: [mesh3dLayout] },
+          fragment: {
+            module: sceneModule,
+            entryPoint: 'fsMesh3D',
+            targets: [{ format: mrtFormat }, { format: mrtFormat }],
+          },
+          depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less-equal' },
+        }),
+        device.createRenderPipelineAsync({
+          layout: quad3dPipelineLayout,
+          vertex: { module: sceneModule, entryPoint: 'vsMesh3D', buffers: [mesh3dLayout] },
+          fragment: {
+            module: sceneModule,
+            entryPoint: 'fsMesh3D',
+            targets: [
+              { format: mrtFormat, blend: alphaBlend },
+              { format: mrtFormat, blend: alphaBlend },
+            ],
+          },
+          depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+        }),
+        device.createRenderPipelineAsync({
+          layout: quad3dPipelineLayout,
+          primitive: { topology: 'line-list' },
+          vertex: { module: sceneModule, entryPoint: 'vsMesh3D', buffers: [mesh3dLayout] },
+          fragment: {
+            module: sceneModule,
+            entryPoint: 'fsMesh3D',
+            targets: [
+              { format: mrtFormat, blend: alphaBlend },
+              { format: mrtFormat, blend: alphaBlend },
+            ],
+          },
+          depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+        }),
+        device.createRenderPipelineAsync({
           layout: postPipelineLayout,
           vertex: { module: postModule, entryPoint: 'vsPost' },
           fragment: { module: postModule, entryPoint: 'fsBloomDown', targets: [{ format: mrtFormat }] },
@@ -646,6 +891,27 @@ export class WebGpuBackend implements IGpuBackend {
           fragment: { module: postModule, entryPoint: 'fsComposite', targets: [{ format }] },
         }),
       ]);
+
+      const mesh3dRes: Mesh3dGpuResources = {
+        shadowDepthTexture,
+        shadowDepthView,
+        shadowSampler,
+        shadowBindGroup,
+        shadowMeshPipeline,
+        shadowQuadPipeline,
+        meshOpaquePipeline,
+        meshAlphaPipeline,
+        line3dPipeline,
+        opaqueVertBuf: meshOpaqueVertBuf,
+        opaqueIdxBuf: meshOpaqueIdxBuf,
+        alphaVertBuf: meshAlphaVertBuf,
+        alphaIdxBuf: meshAlphaIdxBuf,
+        lineVertBuf: line3dVertBuf,
+        quadViewOpaqueUniBufs,
+        quadViewBlendUniBufs,
+        quadViewOpaqueBindGroups,
+        quadViewBlendBindGroups,
+      };
 
       const validationErr = await device.popErrorScope();
       if (validationErr) {
@@ -678,6 +944,7 @@ export class WebGpuBackend implements IGpuBackend {
         compositePipeline,
         skyUniformBuffer,
         lightUniformBuffer,
+        overlayLightUniformBuffer,
         quad3dOpaqueUniBuf,
         quad3dBlendUniBuf,
         quad3dOpaqueBindGroup,
@@ -696,6 +963,7 @@ export class WebGpuBackend implements IGpuBackend {
         nearestSampler,
         pass1BindGroupLayout,
         pass1BindGroup,
+        pass1OverlayBindGroup,
         postBindGroupLayout,
         postDownBuf,
         postBlurHBuf,
@@ -705,6 +973,7 @@ export class WebGpuBackend implements IGpuBackend {
         layerCount,
         atlasWidth,
         atlasHeight,
+        mesh3dRes,
         onLost,
       );
       const onUncaptured = (ev: GPUUncapturedErrorEvent) => {
@@ -908,18 +1177,30 @@ export class WebGpuBackend implements IGpuBackend {
     }
 
     if (rebuildBindGroup) {
-      this.pass1BindGroup = this.device.createBindGroup({
-        layout: this.pass1BindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.skyUniformBuffer } },
-          { binding: 1, resource: this.atlasTexture.createView({ dimension: '2d-array', arrayLayerCount: this.atlasLayerCount }) },
-          { binding: 2, resource: this.atlasSampler },
-          { binding: 3, resource: this.indexAtlasTexture.createView({ dimension: '2d-array', arrayLayerCount: this.atlasLayerCount }) },
-          { binding: 4, resource: this.paletteLutTexture.createView() },
-          { binding: 5, resource: { buffer: this.lightUniformBuffer } },
-          { binding: 6, resource: this.occlusionTexture.createView() },
-        ],
-      });
+      this.pass1BindGroup = WebGpuBackend.buildPass1BindGroup(
+        this.device,
+        this.pass1BindGroupLayout,
+        this.skyUniformBuffer,
+        this.atlasTexture,
+        this.atlasSampler,
+        this.indexAtlasTexture,
+        this.paletteLutTexture,
+        this.lightUniformBuffer,
+        this.occlusionTexture,
+        this.atlasLayerCount,
+      );
+      this.pass1OverlayBindGroup = WebGpuBackend.buildPass1BindGroup(
+        this.device,
+        this.pass1BindGroupLayout,
+        this.skyUniformBuffer,
+        this.atlasTexture,
+        this.atlasSampler,
+        this.indexAtlasTexture,
+        this.paletteLutTexture,
+        this.overlayLightUniformBuffer,
+        this.occlusionTexture,
+        this.atlasLayerCount,
+      );
     }
   }
 
@@ -945,6 +1226,7 @@ export class WebGpuBackend implements IGpuBackend {
     lightCount = 0,
     occlusion?: GpuOcclusionState,
     quad3d?: Quad3DPassData,
+    mesh3d?: Mesh3DPassData,
   ): number {
     let swapTex: GPUTexture;
     try {
@@ -1104,34 +1386,55 @@ export class WebGpuBackend implements IGpuBackend {
     const safe3dOpaque = use3D && quad3d ? Math.min(quad3d.opaqueCount, MAX_QUAD3D_INSTANCES) : 0;
     const safe3dAlpha = use3D && quad3d ? Math.min(quad3d.alphaCount, MAX_QUAD3D_BLEND_INSTANCES) : 0;
     const safe3dAdd = use3D && quad3d ? Math.min(quad3d.additiveCount, MAX_QUAD3D_BLEND_INSTANCES) : 0;
+    const safeMeshOpaqueV = use3D && mesh3d ? Math.min(mesh3d.opaqueVertexCount, MAX_MESH3D_VERTICES) : 0;
+    const safeMeshOpaqueI = use3D && mesh3d ? Math.min(mesh3d.opaqueIndexCount, MAX_MESH3D_INDICES) : 0;
+    const safeMeshAlphaV = use3D && mesh3d ? Math.min(mesh3d.alphaVertexCount, MAX_MESH3D_ALPHA_VERTICES) : 0;
+    const safeMeshAlphaI = use3D && mesh3d ? Math.min(mesh3d.alphaIndexCount, MAX_MESH3D_ALPHA_INDICES) : 0;
+    const safeLine3dV = use3D && mesh3d ? Math.min(mesh3d.lineVertexCount, MAX_LINE3D_VERTICES) : 0;
+    let runShadowPass = false;
 
     if (use3D && quad3d) {
       const cam = quad3d.camera;
-      computeCamera3D(
-        {
-          camCenterX: cam.camCenterX,
-          camCenterY: cam.camCenterY,
-          zoom: cam.zoom,
-          pitchDeg: cam.pitchDeg,
-          fovDeg: cam.fovDeg,
-          viewW,
-          viewH,
-        },
-        this.cam3dScratch,
+      const shadowHalfExtent = Math.max(viewW, viewH) / Math.max(0.25, cam.zoom) * 0.85 + 160;
+      buildDirectionalLightViewProjMatrix(
+        cam.camCenterX,
+        cam.camCenterY,
+        cam.camCenterZ,
+        cam.sunDirX,
+        cam.sunDirY,
+        cam.sunDirZ,
+        shadowHalfExtent,
+        shadowHalfExtent * 3.2 + 420,
+        SHADOW_MAP_SIZE,
+        true,
+        this.lightViewProj3d,
       );
-      buildCamera3DViewProjMatrix(this.cam3dScratch, true, this.viewProj3d);
-      this.quad3dUniformData.set(this.viewProj3d, 0);
-      this.quad3dUniformData[16] = cam.occOriginWorldX;
-      this.quad3dUniformData[17] = cam.occOriginWorldY;
-      this.quad3dUniformData[18] = Math.max(1, cam.occTileSizeWorld);
-      this.quad3dUniformData[19] = 1.0; // opaque cutout pass
-      this.quad3dUniformData[20] = viewW;
-      this.quad3dUniformData[21] = viewH;
-      this.quad3dUniformData[22] = cam.camCenterX;
-      this.quad3dUniformData[23] = cam.camCenterY;
-      this.device.queue.writeBuffer(this.quad3dOpaqueUniBuf, 0, this.quad3dUniformData);
-      this.quad3dUniformData[19] = 0.0; // alpha/additive blend pass
-      this.device.queue.writeBuffer(this.quad3dBlendUniBuf, 0, this.quad3dUniformData);
+      runShadowPass = Boolean(cam.shadowMapEnabled && cam.shadowStrength > 0.005 && (safeMeshOpaqueI > 0 || safe3dOpaque > 0));
+
+      this.writeQuad3dCameraUniforms(
+        viewW,
+        viewH,
+        cam,
+        runShadowPass,
+        mesh3d,
+        this.quad3dOpaqueUniBuf,
+        this.quad3dBlendUniBuf,
+      );
+      if (quad3d.quadViews) {
+        const subW = viewW * 0.5;
+        const subH = viewH * 0.5;
+        for (let q = 0; q < 4; q++) {
+          this.writeQuad3dCameraUniforms(
+            subW,
+            subH,
+            quad3d.quadViews[q],
+            runShadowPass,
+            mesh3d,
+            this.mesh3dRes.quadViewOpaqueUniBufs[q],
+            this.mesh3dRes.quadViewBlendUniBufs[q],
+          );
+        }
+      }
 
       if (safe3dOpaque > 0) {
         this.device.queue.writeBuffer(
@@ -1160,13 +1463,83 @@ export class WebGpuBackend implements IGpuBackend {
           safe3dAdd * FLOATS_PER_QUAD3D * 4,
         );
       }
+      if (mesh3d && safeMeshOpaqueV > 0 && safeMeshOpaqueI > 0) {
+        this.device.queue.writeBuffer(
+          this.mesh3dRes.opaqueVertBuf,
+          0,
+          mesh3d.opaqueVertices.buffer,
+          mesh3d.opaqueVertices.byteOffset,
+          safeMeshOpaqueV * FLOATS_PER_MESH3D_VERTEX * 4,
+        );
+        this.device.queue.writeBuffer(
+          this.mesh3dRes.opaqueIdxBuf,
+          0,
+          mesh3d.opaqueIndices.buffer,
+          mesh3d.opaqueIndices.byteOffset,
+          safeMeshOpaqueI * 4,
+        );
+      }
+      if (mesh3d && safeMeshAlphaV > 0 && safeMeshAlphaI > 0) {
+        this.device.queue.writeBuffer(
+          this.mesh3dRes.alphaVertBuf,
+          0,
+          mesh3d.alphaVertices.buffer,
+          mesh3d.alphaVertices.byteOffset,
+          safeMeshAlphaV * FLOATS_PER_MESH3D_VERTEX * 4,
+        );
+        this.device.queue.writeBuffer(
+          this.mesh3dRes.alphaIdxBuf,
+          0,
+          mesh3d.alphaIndices.buffer,
+          mesh3d.alphaIndices.byteOffset,
+          safeMeshAlphaI * 4,
+        );
+      }
+      if (mesh3d && safeLine3dV > 0) {
+        this.device.queue.writeBuffer(
+          this.mesh3dRes.lineVertBuf,
+          0,
+          mesh3d.lineVertices.buffer,
+          mesh3d.lineVertices.byteOffset,
+          safeLine3dV * FLOATS_PER_MESH3D_VERTEX * 4,
+        );
+      }
     }
 
     const encoder = this.device.createCommandEncoder();
     let drawCalls = 1;
 
     if (use3D) {
-      // Pass 1A: Hardware Depth-Buffered True 3D Perspective HD-2D Scene
+      // Pass 0: 1024x1024 Directional Shadow Depth Pass
+      if (runShadowPass) {
+        const shadowPass = encoder.beginRenderPass({
+          colorAttachments: [],
+          depthStencilAttachment: {
+            view: this.mesh3dRes.shadowDepthView,
+            depthClearValue: 1.0,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'store',
+          },
+        });
+        shadowPass.setBindGroup(0, this.pass1BindGroup);
+        shadowPass.setBindGroup(1, this.mesh3dRes.shadowBindGroup);
+        if (safeMeshOpaqueI > 0) {
+          shadowPass.setPipeline(this.mesh3dRes.shadowMeshPipeline);
+          shadowPass.setVertexBuffer(0, this.mesh3dRes.opaqueVertBuf);
+          shadowPass.setIndexBuffer(this.mesh3dRes.opaqueIdxBuf, 'uint32');
+          shadowPass.drawIndexed(safeMeshOpaqueI);
+          drawCalls++;
+        }
+        if (safe3dOpaque > 0) {
+          shadowPass.setPipeline(this.mesh3dRes.shadowQuadPipeline);
+          shadowPass.setVertexBuffer(0, this.quad3dOpaqueBuffer);
+          shadowPass.draw(6, safe3dOpaque);
+          drawCalls++;
+        }
+        shadowPass.end();
+      }
+
+      // Pass 1A: Hardware Depth-Buffered True 3D Perspective/Ortho Scene (Mesh3D + Quad3D + Gizmo Lines)
       const pass1a = encoder.beginRenderPass({
         colorAttachments: [
           {
@@ -1189,30 +1562,62 @@ export class WebGpuBackend implements IGpuBackend {
           depthStoreOp: 'store',
         },
       });
-      pass1a.setBindGroup(0, this.pass1BindGroup);
-      pass1a.setPipeline(this.sky3dPipeline);
-      pass1a.draw(6);
-
-      if (safe3dOpaque > 0) {
-        pass1a.setPipeline(this.quad3dOpaquePipeline);
-        pass1a.setBindGroup(1, this.quad3dOpaqueBindGroup);
-        pass1a.setVertexBuffer(0, this.quad3dOpaqueBuffer);
-        pass1a.draw(6, safe3dOpaque);
-        drawCalls++;
-      }
-      if (safe3dAlpha > 0) {
-        pass1a.setPipeline(this.quad3dAlphaPipeline);
-        pass1a.setBindGroup(1, this.quad3dBlendBindGroup);
-        pass1a.setVertexBuffer(0, this.quad3dAlphaBuffer);
-        pass1a.draw(6, safe3dAlpha);
-        drawCalls++;
-      }
-      if (safe3dAdd > 0) {
-        pass1a.setPipeline(this.quad3dAddPipeline);
-        pass1a.setBindGroup(1, this.quad3dBlendBindGroup);
-        pass1a.setVertexBuffer(0, this.quad3dAddBuffer);
-        pass1a.draw(6, safe3dAdd);
-        drawCalls++;
+      if (quad3d?.quadViews) {
+        const halfW = Math.floor(rt.osW * 0.5);
+        const halfH = Math.floor(rt.osH * 0.5);
+        for (let q = 0; q < 4; q++) {
+          let vx = 0;
+          let vy = 0;
+          let vwQ = halfW;
+          let vhQ = halfH;
+          if (q === 0) {
+            vx = 0;
+            vy = 0;
+            vwQ = halfW;
+            vhQ = halfH;
+          } else if (q === 1) {
+            vx = halfW;
+            vy = 0;
+            vwQ = rt.osW - halfW;
+            vhQ = halfH;
+          } else if (q === 2) {
+            vx = 0;
+            vy = halfH;
+            vwQ = halfW;
+            vhQ = rt.osH - halfH;
+          } else {
+            vx = halfW;
+            vy = halfH;
+            vwQ = rt.osW - halfW;
+            vhQ = rt.osH - halfH;
+          }
+          if (vwQ <= 0 || vhQ <= 0) continue;
+          pass1a.setViewport(vx, vy, vwQ, vhQ, 0, 1);
+          pass1a.setScissorRect(vx, vy, vwQ, vhQ);
+          drawCalls += this.drawPass1a3DScene(
+            pass1a,
+            this.mesh3dRes.quadViewOpaqueBindGroups[q],
+            this.mesh3dRes.quadViewBlendBindGroups[q],
+            safeMeshOpaqueI,
+            safe3dOpaque,
+            safeMeshAlphaI,
+            safe3dAlpha,
+            safe3dAdd,
+            safeLine3dV,
+          );
+        }
+      } else {
+        drawCalls += this.drawPass1a3DScene(
+          pass1a,
+          this.quad3dOpaqueBindGroup,
+          this.quad3dBlendBindGroup,
+          safeMeshOpaqueI,
+          safe3dOpaque,
+          safeMeshAlphaI,
+          safe3dAlpha,
+          safe3dAdd,
+          safeLine3dV,
+        );
       }
       pass1a.end();
 
@@ -1224,7 +1629,7 @@ export class WebGpuBackend implements IGpuBackend {
             { view: rt.emissiveView, loadOp: 'load', storeOp: 'store' },
           ],
         });
-        pass1b.setBindGroup(0, this.pass1BindGroup);
+        pass1b.setBindGroup(0, this.pass1OverlayBindGroup);
         if (safeAlpha > 0) {
           pass1b.setPipeline(this.alphaPipeline);
           pass1b.setVertexBuffer(0, this.alphaBuffer);
@@ -1328,6 +1733,123 @@ export class WebGpuBackend implements IGpuBackend {
     return drawCalls;
   }
 
+  private writeQuad3dCameraUniforms(
+    subViewW: number,
+    subViewH: number,
+    cam: GpuCamera3DState,
+    runShadowPass: boolean,
+    mesh3d: Mesh3DPassData | undefined,
+    opaqueBuf: GPUBuffer,
+    blendBuf: GPUBuffer,
+  ): void {
+    computeCamera3D(
+      {
+        camCenterX: cam.camCenterX,
+        camCenterY: cam.camCenterY,
+        camCenterZ: cam.camCenterZ,
+        zoom: cam.zoom,
+        yawDeg: cam.yawDeg,
+        pitchDeg: cam.pitchDeg,
+        rollDeg: cam.rollDeg,
+        fovDeg: cam.fovDeg,
+        projection: cam.projection,
+        viewW: subViewW,
+        viewH: subViewH,
+      },
+      this.cam3dScratch,
+    );
+    buildCamera3DViewProjMatrix(this.cam3dScratch, true, this.viewProj3d);
+
+    this.quad3dUniformData.set(this.viewProj3d, 0);
+    this.quad3dUniformData.set(this.lightViewProj3d, 16);
+    this.quad3dUniformData[32] = cam.occOriginWorldX;
+    this.quad3dUniformData[33] = cam.occOriginWorldY;
+    this.quad3dUniformData[34] = Math.max(1, cam.occTileSizeWorld);
+    this.quad3dUniformData[35] = 1.0; // opaque cutout pass
+    this.quad3dUniformData[36] = subViewW;
+    this.quad3dUniformData[37] = subViewH;
+    this.quad3dUniformData[38] = cam.camCenterX;
+    this.quad3dUniformData[39] = cam.camCenterY;
+    this.quad3dUniformData[40] = this.cam3dScratch.eyeX;
+    this.quad3dUniformData[41] = this.cam3dScratch.eyeY;
+    this.quad3dUniformData[42] = this.cam3dScratch.eyeZ;
+    this.quad3dUniformData[43] = runShadowPass ? 1.0 : 0.0;
+    this.quad3dUniformData[44] = cam.sunDirX;
+    this.quad3dUniformData[45] = cam.sunDirY;
+    this.quad3dUniformData[46] = cam.sunDirZ;
+    this.quad3dUniformData[47] = cam.shadowStrength;
+    const lz = mesh3d?.lightPosZ;
+    for (let i = 0; i < MAX_DYNAMIC_LIGHTS; i++) {
+      this.quad3dUniformData[48 + i] = lz && i < lz.length ? lz[i] : 24.0;
+    }
+    this.device.queue.writeBuffer(opaqueBuf, 0, this.quad3dUniformData);
+    this.quad3dUniformData[35] = 0.0; // alpha/additive blend pass
+    this.device.queue.writeBuffer(blendBuf, 0, this.quad3dUniformData);
+  }
+
+  private drawPass1a3DScene(
+    pass1a: GPURenderPassEncoder,
+    opaqueBindGroup: GPUBindGroup,
+    blendBindGroup: GPUBindGroup,
+    safeMeshOpaqueI: number,
+    safe3dOpaque: number,
+    safeMeshAlphaI: number,
+    safe3dAlpha: number,
+    safe3dAdd: number,
+    safeLine3dV: number,
+  ): number {
+    let drawCalls = 0;
+    pass1a.setBindGroup(0, this.pass1BindGroup);
+    pass1a.setPipeline(this.sky3dPipeline);
+    pass1a.draw(6);
+
+    if (safeMeshOpaqueI > 0) {
+      pass1a.setPipeline(this.mesh3dRes.meshOpaquePipeline);
+      pass1a.setBindGroup(1, opaqueBindGroup);
+      pass1a.setVertexBuffer(0, this.mesh3dRes.opaqueVertBuf);
+      pass1a.setIndexBuffer(this.mesh3dRes.opaqueIdxBuf, 'uint32');
+      pass1a.drawIndexed(safeMeshOpaqueI);
+      drawCalls++;
+    }
+    if (safe3dOpaque > 0) {
+      pass1a.setPipeline(this.quad3dOpaquePipeline);
+      pass1a.setBindGroup(1, opaqueBindGroup);
+      pass1a.setVertexBuffer(0, this.quad3dOpaqueBuffer);
+      pass1a.draw(6, safe3dOpaque);
+      drawCalls++;
+    }
+    if (safeMeshAlphaI > 0) {
+      pass1a.setPipeline(this.mesh3dRes.meshAlphaPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.mesh3dRes.alphaVertBuf);
+      pass1a.setIndexBuffer(this.mesh3dRes.alphaIdxBuf, 'uint32');
+      pass1a.drawIndexed(safeMeshAlphaI);
+      drawCalls++;
+    }
+    if (safe3dAlpha > 0) {
+      pass1a.setPipeline(this.quad3dAlphaPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.quad3dAlphaBuffer);
+      pass1a.draw(6, safe3dAlpha);
+      drawCalls++;
+    }
+    if (safe3dAdd > 0) {
+      pass1a.setPipeline(this.quad3dAddPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.quad3dAddBuffer);
+      pass1a.draw(6, safe3dAdd);
+      drawCalls++;
+    }
+    if (safeLine3dV > 1) {
+      pass1a.setPipeline(this.mesh3dRes.line3dPipeline);
+      pass1a.setBindGroup(1, blendBindGroup);
+      pass1a.setVertexBuffer(0, this.mesh3dRes.lineVertBuf);
+      pass1a.draw(safeLine3dV);
+      drawCalls++;
+    }
+    return drawCalls;
+  }
+
   public dispose(): void {
     if (this.uncapturedErrorListener) {
       this.device.removeEventListener('uncapturederror', this.uncapturedErrorListener);
@@ -1341,8 +1863,19 @@ export class WebGpuBackend implements IGpuBackend {
     this.quad3dAddBuffer.destroy();
     this.quad3dOpaqueUniBuf.destroy();
     this.quad3dBlendUniBuf.destroy();
+    for (let q = 0; q < 4; q++) {
+      this.mesh3dRes.quadViewOpaqueUniBufs[q].destroy();
+      this.mesh3dRes.quadViewBlendUniBufs[q].destroy();
+    }
+    this.mesh3dRes.opaqueVertBuf.destroy();
+    this.mesh3dRes.opaqueIdxBuf.destroy();
+    this.mesh3dRes.alphaVertBuf.destroy();
+    this.mesh3dRes.alphaIdxBuf.destroy();
+    this.mesh3dRes.lineVertBuf.destroy();
+    this.mesh3dRes.shadowDepthTexture.destroy();
     this.skyUniformBuffer.destroy();
     this.lightUniformBuffer.destroy();
+    this.overlayLightUniformBuffer.destroy();
     this.postDownBuf.destroy();
     this.postBlurHBuf.destroy();
     this.postBlurVBuf.destroy();

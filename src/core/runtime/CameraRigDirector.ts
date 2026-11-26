@@ -201,6 +201,94 @@ export function isGameplayShot(shot: CameraShotId): boolean {
   );
 }
 
+/**
+ * Converts a legacy Y-Up `CameraPose` (used by rhythm/stage presets) into Pixer's canonical
+ * Z-Up world coordinate convention (`X = East, Y = South, Z = Up`) in-place (Zero-GC).
+ */
+export function convertCameraPoseYUpToZUp(src: Readonly<CameraPose>, out: CameraPose): CameraPose {
+  out.posX = src.posX;
+  out.posY = src.posZ;
+  out.posZ = src.posY;
+  out.targetX = src.targetX;
+  out.targetY = src.targetZ;
+  out.targetZ = src.targetY;
+  out.fovDeg = src.fovDeg;
+  out.rollDeg = src.rollDeg;
+  return out;
+}
+
+/**
+ * Builds a column-major Z-Up LookAt View matrix into `out` (`Float32Array(16)`) with zero allocations.
+ * Uses world `+Z` as up (falling back to `-Y` when looking straight down/up along Z).
+ */
+export function computeZUpLookAtMatrix(
+  out: Float32Array,
+  ex: number,
+  ey: number,
+  ez: number,
+  tx: number,
+  ty: number,
+  tz: number,
+  rollRad = 0,
+): Float32Array {
+  let fx = tx - ex;
+  let fy = ty - ey;
+  let fz = tz - ez;
+  const fLen = Math.hypot(fx, fy, fz) || 1;
+  fx /= fLen;
+  fy /= fLen;
+  fz /= fLen;
+
+  const nearZenith = Math.abs(fz) > 0.999;
+  const refUpX = 0;
+  const refUpY = nearZenith ? -1 : 0;
+  const refUpZ = nearZenith ? 0 : 1;
+
+  // R0 = normalize(cross(F, refUp))
+  let r0x = fy * refUpZ - fz * refUpY;
+  let r0y = fz * refUpX - fx * refUpZ;
+  let r0z = fx * refUpY - fy * refUpX;
+  const rLen = Math.hypot(r0x, r0y, r0z) || 1;
+  r0x /= rLen;
+  r0y /= rLen;
+  r0z /= rLen;
+
+  // U0 = cross(R0, F)
+  const u0x = r0y * fz - r0z * fy;
+  const u0y = r0z * fx - r0x * fz;
+  const u0z = r0x * fy - r0y * fx;
+
+  const cr = Math.cos(rollRad);
+  const sr = Math.sin(rollRad);
+  const rx = r0x * cr + u0x * sr;
+  const ry = r0y * cr + u0y * sr;
+  const rz = r0z * cr + u0z * sr;
+  const ux = -r0x * sr + u0x * cr;
+  const uy = -r0y * sr + u0y * cr;
+  const uz = -r0z * sr + u0z * cr;
+
+  out[0] = rx;
+  out[1] = ux;
+  out[2] = -fx;
+  out[3] = 0;
+
+  out[4] = ry;
+  out[5] = uy;
+  out[6] = -fy;
+  out[7] = 0;
+
+  out[8] = rz;
+  out[9] = uz;
+  out[10] = -fz;
+  out[11] = 0;
+
+  out[12] = -(rx * ex + ry * ey + rz * ez);
+  out[13] = -(ux * ex + uy * ey + uz * ez);
+  out[14] = fx * ex + fy * ey + fz * ez;
+  out[15] = 1;
+  return out;
+}
+
 export class CameraRigDirector {
   public readonly current: CameraPose = { ...CAMERA_SHOT_PRESETS.TITLE_ORBIT };
   public readonly target: CameraPose = { ...CAMERA_SHOT_PRESETS.TITLE_ORBIT };

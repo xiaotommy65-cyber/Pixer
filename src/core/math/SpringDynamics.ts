@@ -201,6 +201,8 @@ export class VerletChain {
     const fx = finiteOr(forceX, 0);
     const fy = finiteOr(forceY, 0);
     const damp = Math.max(0, Math.min(1, finiteOr(velocityDamping, 0.96)));
+    // Normalize velocity damping to the 60Hz reference frame so 120Hz matches per-second decay
+    const effDamp = Math.pow(damp, safeDt * 60);
     const dt2 = safeDt * safeDt;
     const iters = Math.max(1, Math.min(24, Math.round(iterations)));
     const hasFloor = floorY !== undefined && Number.isFinite(floorY);
@@ -215,8 +217,8 @@ export class VerletChain {
     for (let i = 1; i < this.count; i++) {
       const cx = this.posX[i];
       const cy = this.posY[i];
-      const vx = (cx - this.prevX[i]) * damp;
-      const vy = (cy - this.prevY[i]) * damp;
+      const vx = (cx - this.prevX[i]) * effDamp;
+      const vy = (cy - this.prevY[i]) * effDamp;
       this.prevX[i] = cx;
       this.prevY[i] = cy;
       this.posX[i] = cx + vx + fx * dt2;
@@ -346,17 +348,26 @@ export function solveTwoBoneIkInto(
   const l2 = Math.max(1e-4, finiteOr(len2, 1));
   const sign = bendDir >= 0 ? 1 : -1;
 
-  let dx = tx - rx;
-  let dy = ty - ry;
-  let rawDist = Math.hypot(dx, dy);
-  const dirAngle = rawDist > 1e-6 ? Math.atan2(dy, dx) : 0;
+  const dx = tx - rx;
+  const dy = ty - ry;
+  const rawDist = Math.hypot(dx, dy);
+  const dirAngle = rawDist >= 1e-5 ? Math.atan2(dy, dx) : 0;
+
+  if (Math.abs(l1 - l2) <= 1e-8 && rawDist < 1e-5) {
+    out[offset] = rx;
+    out[offset + 1] = ry + sign * l1;
+    out[offset + 2] = rx;
+    out[offset + 3] = ry;
+    return;
+  }
 
   const minReach = Math.abs(l1 - l2) + 1e-4;
   const maxReach = l1 + l2 - 1e-4;
   const dist = Math.max(minReach, Math.min(maxReach, rawDist));
 
   // Clamp cosAngle strictly in [-1, 1] so Math.acos never emits NaN
-  const cosAngle = Math.max(-1, Math.min(1, (l1 * l1 + dist * dist - l2 * l2) / (2 * l1 * dist)));
+  const denom = 2 * l1 * dist;
+  const cosAngle = denom > 1e-12 ? Math.max(-1, Math.min(1, (l1 * l1 + dist * dist - l2 * l2) / denom)) : 0;
   const jointAngle = dirAngle + sign * Math.acos(cosAngle);
 
   const jx = rx + Math.cos(jointAngle) * l1;

@@ -98,6 +98,10 @@ export class SpatialHash {
     return this.overflowCount;
   }
 
+  public getNodeCount(): number {
+    return this.nodeCount;
+  }
+
   /** Resets spatial table in O(1) via stamp increment (no bucket array memset). */
   public clear(): void {
     this.activeCount = 0;
@@ -148,8 +152,8 @@ export class SpatialHash {
     const inv = this.invCellSize;
     const cx0 = Math.floor(loX * inv);
     const cy0 = Math.floor(loY * inv);
-    const cx1 = Math.floor(hiX * inv);
-    const cy1 = Math.floor(hiY * inv);
+    const cx1 = hiX > loX ? Math.max(cx0, Math.ceil(hiX * inv) - 1) : cx0;
+    const cy1 = hiY > loY ? Math.max(cy0, Math.ceil(hiY * inv) - 1) : cy0;
 
     this.cellX0[slot] = cx0;
     this.cellY0[slot] = cy0;
@@ -178,7 +182,8 @@ export class SpatialHash {
     for (let cy = cy0; cy <= cy1; cy++) {
       const hy = Math.imul(cy | 0, HASH_PRIME_Y);
       for (let cx = cx0; cx <= cx1; cx++) {
-        const b = (Math.imul(cx | 0, HASH_PRIME_X) ^ hy) & mask;
+        const h = Math.imul(cx | 0, HASH_PRIME_X) ^ hy;
+        const b = (h ^ (h >>> 16)) & mask;
         const head = this.cellStamps[b] === stamp ? this.cellHeads[b] : -1;
         const nodeIdx = this.nodeCount++;
         this.nodeEntity[nodeIdx] = slot;
@@ -213,8 +218,8 @@ export class SpatialHash {
     const inv = this.invCellSize;
     const cx0 = Math.floor(loX * inv);
     const cy0 = Math.floor(loY * inv);
-    const cx1 = Math.floor(hiX * inv);
-    const cy1 = Math.floor(hiY * inv);
+    const cx1 = hiX > loX ? Math.max(cx0, Math.ceil(hiX * inv) - 1) : cx0;
+    const cy1 = hiY > loY ? Math.max(cy0, Math.ceil(hiY * inv) - 1) : cy0;
     const cellSpan = (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
 
     let outCount = 0;
@@ -238,7 +243,8 @@ export class SpatialHash {
     for (let cy = cy0; cy <= cy1; cy++) {
       const hy = Math.imul(cy | 0, HASH_PRIME_Y);
       for (let cx = cx0; cx <= cx1; cx++) {
-        const b = (Math.imul(cx | 0, HASH_PRIME_X) ^ hy) & mask;
+        const h = Math.imul(cx | 0, HASH_PRIME_X) ^ hy;
+        const b = (h ^ (h >>> 16)) & mask;
         if (this.cellStamps[b] !== stamp) continue;
         let node = this.cellHeads[b];
         while (node >= 0) {
@@ -312,7 +318,8 @@ export class SpatialHash {
       for (let cy = cy0; cy <= cy1; cy++) {
         const hy = Math.imul(cy | 0, HASH_PRIME_Y);
         for (let cx = cx0; cx <= cx1; cx++) {
-          const bkt = (Math.imul(cx | 0, HASH_PRIME_X) ^ hy) & mask;
+          const h = Math.imul(cx | 0, HASH_PRIME_X) ^ hy;
+          const bkt = (h ^ (h >>> 16)) & mask;
           if (this.cellStamps[bkt] !== stamp) continue;
           let node = this.cellHeads[bkt];
           while (node >= 0) {

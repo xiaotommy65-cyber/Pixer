@@ -1,4 +1,4 @@
-import type { InputState } from '../types/WorldTypes.ts';
+import { createEmptyInputState, type InputState } from '../types/WorldTypes.ts';
 import {
   classifyDpadOctant,
   resolveAbxyClusterHit,
@@ -52,6 +52,9 @@ const LATCHED_KEYS: readonly LatchedButtonKey[] = [
   'shoulderR',
 ];
 
+const RESOLVE_RING_SIZE = 16;
+const RESOLVE_RING_MASK = RESOLVE_RING_SIZE - 1;
+
 /**
  * Pure input aggregator incorporating:
  * 1) Last-Input-Priority SOCD cleaning for cardinal movement.
@@ -60,20 +63,20 @@ const LATCHED_KEYS: readonly LatchedButtonKey[] = [
  */
 export class InputPipeline {
   private seq = 0;
-  private dirPressedSeq: Record<PadDirection, number> = {
+  private readonly dirPressedSeq: Record<PadDirection, number> = {
     left: 0,
     right: 0,
     up: 0,
     down: 0,
   };
-  private prevRawDirs: Record<PadDirection, boolean> = {
+  private readonly prevRawDirs: Record<PadDirection, boolean> = {
     left: false,
     right: false,
     up: false,
     down: false,
   };
 
-  private latched: Record<LatchedButtonKey, boolean> = {
+  private readonly latched: Record<LatchedButtonKey, boolean> = {
     jump: false,
     action: false,
     skillX: false,
@@ -81,7 +84,7 @@ export class InputPipeline {
     shoulderL: false,
     shoulderR: false,
   };
-  private prevButtons: Record<LatchedButtonKey, boolean> = {
+  private readonly prevButtons: Record<LatchedButtonKey, boolean> = {
     jump: false,
     action: false,
     skillX: false,
@@ -89,7 +92,7 @@ export class InputPipeline {
     shoulderL: false,
     shoulderR: false,
   };
-  private predictUntil: Record<LatchedButtonKey, number> = {
+  private readonly predictUntil: Record<LatchedButtonKey, number> = {
     jump: 0,
     action: 0,
     skillX: 0,
@@ -97,6 +100,12 @@ export class InputPipeline {
     shoulderL: 0,
     shoulderR: 0,
   };
+
+  private readonly resolveRing: InputState[] = Array.from({ length: RESOLVE_RING_SIZE }, () =>
+    createEmptyInputState(),
+  );
+  private resolveCursor = 0;
+  private readonly predictionStatusScratch = { jump: false, action: false };
 
   private autofireStartAction = 0;
   private readonly clock: () => number;
@@ -107,7 +116,8 @@ export class InputPipeline {
 
   /** Records edge timestamps whenever raw directional/action inputs change. */
   public observeRaw(raw: InputState): void {
-    for (const dir of PAD_DIRECTIONS) {
+    for (let i = 0; i < PAD_DIRECTIONS.length; i++) {
+      const dir = PAD_DIRECTIONS[i];
       if (raw[dir] && !this.prevRawDirs[dir]) {
         this.seq += 1;
         this.dirPressedSeq[dir] = this.seq;
@@ -118,7 +128,8 @@ export class InputPipeline {
     }
 
     const now = this.clock();
-    for (const key of LATCHED_KEYS) {
+    for (let i = 0; i < LATCHED_KEYS.length; i++) {
+      const key = LATCHED_KEYS[i];
       if (raw[key] && !this.prevButtons[key]) {
         this.latched[key] = true;
         this.predictUntil[key] = now + 100;
@@ -183,46 +194,54 @@ export class InputPipeline {
     const shoulderRVal = raw.shoulderR || this.latched.shoulderR || now <= this.predictUntil.shoulderR;
 
     if (consumeLatches) {
-      for (const key of LATCHED_KEYS) {
+      for (let i = 0; i < LATCHED_KEYS.length; i++) {
+        const key = LATCHED_KEYS[i];
         this.latched[key] = false;
         if (!raw[key]) this.predictUntil[key] = 0;
       }
     }
 
-    return {
-      left,
-      right,
-      up,
-      down,
-      jump: jumpVal,
-      action: actionVal,
-      skillX: skillXVal,
-      skillY: skillYVal,
-      shoulderL: shoulderLVal,
-      shoulderR: shoulderRVal,
-      restart: raw.restart,
-      rightStickX: raw.rightStickX,
-      rightStickY: raw.rightStickY,
-      pointerX: raw.pointerX ?? 0,
-      pointerY: raw.pointerY ?? 0,
-      pointerActive: Boolean(raw.pointerActive),
-      pointerPrimary: Boolean(raw.pointerPrimary),
-      pointerSecondary: Boolean(raw.pointerSecondary),
-    };
+    const out = this.resolveRing[this.resolveCursor];
+    this.resolveCursor = (this.resolveCursor + 1) & RESOLVE_RING_MASK;
+    out.left = left;
+    out.right = right;
+    out.up = up;
+    out.down = down;
+    out.jump = jumpVal;
+    out.action = actionVal;
+    out.skillX = skillXVal;
+    out.skillY = skillYVal;
+    out.shoulderL = shoulderLVal;
+    out.shoulderR = shoulderRVal;
+    out.restart = raw.restart;
+    out.rightStickX = raw.rightStickX;
+    out.rightStickY = raw.rightStickY;
+    out.pointerX = raw.pointerX ?? 0;
+    out.pointerY = raw.pointerY ?? 0;
+    out.pointerActive = Boolean(raw.pointerActive);
+    out.pointerPrimary = Boolean(raw.pointerPrimary);
+    out.pointerSecondary = Boolean(raw.pointerSecondary);
+    return out;
   }
 
   public hasPredictionActive(): { jump: boolean; action: boolean } {
     const now = this.clock();
-    return {
-      jump: this.latched.jump || now <= this.predictUntil.jump,
-      action: this.latched.action || now <= this.predictUntil.action,
-    };
+    this.predictionStatusScratch.jump = this.latched.jump || now <= this.predictUntil.jump;
+    this.predictionStatusScratch.action = this.latched.action || now <= this.predictUntil.action;
+    return this.predictionStatusScratch;
   }
 
   public reset(): void {
-    this.dirPressedSeq = { left: 0, right: 0, up: 0, down: 0 };
-    this.prevRawDirs = { left: false, right: false, up: false, down: false };
-    for (const key of LATCHED_KEYS) {
+    this.dirPressedSeq.left = 0;
+    this.dirPressedSeq.right = 0;
+    this.dirPressedSeq.up = 0;
+    this.dirPressedSeq.down = 0;
+    this.prevRawDirs.left = false;
+    this.prevRawDirs.right = false;
+    this.prevRawDirs.up = false;
+    this.prevRawDirs.down = false;
+    for (let i = 0; i < LATCHED_KEYS.length; i++) {
+      const key = LATCHED_KEYS[i];
       this.latched[key] = false;
       this.prevButtons[key] = false;
       this.predictUntil[key] = 0;

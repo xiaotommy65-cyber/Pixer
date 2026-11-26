@@ -825,73 +825,6 @@ body {
   transform: scale(1);
 }
 
-.studio-workbench {
-  position: fixed;
-  inset: 0;
-  z-index: 45;
-  background: var(--bg-desk);
-  display: flex;
-  flex-direction: column;
-  padding:
-    max(12px, env(safe-area-inset-top))
-    max(14px, env(safe-area-inset-right))
-    max(14px, env(safe-area-inset-bottom))
-    max(14px, env(safe-area-inset-left));
-  gap: 12px;
-  overflow-y: auto;
-}
-
-.studio-workbench.panel-hidden {
-  display: none;
-}
-
-.studio-workbench-bar {
-  width: 100%;
-  max-width: 1040px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  background: rgba(255, 253, 248, 0.8);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  backdrop-filter: blur(14px) saturate(1.2);
-  border: 2.5px solid var(--ink);
-  border-radius: 18px;
-  padding: 8px 12px;
-  box-shadow:
-    inset 0 1.5px 0 rgba(255, 255, 255, 0.82),
-    0 5px 0 var(--ink);
-}
-
-.studio-workbench-tabs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.studio-reveal-item {
-  opacity: 0;
-  transform: translateY(-10px) scale(0.96);
-  transition:
-    opacity 220ms ease,
-    transform 260ms var(--ease-bounce);
-  transition-delay: calc(var(--stagger-idx, 0) * 35ms);
-}
-
-.studio-workbench.is-revealed .studio-reveal-item {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.studio-workbench-body {
-  width: 100%;
-  max-width: 1040px;
-  margin: 0 auto;
-  flex: 1;
-}
-
 /* ---------- Self-Healing Startup Crash Fallback Card ---------- */
 .app-crash-fallback {
   min-height: 100dvh;
@@ -930,7 +863,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .iris-wipe-curtain,
-  .studio-reveal-item,
   .angled-menu-panel,
   .cartridge-drawer-sheet,
   .pixel-eye,
@@ -1024,7 +956,6 @@ body[data-perf='eco'] .angled-menu-panel,
 body[data-perf='eco'] .cartridge-drawer-sheet,
 body[data-perf='eco'] .lobby-topbar,
 body[data-perf='eco'] .lobby-lower-dock,
-body[data-perf='eco'] .studio-workbench-bar,
 body[data-perf='eco'] .app-crash-card {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
@@ -1032,7 +963,6 @@ body[data-perf='eco'] .app-crash-card {
 
 body[data-perf='eco'] .angled-menu-panel,
 body[data-perf='eco'] .cartridge-drawer-sheet,
-body[data-perf='eco'] .studio-workbench-bar,
 body[data-perf='eco'] .app-crash-card {
   background: #fffdf8;
 }
@@ -1882,7 +1812,6 @@ body[data-perf='eco'] .lobby-lower-dock {
   .angled-menu-panel,
   .cartridge-drawer-backdrop,
   .cartridge-drawer-sheet,
-  .studio-workbench-bar,
   .app-crash-card {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -1890,7 +1819,6 @@ body[data-perf='eco'] .lobby-lower-dock {
 
   .angled-menu-panel,
   .cartridge-drawer-sheet,
-  .studio-workbench-bar,
   .app-crash-card {
     background: #fffdf8;
   }

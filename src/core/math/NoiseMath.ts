@@ -33,6 +33,14 @@ function finiteOr(x: number, fallback = 0): number {
   return Number.isFinite(x) ? x : fallback;
 }
 
+/** 32-bit Murmur3 fmix32 avalanche so high seed bits influence gradient selection. */
+function hashSeed32(seed: number): number {
+  let h = seed | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return h ^ (h >>> 16);
+}
+
 /**
  * Branchless deterministic 2D integer hash returning [0, 1).
  * Matches xxHash32-style avalanche used in GPU shaders.
@@ -81,8 +89,9 @@ export function simplex2DGradInto(
   const x2 = x0 - 1 + 2 * G2;
   const y2 = y0 - 1 + 2 * G2;
 
-  const s1 = seed & 255;
-  const s2 = ((seed >>> 8) ^ (seed * 31)) & 255;
+  const h = hashSeed32(seed);
+  const s1 = h & 255;
+  const s2 = (h >>> 8) & 255;
   const ii = i & 255;
   const jj = j & 255;
 
@@ -162,8 +171,9 @@ export function simplex2D(x: number, y: number, seed = 0): number {
   const x2 = x0 - 1 + 2 * G2;
   const y2 = y0 - 1 + 2 * G2;
 
-  const s1 = seed & 255;
-  const s2 = ((seed >>> 8) ^ (seed * 31)) & 255;
+  const h = hashSeed32(seed);
+  const s1 = h & 255;
+  const s2 = (h >>> 8) & 255;
   const ii = i & 255;
   const jj = j & 255;
 
@@ -222,9 +232,11 @@ export function fbm2D(
     norm += amp;
     freq *= lac;
     amp *= g;
-    // Domain twist per octave suppresses lattice aliasing cleanly
-    px += 13.7;
-    py -= 9.3;
+    // True orthonormal 2x2 octave rotation suppresses axial lattice aliasing cleanly
+    const nx = px * 0.8 - py * 0.6;
+    const ny = px * 0.6 + py * 0.8;
+    px = nx;
+    py = ny;
   }
 
   const out = norm > 0 ? sum / norm : 0;

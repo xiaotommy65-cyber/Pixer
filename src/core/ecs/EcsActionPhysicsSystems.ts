@@ -3,6 +3,7 @@ import { COLLISION_SOLID, TILE_SIZE, type TilemapGrid } from '../sim/TilemapGrid
 import type { InputState, SimEvent } from '../types/WorldTypes.ts';
 import { MAX_TRIGGER_OVERLAPS, MAX_VERLET_NODES } from './ComponentStore.ts';
 import type { EcsCoreWorld } from './EcsCoreWorld.ts';
+import type { RoomVoxelVolume } from './EcsVoxelVolume.ts';
 import { INVALID_ENTITY, unpackEntityIndex, type EntityHandle } from './EntityManager.ts';
 import type { SandboxScriptVm } from './SandboxScriptVm.ts';
 
@@ -469,6 +470,64 @@ export class EcsActionPhysicsSystems {
       }
 
       if (sp.z <= supportZ) {
+        sp.z = supportZ;
+        if (sp.vz < 0) sp.vz = 0;
+      }
+    }
+  }
+
+  /**
+   * Zero-GC Multi-Story Voxel Spatial3D Elevation System:
+   * Samples support Z (stairs/ramps/decks) and ceiling Z (arches/overpasses) from `RoomVoxelVolume`,
+   * applying Z-axis gravity, landing, and head-bonk clamping while respecting dimension bitmasks.
+   */
+  public stepSpatial3DWithVolume(
+    core: EcsCoreWorld,
+    dt: number,
+    volume: RoomVoxelVolume,
+    eventsOut: SimEvent[],
+    activeDimensionMask = 3,
+  ): void {
+    const c = core.components;
+    const spStore = core.getStore(c.Spatial3D);
+    const spCount = spStore.size();
+    if (spCount === 0) return;
+
+    for (let i = 0; i < spCount; i++) {
+      const h = spStore.getDenseEntityAt(i);
+      const sp = spStore.getDenseDataAt(i);
+      sp.prevZ = sp.z;
+      if ((sp.dimensionMask & activeDimensionMask) === 0) continue;
+
+      const tr = core.getComponent(h, c.Transform2D);
+      if (!tr) continue;
+
+      const cx = tr.x + tr.w * 0.5;
+      const cy = tr.y + tr.h * 0.72;
+      const volSupportZ = volume.sampleSupportZ(cx, cy, sp.z, sp.stepHeight);
+      const supportZ = Math.max(sp.groundZ, volSupportZ);
+      const ceilingZ = volume.sampleCeilingZ(cx, cy, sp.z, 9999);
+      sp.ceilingZ = ceilingZ;
+
+      if (sp.gravityZ <= 0 && Math.abs(sp.vz) < 1e-4) {
+        sp.z = supportZ;
+        continue;
+      }
+
+      if (sp.gravityZ > 0) {
+        sp.vz -= sp.gravityZ * dt;
+      }
+      sp.z += sp.vz * dt;
+
+      if (sp.vz > 0 && sp.z + sp.height > ceilingZ) {
+        sp.z = Math.max(supportZ, ceilingZ - sp.height);
+        sp.vz = 0;
+      }
+
+      if (sp.z <= supportZ) {
+        if (sp.vz < -120) {
+          eventsOut.push('snap');
+        }
         sp.z = supportZ;
         if (sp.vz < 0) sp.vz = 0;
       }

@@ -38,38 +38,68 @@ export function srgbToLinear(c: number): number {
   return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
 }
 
+function linearUnitToSrgb(lin: number): number {
+  return lin <= 0.0031308 ? lin * 12.92 : 1.055 * Math.pow(lin, 1 / 2.4) - 0.055;
+}
+
 /** Exact IEC 61966-2-1 Linear RGB [0..1] -> sRGB [0..1]. */
 export function linearToSrgb(c: number): number {
-  const lin = clamp01Finite(c);
-  return lin <= 0.0031308 ? lin * 12.92 : 1.055 * Math.pow(lin, 1 / 2.4) - 0.055;
+  return linearUnitToSrgb(clamp01Finite(c));
+}
+
+function hexNibble(code: number): number {
+  if (code >= 48 && code <= 57) return code - 48;
+  if (code >= 97 && code <= 102) return code - 87;
+  if (code >= 65 && code <= 70) return code - 55;
+  return -1;
+}
+
+/** Monomorphic Float32Array store helper to prevent V8 polymorphic HeapNumber boxing. */
+function writeVec3(
+  out: ColorVec3Target,
+  offset: number,
+  c0: number,
+  c1: number,
+  c2: number,
+): ColorVec3Target {
+  if (out instanceof Float32Array) {
+    out[offset] = c0;
+    out[offset + 1] = c1;
+    out[offset + 2] = c2;
+  } else {
+    out[offset] = c0;
+    out[offset + 1] = c1;
+    out[offset + 2] = c2;
+  }
+  return out;
 }
 
 /** Zero-GC hex parser (#rrggbb or #rgb) into normalized sRGB [0..1]. */
 export function hexToRgb01Into(hex: string, out: ColorVec3Target, offset = 0): void {
-  const start = hex.charCodeAt(0) === 35 ? 1 : 0; // '#'
-  const len = hex.length - start;
+  const rawLen = typeof hex === 'string' ? hex.length : 0;
+  const start = rawLen > 0 && hex.charCodeAt(0) === 35 ? 1 : 0; // '#'
+  const len = rawLen - start;
   if (len === 6) {
-    const n = parseInt(hex.slice(start, start + 6), 16);
-    if (Number.isFinite(n)) {
-      out[offset] = ((n >> 16) & 255) * INV_255;
-      out[offset + 1] = ((n >> 8) & 255) * INV_255;
-      out[offset + 2] = (n & 255) * INV_255;
+    const n0 = hexNibble(hex.charCodeAt(start));
+    const n1 = hexNibble(hex.charCodeAt(start + 1));
+    const n2 = hexNibble(hex.charCodeAt(start + 2));
+    const n3 = hexNibble(hex.charCodeAt(start + 3));
+    const n4 = hexNibble(hex.charCodeAt(start + 4));
+    const n5 = hexNibble(hex.charCodeAt(start + 5));
+    if ((n0 | n1 | n2 | n3 | n4 | n5) >= 0) {
+      writeVec3(out, offset, ((n0 << 4) | n1) * INV_255, ((n2 << 4) | n3) * INV_255, ((n4 << 4) | n5) * INV_255);
       return;
     }
   } else if (len === 3) {
-    const r = parseInt(hex[start], 16);
-    const g = parseInt(hex[start + 1], 16);
-    const b = parseInt(hex[start + 2], 16);
-    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
-      out[offset] = (r * 17) * INV_255;
-      out[offset + 1] = (g * 17) * INV_255;
-      out[offset + 2] = (b * 17) * INV_255;
+    const r = hexNibble(hex.charCodeAt(start));
+    const g = hexNibble(hex.charCodeAt(start + 1));
+    const b = hexNibble(hex.charCodeAt(start + 2));
+    if ((r | g | b) >= 0) {
+      writeVec3(out, offset, r * 17 * INV_255, g * 17 * INV_255, b * 17 * INV_255);
       return;
     }
   }
-  out[offset] = 1;
-  out[offset + 1] = 1;
-  out[offset + 2] = 1;
+  writeVec3(out, offset, 1, 1, 1);
 }
 
 function byteToHex2(v: number): string {
@@ -108,10 +138,13 @@ export function linearRgbToOklab(
   const m_ = Math.cbrt(Math.max(0, m));
   const s_ = Math.cbrt(Math.max(0, s));
 
-  out[offset] = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
-  out[offset + 1] = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
-  out[offset + 2] = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
-  return out;
+  return writeVec3(
+    out,
+    offset,
+    0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+    1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+    0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+  );
 }
 
 /**
@@ -136,13 +169,29 @@ export function oklabToLinearRgb(
   const m = m_ * m_ * m_;
   const s = s_ * s_ * s_;
 
-  out[offset] = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
-  out[offset + 1] = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
-  out[offset + 2] = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
-  return out;
+  return writeVec3(
+    out,
+    offset,
+    +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  );
 }
 
-function writeGamutMappedRgb(
+function writeRgbOutput(
+  out: ColorVec3Target,
+  offset: number,
+  r: number,
+  g: number,
+  b: number,
+  toSrgb: boolean,
+): ColorVec3Target {
+  return toSrgb
+    ? writeVec3(out, offset, linearUnitToSrgb(r), linearUnitToSrgb(g), linearUnitToSrgb(b))
+    : writeVec3(out, offset, r, g, b);
+}
+
+function bisectGamutMappedRgb(
   L: number,
   a: number,
   b: number,
@@ -151,31 +200,39 @@ function writeGamutMappedRgb(
   offset: number,
 ): ColorVec3Target {
   const fL = clamp01Finite(L);
-  if (fL <= 1e-6) {
-    out[offset] = 0;
-    out[offset + 1] = 0;
-    out[offset + 2] = 0;
-    return out;
-  }
-  if (fL >= 1 - 1e-6) {
-    out[offset] = 1;
-    out[offset + 1] = 1;
-    out[offset + 2] = 1;
-    return out;
-  }
+  if (fL <= 1e-6) return writeVec3(out, offset, 0, 0, 0);
+  if (fL >= 1 - 1e-6) return writeVec3(out, offset, 1, 1, 1);
 
   const fa = finiteOr(a, 0);
   const fb = finiteOr(b, 0);
-  let lo = 0;
-  let hi = 1;
-  let bestR = 0;
-  let bestG = 0;
-  let bestB = 0;
+  const maxC = Math.max(Math.abs(fa), Math.abs(fb));
+  // Normalize extreme chroma and tighten hi to the LMS [0, 1]^3 boundary so bisection never collapses to 0 gray
+  const norm = maxC > 1 ? 1 / maxC : 1;
+  const ua = fa * norm;
+  const ub = fb * norm;
+  const dl = 0.3963377774 * ua + 0.2158037573 * ub;
+  const dm = -0.1055613458 * ua - 0.0638541728 * ub;
+  const ds = -0.0894841775 * ua - 1.2914855480 * ub;
 
-  for (let iter = 0; iter < 11; iter++) {
-    const scale = iter === 0 ? 1 : 0.5 * (lo + hi);
-    const ca = fa * scale;
-    const cb = fb * scale;
+  let hi = maxC > 1 ? maxC : 1;
+  const hiPad = 1e-5;
+  if (dl > 1e-12) hi = Math.min(hi, (1 + hiPad - fL) / dl);
+  else if (dl < -1e-12) hi = Math.min(hi, (fL + hiPad) / -dl);
+  if (dm > 1e-12) hi = Math.min(hi, (1 + hiPad - fL) / dm);
+  else if (dm < -1e-12) hi = Math.min(hi, (fL + hiPad) / -dm);
+  if (ds > 1e-12) hi = Math.min(hi, (1 + hiPad - fL) / ds);
+  else if (ds < -1e-12) hi = Math.min(hi, (fL + hiPad) / -ds);
+
+  let lo = 0;
+  const grayLin = fL * fL * fL;
+  let bestR = grayLin;
+  let bestG = grayLin;
+  let bestB = grayLin;
+
+  for (let iter = 0; iter < 18; iter++) {
+    const scale = 0.5 * (lo + hi);
+    const ca = ua * scale;
+    const cb = ub * scale;
     const l_ = fL + 0.3963377774 * ca + 0.2158037573 * cb;
     const m_ = fL - 0.1055613458 * ca - 0.0638541728 * cb;
     const s_ = fL - 0.0894841775 * ca - 1.2914855480 * cb;
@@ -188,36 +245,51 @@ function writeGamutMappedRgb(
     const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
     const bl = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
 
-    const inGamut = r >= 0 && r <= 1 && g >= 0 && g <= 1 && bl >= 0 && bl <= 1;
-    if (iter === 0 && inGamut) {
-      out[offset] = toSrgb ? linearToSrgb(r) : r;
-      out[offset + 1] = toSrgb ? linearToSrgb(g) : g;
-      out[offset + 2] = toSrgb ? linearToSrgb(bl) : bl;
-      return out;
-    }
-    if (inGamut) {
+    if (r >= 0 && r <= 1 && g >= 0 && g <= 1 && bl >= 0 && bl <= 1) {
       lo = scale;
       bestR = r;
       bestG = g;
       bestB = bl;
     } else {
       hi = scale;
-      if (iter === 0) {
-        const grayLin = fL * fL * fL;
-        bestR = grayLin;
-        bestG = grayLin;
-        bestB = grayLin;
-      }
     }
   }
 
-  const cr = clamp01Finite(bestR);
-  const cg = clamp01Finite(bestG);
-  const cb = clamp01Finite(bestB);
-  out[offset] = toSrgb ? linearToSrgb(cr) : cr;
-  out[offset + 1] = toSrgb ? linearToSrgb(cg) : cg;
-  out[offset + 2] = toSrgb ? linearToSrgb(cb) : cb;
-  return out;
+  return writeRgbOutput(
+    out,
+    offset,
+    clamp01Finite(bestR),
+    clamp01Finite(bestG),
+    clamp01Finite(bestB),
+    toSrgb,
+  );
+}
+
+function writeGamutMappedSrgb(
+  L: number,
+  a: number,
+  b: number,
+  out: ColorVec3Target,
+  offset: number,
+): ColorVec3Target {
+  if (L > 1e-6 && L < 1 - 1e-6) {
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+
+    const l = l_ * l_ * l_;
+    const m = m_ * m_ * m_;
+    const s = s_ * s_ * s_;
+
+    const r = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const bl = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+    if (r >= 0 && r <= 1 && g >= 0 && g <= 1 && bl >= 0 && bl <= 1) {
+      return writeVec3(out, offset, linearUnitToSrgb(r), linearUnitToSrgb(g), linearUnitToSrgb(bl));
+    }
+  }
+  return bisectGamutMappedRgb(L, a, b, true, out, offset);
 }
 
 /**
@@ -231,7 +303,24 @@ export function oklabToLinearRgbGamut(
   out: ColorVec3Target = [0, 0, 0],
   offset = 0,
 ): ColorVec3Target {
-  return writeGamutMappedRgb(L, a, b, false, out, offset);
+  if (L > 1e-6 && L < 1 - 1e-6 && a >= -1 && a <= 1 && b >= -1 && b <= 1) {
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+
+    const l = l_ * l_ * l_;
+    const m = m_ * m_ * m_;
+    const s = s_ * s_ * s_;
+
+    const r = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const bl = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+    if (r >= 0 && r <= 1 && g >= 0 && g <= 1 && bl >= 0 && bl <= 1) {
+      return writeVec3(out, offset, r, g, bl);
+    }
+  }
+  return bisectGamutMappedRgb(L, a, b, false, out, offset);
 }
 
 /** Converts Oklab (L, a, b) -> cylindrical Oklch (L, C >= 0, hRad in [-pi, pi]). */
@@ -246,10 +335,7 @@ export function oklabToOklch(
   const fa = finiteOr(a, 0);
   const fb = finiteOr(b, 0);
   const C = Math.hypot(fa, fb);
-  out[offset] = fL;
-  out[offset + 1] = C;
-  out[offset + 2] = C < 1e-6 ? 0 : Math.atan2(fb, fa);
-  return out;
+  return writeVec3(out, offset, fL, C, C < 1e-6 ? 0 : Math.atan2(fb, fa));
 }
 
 /** Converts cylindrical Oklch (L, C, hRad) -> Cartesian Oklab (L, a, b). */
@@ -263,10 +349,56 @@ export function oklchToOklab(
   const fL = finiteOr(L, 0);
   const fC = Math.max(0, finiteOr(C, 0));
   const fh = finiteOr(hRad, 0);
-  out[offset] = fL;
-  out[offset + 1] = fC * Math.cos(fh);
-  out[offset + 2] = fC * Math.sin(fh);
-  return out;
+  return writeVec3(out, offset, fL, fC * Math.cos(fh), fC * Math.sin(fh));
+}
+
+let mixCacheR0 = Number.NaN;
+let mixCacheG0 = 0;
+let mixCacheB0 = 0;
+let mixCacheR1 = Number.NaN;
+let mixCacheG1 = 0;
+let mixCacheB1 = 0;
+let mixL0 = 0;
+let mixDL = 0;
+let mixA0 = 0;
+let mixDA = 0;
+let mixB0 = 0;
+let mixDB = 0;
+
+function updateMixEndpointsOklab(
+  r0: number,
+  g0: number,
+  b0: number,
+  r1: number,
+  g1: number,
+  b1: number,
+): void {
+  mixCacheR0 = r0;
+  mixCacheG0 = g0;
+  mixCacheB0 = b0;
+  mixCacheR1 = r1;
+  mixCacheG1 = g1;
+  mixCacheB1 = b1;
+
+  const lr0 = srgbToLinear(r0);
+  const lg0 = srgbToLinear(g0);
+  const lb0 = srgbToLinear(b0);
+  const l0 = Math.cbrt(Math.max(0, 0.4122214708 * lr0 + 0.5363325363 * lg0 + 0.0514459929 * lb0));
+  const m0 = Math.cbrt(Math.max(0, 0.2119034982 * lr0 + 0.6806995451 * lg0 + 0.1073969566 * lb0));
+  const s0 = Math.cbrt(Math.max(0, 0.0883024619 * lr0 + 0.2817188376 * lg0 + 0.6299787005 * lb0));
+  mixL0 = 0.2104542553 * l0 + 0.7936177850 * m0 - 0.0040720468 * s0;
+  mixA0 = 1.9779984951 * l0 - 2.4285922050 * m0 + 0.4505937099 * s0;
+  mixB0 = 0.0259040371 * l0 + 0.7827717662 * m0 - 0.8086757660 * s0;
+
+  const lr1 = srgbToLinear(r1);
+  const lg1 = srgbToLinear(g1);
+  const lb1 = srgbToLinear(b1);
+  const l1 = Math.cbrt(Math.max(0, 0.4122214708 * lr1 + 0.5363325363 * lg1 + 0.0514459929 * lb1));
+  const m1 = Math.cbrt(Math.max(0, 0.2119034982 * lr1 + 0.6806995451 * lg1 + 0.1073969566 * lb1));
+  const s1 = Math.cbrt(Math.max(0, 0.0883024619 * lr1 + 0.2817188376 * lg1 + 0.6299787005 * lb1));
+  mixDL = 0.2104542553 * l1 + 0.7936177850 * m1 - 0.0040720468 * s1 - mixL0;
+  mixDA = 1.9779984951 * l1 - 2.4285922050 * m1 + 0.4505937099 * s1 - mixA0;
+  mixDB = 0.0259040371 * l1 + 0.7827717662 * m1 - 0.8086757660 * s1 - mixB0;
 }
 
 /**
@@ -284,33 +416,24 @@ export function mixOklabRgb01(
   out: ColorVec3Target = [0, 0, 0],
   offset = 0,
 ): ColorVec3Target {
-  const wt = clamp01Finite(t);
-
-  const lr0 = srgbToLinear(r0);
-  const lg0 = srgbToLinear(g0);
-  const lb0 = srgbToLinear(b0);
-  const l0 = Math.cbrt(Math.max(0, 0.4122214708 * lr0 + 0.5363325363 * lg0 + 0.0514459929 * lb0));
-  const m0 = Math.cbrt(Math.max(0, 0.2119034982 * lr0 + 0.6806995451 * lg0 + 0.1073969566 * lb0));
-  const s0 = Math.cbrt(Math.max(0, 0.0883024619 * lr0 + 0.2817188376 * lg0 + 0.6299787005 * lb0));
-  const L0 = 0.2104542553 * l0 + 0.7936177850 * m0 - 0.0040720468 * s0;
-  const a0 = 1.9779984951 * l0 - 2.4285922050 * m0 + 0.4505937099 * s0;
-  const okb0 = 0.0259040371 * l0 + 0.7827717662 * m0 - 0.8086757660 * s0;
-
-  const lr1 = srgbToLinear(r1);
-  const lg1 = srgbToLinear(g1);
-  const lb1 = srgbToLinear(b1);
-  const l1 = Math.cbrt(Math.max(0, 0.4122214708 * lr1 + 0.5363325363 * lg1 + 0.0514459929 * lb1));
-  const m1 = Math.cbrt(Math.max(0, 0.2119034982 * lr1 + 0.6806995451 * lg1 + 0.1073969566 * lb1));
-  const s1 = Math.cbrt(Math.max(0, 0.0883024619 * lr1 + 0.2817188376 * lg1 + 0.6299787005 * lb1));
-  const L1 = 0.2104542553 * l1 + 0.7936177850 * m1 - 0.0040720468 * s1;
-  const a1 = 1.9779984951 * l1 - 2.4285922050 * m1 + 0.4505937099 * s1;
-  const okb1 = 0.0259040371 * l1 + 0.7827717662 * m1 - 0.8086757660 * s1;
-
-  const L = L0 + (L1 - L0) * wt;
-  const a = a0 + (a1 - a0) * wt;
-  const okb = okb0 + (okb1 - okb0) * wt;
-
-  return writeGamutMappedRgb(L, a, okb, true, out, offset);
+  if (
+    r0 !== mixCacheR0 ||
+    g0 !== mixCacheG0 ||
+    b0 !== mixCacheB0 ||
+    r1 !== mixCacheR1 ||
+    g1 !== mixCacheG1 ||
+    b1 !== mixCacheB1
+  ) {
+    updateMixEndpointsOklab(r0, g0, b0, r1, g1, b1);
+  }
+  const wt = t <= 0 ? 0 : t >= 1 ? 1 : t === t ? t : 0;
+  return writeGamutMappedSrgb(
+    mixL0 + mixDL * wt,
+    mixA0 + mixDA * wt,
+    mixB0 + mixDB * wt,
+    out,
+    offset,
+  );
 }
 
 const RAMP_SCRATCH = new Float32Array(3);

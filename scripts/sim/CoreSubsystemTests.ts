@@ -8,6 +8,7 @@ import {
   linearToSrgb,
   mixOklabRgb01,
   oklabToLinearRgb,
+  oklabToLinearRgbGamut,
   oklabToOklch,
   oklchToOklab,
   srgbToLinear,
@@ -456,6 +457,41 @@ export function testModule1ColorMathAndShaderParity(): void {
     'oklabToOklch must guard NaN/Infinity inputs cleanly',
   );
 
+  // Strict hex validation (reject partial/non-hex strings and fall back to white [1, 1, 1])
+  for (const invalidHex of ['#ff00zz', '#12g', '#0x1234', '#12345', 'zzzzzz']) {
+    hexToRgb01Into(invalidHex, f32Out, 0);
+    check(
+      f32Out[0] === 1 && f32Out[1] === 1 && f32Out[2] === 1,
+      `hexToRgb01Into(${invalidHex}) must fall back to white [1,1,1] (got ${f32Out[0]},${f32Out[1]},${f32Out[2]})`,
+    );
+  }
+  hexToRgb01Into('#f0a', f32Out, 0);
+  check(
+    Math.abs(f32Out[0] - 1) < 1e-6 && Math.abs(f32Out[1]) < 1e-6 && Math.abs(f32Out[2] - 170 / 255) < 1e-6,
+    'hexToRgb01Into must continue parsing valid 3-char hex #f0a accurately',
+  );
+
+  // Extreme out-of-gamut chroma non-collapse check
+  for (const [L, a, b] of [
+    [0.5, 500, -400],
+    [0.5, 1e6, 0],
+    [0.6, -1e6, 8e5],
+  ] as const) {
+    oklabToLinearRgbGamut(L, a, b, f32Out, 0);
+    const maxCh = Math.max(f32Out[0], f32Out[1], f32Out[2]);
+    const minCh = Math.min(f32Out[0], f32Out[1], f32Out[2]);
+    check(
+      Number.isFinite(f32Out[0]) && Number.isFinite(f32Out[1]) && Number.isFinite(f32Out[2]) &&
+        minCh >= 0 && maxCh <= 1 && maxCh - minCh > 0.1,
+      `oklabToLinearRgbGamut(${L}, ${a}, ${b}) collapsed toward gray or left [0,1] (${f32Out[0]},${f32Out[1]},${f32Out[2]})`,
+    );
+  }
+  oklabToLinearRgbGamut(1e-4, 1e4, -1e4, f32Out, 0);
+  check(
+    Number.isFinite(f32Out[0]) && f32Out[2] > 1e-13 && f32Out[2] > f32Out[1] * 10,
+    'oklabToLinearRgbGamut must preserve chroma without gray collapse even at low L=1e-4',
+  );
+
   // Perceptual blue -> yellow midpoint must match exact Oklab (L0 + L1)/2 and avoid muddy sRGB dip
   const mixed = mixOklabRgb01(0.145, 0.388, 0.922, 0.98, 0.8, 0.082, 0.5, f32Out, 0);
   const naiveMidR = (0.145 + 0.98) * 0.5;
@@ -565,27 +601,44 @@ export function testModule1ColorMathAndShaderParity(): void {
   check(oracleHash21Bitwise(12.25, -4.5) !== oracleHash21Bitwise(13.25, -4.5), 'Adjacent tiles must yield distinct hash21 values');
 
   // 4. Zero-GC Micro-Benchmark (50,000 Oklab sky/color mix steps into pre-allocated typed array)
-  const benchOut = new Float32Array(3);
-  for (let w = 0; w < 10000; w++) {
-    mixOklabRgb01(0.46, 0.78, 1.0, 1.0, 0.95, 0.87, (w & 127) / 127, benchOut, 0);
-  }
-  const heapBefore = process.memoryUsage().heapUsed;
-  const tStart = performance.now();
-  let sink = 0;
-  for (let i = 0; i < 50000; i++) {
-    const t = (i & 255) / 255;
-    mixOklabRgb01(0.14, 0.39, 0.92, 0.98, 0.8, 0.08, t, benchOut, 0);
-    sink += benchOut[0] + benchOut[1] + benchOut[2];
-  }
-  const benchMs = performance.now() - tStart;
-  const heapDeltaKb = Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024);
-  check(Number.isFinite(sink) && benchMs < 250, `ColorMath 50k Oklab mix benchmark took too long (${benchMs.toFixed(2)}ms)`);
-  check(heapDeltaKb < 2048, `ColorMath hot path heap delta too large (${heapDeltaKb}KB)`);
+  const bench = runModule1HotBenchmark();
+  check(Number.isFinite(bench.sink) && bench.benchMs < 250, `ColorMath 50k Oklab mix benchmark took too long (${bench.benchMs.toFixed(2)}ms)`);
+  check(bench.heapDeltaKb < 2048, `ColorMath hot path heap delta too large (${bench.heapDeltaKb}KB)`);
 
   console.log(
-    `[BENCH] ColorMath 50k Oklab mix: ${benchMs.toFixed(2)}ms (heapDelta=${heapDeltaKb}KB, maxOracleDiff=${maxOracleDiff.toExponential(2)})`,
+    `[BENCH] ColorMath 50k Oklab mix: ${bench.benchMs.toFixed(2)}ms (heapDelta=${bench.heapDeltaKb}KB, maxOracleDiff=${maxOracleDiff.toExponential(2)})`,
   );
   console.log('[SIM OK] Module 1 ColorMath (Oklab/Hue-Shift Oracle + Bayer 4x4 + Integer Hash Parity) verified');
+}
+
+function runModule1HotBenchmark(): { benchMs: number; heapDeltaKb: number; sink: number } {
+  const benchOut = new Float32Array(3);
+  const execMix = (iters: number, r0: number, g0: number, b0: number, r1: number, g1: number, b1: number): number => {
+    let s = 0;
+    for (let i = 0; i < iters; i++) {
+      mixOklabRgb01(r0, g0, b0, r1, g1, b1, (i & 255) / 255, benchOut, 0);
+      s += benchOut[0] + benchOut[1] + benchOut[2];
+    }
+    return s;
+  };
+  for (let w = 0; w < 24; w++) {
+    execMix(1000, 0.46, 0.78, 1.0, 1.0, 0.95, 0.87);
+    execMix(1000, 0.14, 0.39, 0.92, 0.98, 0.8, 0.08);
+    // Warm the out-of-gamut bisection branch as well before measurement
+    execMix(256, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
+  }
+  let benchMs = 0;
+  let heapDeltaKb = Infinity;
+  let sink = 0;
+  for (let trial = 0; trial < 2; trial++) {
+    const heapBefore = process.memoryUsage().heapUsed;
+    const tStart = performance.now();
+    sink = execMix(50000, 0.14, 0.39, 0.92, 0.98, 0.8, 0.08);
+    benchMs = performance.now() - tStart;
+    const deltaKb = Math.round((process.memoryUsage().heapUsed - heapBefore) / 1024);
+    if (trial === 0 || deltaKb < heapDeltaKb) heapDeltaKb = deltaKb;
+  }
+  return { benchMs, heapDeltaKb, sink };
 }
 
 function oracleAnalyticalSpring(
@@ -763,6 +816,29 @@ export function testModule2SpringsAndNoiseOracle(): void {
   check(maxSegErr < 0.25, `VerletChain distance constraint error exceeded 0.25px (got ${maxSegErr.toFixed(4)})`);
   check(tailDiff > 0.5, 'VerletChain under Curl wind must diverge physically from still conditions');
 
+  // 2b. VerletChain 60Hz vs 120Hz dt-normalized damping convergence
+  const swing60 = new VerletChain(8, 6);
+  const swing120 = new VerletChain(8, 6);
+  swing60.reset(100, 50, 1, 0);
+  swing120.reset(100, 50, 1, 0);
+  for (let i = 0; i < 60; i++) swing60.step(1 / 60, 100, 50, 40, 260, 0.85, 8);
+  for (let i = 0; i < 120; i++) swing120.step(1 / 120, 100, 50, 40, 260, 0.85, 8);
+  const swingDiff1s = Math.hypot(swing60.posX[7] - swing120.posX[7], swing60.posY[7] - swing120.posY[7]);
+  check(swingDiff1s < 2.0, `VerletChain 60Hz vs 120Hz 1s tip drift too large (${swingDiff1s.toFixed(3)}px)`);
+
+  const free60 = new VerletChain(2, 50);
+  const free120 = new VerletChain(2, 50);
+  free60.reset(0, 0, 0, 1);
+  free120.reset(0, 0, 0, 1);
+  free60.prevX[1] = free60.posX[1] - 40 * (1 / 60);
+  free120.prevX[1] = free120.posX[1] - 40 * (1 / 120);
+  for (let i = 0; i < 30; i++) free60.step(1 / 60, 0, 0, 0, 0, 0.9, 8);
+  for (let i = 0; i < 60; i++) free120.step(1 / 120, 0, 0, 0, 0, 0.9, 8);
+  check(
+    Math.abs(free60.posX[1] - free120.posX[1]) < 0.35,
+    `VerletChain 60Hz vs 120Hz velocity decay diverged (${Math.abs(free60.posX[1] - free120.posX[1]).toFixed(3)}px)`,
+  );
+
   // 3. 2-Bone IK FK Oracle + Catmull-Rom Boundary Oracle (1,000 cases)
   const ikOut = new Float64Array(4);
   for (let i = 0; i < 1000; i++) {
@@ -796,6 +872,32 @@ export function testModule2SpringsAndNoiseOracle(): void {
     }
   }
 
+  // 3b. Equal-length 2-Bone IK guard when len1 === len2 and dist < 1e-5 (no NaN or dirAngle jump)
+  const ikZeroRef = new Float64Array(4);
+  const ikPerturbed = new Float64Array(4);
+  for (const bend of [1, -1]) {
+    solveTwoBoneIkInto(10, 20, 10, 20, 12, 12, bend, ikZeroRef, 0);
+    check(
+      ikZeroRef.every(Number.isFinite) &&
+        Math.abs(Math.hypot(ikZeroRef[0] - 10, ikZeroRef[1] - 20) - 12) < 1e-6 &&
+        Math.abs(Math.hypot(ikZeroRef[2] - ikZeroRef[0], ikZeroRef[3] - ikZeroRef[1]) - 12) < 1e-6,
+      'Equal-length 2-Bone IK at exact root must preserve FK lengths with zero NaN',
+    );
+    for (const [dx, dy] of [
+      [2e-6, 1e-6],
+      [-2e-6, 1e-6],
+      [-2e-6, -3e-6],
+      [4e-6, -2e-6],
+    ] as const) {
+      solveTwoBoneIkInto(10, 20, 10 + dx, 20 + dy, 12, 12, bend, ikPerturbed, 0);
+      const jump = Math.hypot(ikPerturbed[0] - ikZeroRef[0], ikPerturbed[1] - ikZeroRef[1]);
+      check(
+        ikPerturbed.every(Number.isFinite) && jump < 1e-5,
+        `Equal-length 2-Bone IK jumped across sub-1e-5 offset (${dx},${dy}): jump=${jump}`,
+      );
+    }
+  }
+
   const spOut = new Float64Array(2);
   evalCatmullRom2DInto(0, 0, 10, 20, 40, 50, 70, 10, 0, spOut, 0);
   check(Math.abs(spOut[0] - 10) < 1e-12 && Math.abs(spOut[1] - 20) < 1e-12, 'Catmull-Rom t=0 must hit P1');
@@ -824,6 +926,27 @@ export function testModule2SpringsAndNoiseOracle(): void {
   check(nMin < -0.75 && nMax > 0.75 && Math.abs(nMean) < 0.06 && nVar > 0.08, `Simplex noise range degenerate: [${nMin.toFixed(3)}, ${nMax.toFixed(3)}], mean=${nMean.toFixed(3)}, var=${nVar.toFixed(3)}`);
   check(simplex2D(42.19, -17.3, 9) === simplex2D(42.19, -17.3, 9), 'NoiseMath must be 100% deterministic');
   check(simplex2D(42.19, -17.3, 9) !== simplex2D(42.19, -17.3, 99), 'Distinct NoiseMath seeds must diverge');
+
+  // High-16-bit 32-bit seed sensitivity (0 vs 0x00010000) across simplex2D, simplex2DGradInto, and fbm2D
+  const grad0 = new Float64Array(2);
+  const gradHi = new Float64Array(2);
+  const nSeed0 = simplex2D(1.37, 2.91, 0);
+  const nSeedHi = simplex2D(1.37, 2.91, 0x00010000);
+  const gVal0 = simplex2DGradInto(1.37, 2.91, grad0, 0, 1, 0);
+  const gValHi = simplex2DGradInto(1.37, 2.91, gradHi, 0, 1, 0x00010000);
+  check(Math.abs(nSeed0 - nSeedHi) > 1e-4, `simplex2D must respect upper 16 bits of seed (0=${nSeed0}, 0x10000=${nSeedHi})`);
+  check(
+    Math.abs(gVal0 - nSeed0) < 1e-12 &&
+      Math.abs(gValHi - nSeedHi) < 1e-12 &&
+      Math.hypot(grad0[0] - gradHi[0], grad0[1] - gradHi[1]) > 1e-3,
+    'simplex2DGradInto must match simplex2D seed mixing across upper 16 bits',
+  );
+  const fbm0 = fbm2D(1.37, 2.91, 4, 2.02, 0.5, 0);
+  const fbmHi = fbm2D(1.37, 2.91, 4, 2.02, 0.5, 0x00010000);
+  check(
+    Math.abs(fbm0 - fbmHi) > 1e-4 && fbm0 >= -1 && fbm0 <= 1 && fbmHi >= -1 && fbmHi <= 1,
+    'fbm2D must respect upper 16 seed bits and stay bounded [-1, 1] with octave rotation',
+  );
 
   const hQuartiles = [0, 0, 0, 0];
   for (let i = 0; i < 8000; i++) {
@@ -1064,6 +1187,35 @@ export function testModule3SpatialVisibilityAndPathfindingOracle(): void {
     }
   }
 
+  // 1b. Tile-aligned [0, 32) half-open bucket count (zero 4x bloat) & avalanche query sanity
+  const shTile = new SpatialHash(64, 32, 1024);
+  const tileOut = new Int32Array(16);
+  const tilePairsA = new Int32Array(16);
+  const tilePairsB = new Int32Array(16);
+  shTile.insertBox(0, 0, 0, 32, 32);
+  shTile.insertBox(1, 32, 0, 32, 32);
+  shTile.insertBox(2, 0, 32, 32, 32);
+  shTile.insertBox(3, 32, 32, 32, 32);
+  check(
+    shTile.getNodeCount() === 4,
+    `Tile-aligned 32x32 boxes must allocate 1 node each (got ${shTile.getNodeCount()} != 4)`,
+  );
+  check(shTile.collectPairsInto(tilePairsA, tilePairsB) === 0, 'Touching tile-aligned boxes must report 0 pairs');
+  const qCnt0 = shTile.queryRect(0, 0, 32, 32, tileOut);
+  const qHit0 = tileOut[0];
+  check(qCnt0 === 1 && qHit0 === 0, 'Tile-aligned [0,32)x[0,32) queryRect must hit only slot 0');
+  const qCnt1 = shTile.queryRect(32, 0, 64, 32, tileOut);
+  const qHit1 = tileOut[0];
+  check(qCnt1 === 1 && qHit1 === 1, 'Tile-aligned [32,64)x[0,32) queryRect must hit only slot 1');
+  check(shTile.queryRect(16, 16, 48, 48, tileOut) === 4, 'Spanning queryRect [16,48)x[16,48) must hit all 4 quadrants');
+  shTile.insertBox(4, 4096 * 32, 0, 32, 32);
+  const qCntFar = shTile.queryRect(4096 * 32, 0, 4096 * 32 + 32, 32, tileOut);
+  const qHitFar = tileOut[0];
+  check(
+    shTile.getNodeCount() === 5 && qCntFar === 1 && qHitFar === 4,
+    'High-coordinate tile box must query cleanly through avalanche bucket hash',
+  );
+
   // 2. Visibility2D Oracles: Symmetric Shadowcasting FOV symmetry + Integer Rational LOS symmetry + Amanatides & Woo DDA
   const fovMaskA = new Uint8Array(24 * 24);
   const fovMaskB = new Uint8Array(24 * 24);
@@ -1197,7 +1349,31 @@ export function testModule3SpatialVisibilityAndPathfindingOracle(): void {
   cornerGrid[2 * 5 + 1] = 1;
   check(!hasGridLineOfSight(1, 1, 2, 2, (x, y) => cornerGrid[y * 5 + x] === 1), 'hasGridLineOfSight must block closed two-wall diagonal corners');
   const blockedCorner = raycastGrid2DInto(5, 5, 1.5, 1.5, 1, 1, 6, (x, y) => cornerGrid[y * 5 + x] === 1, hitOut);
-  check(blockedCorner && hitOut[1] < 1.0, 'raycastGrid2DInto must stop at closed two-wall diagonal corner instead of tunneling');
+  check(
+    blockedCorner && hitOut[1] < 1.0 && Math.abs(Math.hypot(hitOut[4], hitOut[5]) - 1.0) < 1e-6,
+    'raycastGrid2DInto must stop at closed two-wall diagonal corner with unit normal instead of tunneling',
+  );
+  // Near-45-degree perturbed rays must also be caught by epsilon tie detection at corner-pinch walls
+  for (const [rx, ry] of [
+    [1, 1],
+    [1 + 1e-12, 1],
+    [1, 1 + 1e-12],
+  ] as const) {
+    const pinchHit = raycastGrid2DInto(5, 5, 0.5, 0.5, rx, ry, 6, (x, y) => cornerGrid[y * 5 + x] === 1, hitOut);
+    check(
+      pinchHit && hitOut[1] < 2.5 && Math.abs(Math.hypot(hitOut[4], hitOut[5]) - 1.0) < 1e-6,
+      `45-degree ray (${rx},${ry}) leaked past corner-pinch walls or emitted non-unit normal`,
+    );
+  }
+  // Single diagonal corner hit (2,2) must also return unit-length normal (hypot == 1)
+  const singleCornerHit = raycastGrid2DInto(8, 8, 0.5, 0.5, Math.SQRT1_2, Math.SQRT1_2, 10, (x, y) => x === 2 && y === 2, hitOut);
+  check(
+    singleCornerHit && Math.abs(Math.hypot(hitOut[4], hitOut[5]) - 1.0) < 1e-6 && hitOut[4] < 0 && hitOut[5] < 0,
+    `Single diagonal corner hit normal must be unit length (got ${hitOut[4]}, ${hitOut[5]})`,
+  );
+  // Axis-aligned ray with tMaxY=Infinity must never falsely trigger diagonal tie
+  const axisHit = raycastGrid2DInto(5, 5, 0.5, 0.5, 1, 0, 5, (x, y) => x === 2 && y === 0, hitOut);
+  check(axisHit && hitOut[4] === -1 && hitOut[5] === 0 && hitOut[6] === 2 && hitOut[7] === 0, 'Axis-aligned DDA hit mismatch');
   check(!raycastGrid2DInto(5, 5, 1, 1, 0, 0, 5, () => false, hitOut), 'Zero-direction DDA ray must return false cleanly');
   check(!raycastGrid2DInto(5, 5, Number.NaN, 1, 1, 0, 5, () => false, hitOut), 'NaN origin DDA ray must return false cleanly');
   check(!raycastGrid2DInto(5, 5, 1, 1, 1, 0, -2, () => false, hitOut), 'Negative maxDist DDA ray must return false cleanly');

@@ -9,24 +9,33 @@ import {
   type EcsProjectV2,
 } from '../ecs/EcsProjectSchema.ts';
 import { CASTLE_TILE_REGISTRY } from '../ecs/EcsTilemapTypes.ts';
+import { ECS_VOXEL_SHAPES } from '../ecs/EcsVoxelVolume.ts';
 import {
   runScriptedPlaytest,
   type EcsKeypointPlaytestPlan,
 } from './EcsPlaytestVerifier.ts';
 import {
   analyzeActionReachability,
+  analyzeWorldMap3DReachability,
   analyzeWorldMapReachability,
   observeSceneSemantics,
   renderRoomAscii,
+  renderRoomSliceAscii,
   type ReachabilityOptions,
 } from './EcsSpatialOracle.ts';
 import { critiqueCutsceneAesthetics } from './EcsCinematicOracle.ts';
 import {
+  buildAssetPackInstallCommands,
+  buildBuiltinStarterPack,
   buildInteropStudioCommands,
   detectJsonInteropFormat,
+  exportProjectAsAssetPack,
   parseLdtkProject,
   parseTiledMap,
+  validateAssetPackManifest,
+  type BuiltinStarterPackGenre,
   type DecodedPngImage,
+  type PixerAssetPackGenre,
 } from '../interop/index.ts';
 
 export const PIXER_MCP_PROTOCOL_VERSION = '2024-11-05';
@@ -89,6 +98,29 @@ export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
     name: 'analyze_world_map',
     description:
       'Runs a deterministic multi-room BFS + key/switch dependency solver to prove all rooms, portals, interactions, and Bosses are reachable with zero soft-locks.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'get_room_slice_ascii',
+    description:
+      'Renders a single story zLevel (0..7) 3D voxel slice of a WorldMap room as compact ASCII (# cube, = half_slab, ^/v/</> ramps & stairs, A arch, @ hero, M entities).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        roomId: { type: 'string', description: 'Optional room ID (defaults to worldMap.startRoomId).' },
+        zLevel: { type: 'number', minimum: 0, maximum: 7, description: 'Story Z level 0..7 (default 0).' },
+      },
+    },
+  },
+  {
+    name: 'analyze_world_map_3d',
+    description:
+      'Runs a multi-story 3D BFS over (col, row, zLevel) across stairs, ramps, arches, upper decks, and portals to verify 3D reachability with zero soft-locks.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'list_models_3d',
+    description: 'Lists all 3D cuboid / glTF rawMesh model assets registered in project.models3d.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -194,6 +226,45 @@ export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
       required: ['cutsceneId'],
       properties: {
         cutsceneId: { type: 'string', description: 'ID of the cutscene in project.cutscenes to evaluate.' },
+      },
+    },
+  },
+  {
+    name: 'install_asset_pack',
+    description:
+      'Installs a cross-genre PixerAssetPackManifest (either a built-in starter pack for horror / visual_novel / dungeon or a custom pack JSON) atomically into the active project via a single Undo step.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        builtinGenre: {
+          type: 'string',
+          enum: ['horror', 'visual_novel', 'dungeon'],
+          description: 'Optional built-in cross-genre starter pack to install.',
+        },
+        packJson: {
+          description: 'Optional custom PixerAssetPackManifest JSON string or object.',
+        },
+        applyAtmosphere: {
+          type: 'boolean',
+          description: 'Whether to apply the pack atmosphere preset (default false).',
+        },
+      },
+    },
+  },
+  {
+    name: 'export_asset_pack',
+    description:
+      'Exports the active project custom sprites, tileDefs, prefabs, animations, and atmosphere into a portable PixerAssetPackManifest v1 JSON.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Optional pack slug ID.' },
+        name: { type: 'string', description: 'Optional human-readable pack name.' },
+        genre: {
+          type: 'string',
+          enum: ['horror', 'visual_novel', 'dungeon', 'scifi', 'universal'],
+          description: 'Target pack genre tag.',
+        },
       },
     },
   },
@@ -346,16 +417,23 @@ export class PixerMcpSession {
           commands: ECS_COMMAND_CATALOG,
           attachableComponents: [...ECS_ATTACHABLE_COMPONENTS],
           proceduralSpritePatterns: [...ECS_PROCEDURAL_SPRITE_PATTERNS],
+          voxelShapes: [...ECS_VOXEL_SHAPES],
           customSprites: this.session.listCustomSprites(),
+          models3d: this.session.listModels3D(),
           tiles: Array.from(mergedTiles.values()).map((t) => ({
             id: t.id,
             name: t.name,
             layer: t.layer,
             sprite: t.sprite,
+            ...(t.sideSprite ? { sideSprite: t.sideSprite } : {}),
             solid: t.solid,
             ...(t.hazard ? { hazard: true } : {}),
             ...(t.extrudeH ? { extrudeH: t.extrudeH } : {}),
             ...(t.renderH ? { renderH: t.renderH } : {}),
+            ...(t.wallMaterial ? { wallMaterial: t.wallMaterial } : {}),
+            ...(t.roughness !== undefined ? { roughness: t.roughness } : {}),
+            ...(t.metallic !== undefined ? { metallic: t.metallic } : {}),
+            ...(t.emissive !== undefined ? { emissive: t.emissive } : {}),
             ...(t.unlockGlobal ? { unlockGlobal: t.unlockGlobal } : {}),
           })),
         });
@@ -368,6 +446,24 @@ export class PixerMcpSession {
 
       case 'analyze_world_map':
         return makeToolSuccess(analyzeWorldMapReachability(this.session.getProject()));
+
+      case 'get_room_slice_ascii': {
+        const roomId = typeof args.roomId === 'string' ? args.roomId : undefined;
+        const zLevel =
+          typeof args.zLevel === 'number' && Number.isFinite(args.zLevel)
+            ? Math.max(0, Math.min(7, Math.floor(args.zLevel)))
+            : 0;
+        return makeToolSuccess(renderRoomSliceAscii(this.session.getProject(), roomId, zLevel));
+      }
+
+      case 'analyze_world_map_3d':
+        return makeToolSuccess(analyzeWorldMap3DReachability(this.session.getProject()));
+
+      case 'list_models_3d':
+        return makeToolSuccess({
+          revision: this.session.getRevision(),
+          models3d: this.session.listModels3D(),
+        });
 
       case 'list_attachable_components':
         return makeToolSuccess({ components: [...ECS_ATTACHABLE_COMPONENTS] });
@@ -491,6 +587,70 @@ export class PixerMcpSession {
         }
         const report = critiqueCutsceneAesthetics(this.session.getProject(), cutsceneId);
         return report.ok ? makeToolSuccess(report) : makeToolError(report.suggestions[0] ?? 'Cutscene critique failed', report);
+      }
+
+      case 'install_asset_pack': {
+        const builtinGenre =
+          args.builtinGenre === 'horror' ||
+          args.builtinGenre === 'visual_novel' ||
+          args.builtinGenre === 'dungeon'
+            ? (args.builtinGenre as BuiltinStarterPackGenre)
+            : null;
+        let pack;
+        if (builtinGenre) {
+          pack = buildBuiltinStarterPack(builtinGenre);
+        } else if (args.packJson !== undefined) {
+          let parsedRaw: unknown = args.packJson;
+          if (typeof args.packJson === 'string') {
+            try {
+              parsedRaw = JSON.parse(args.packJson);
+            } catch (err) {
+              return makeToolError(`Invalid packJson string: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          const valid = validateAssetPackManifest(parsedRaw);
+          if (!valid.ok) {
+            return makeToolError(`Asset pack validation failed: ${valid.errors[0] ?? 'invalid'}`, valid.errors);
+          }
+          pack = valid.pack;
+        } else {
+          return makeToolError('Expected either "builtinGenre" or "packJson"');
+        }
+
+        const applyAtmosphere = args.applyAtmosphere === true;
+        const cmds = buildAssetPackInstallCommands(pack, this.session.getProject(), { applyAtmosphere });
+        const res = this.session.dispatchBatch(cmds, `安裝資產包：${pack.name}`);
+        if (!res.ok) {
+          return makeToolError(res.summary, res);
+        }
+        return makeToolSuccess({
+          ok: true,
+          revision: res.revision,
+          packId: pack.id,
+          name: pack.name,
+          genre: pack.genre,
+          sprites: pack.sprites.length,
+          tileDefs: pack.tileDefs?.length ?? 0,
+          prefabs: pack.prefabs ? Object.keys(pack.prefabs).length : 0,
+          appliedAtmosphere: applyAtmosphere && Boolean(pack.atmospherePreset),
+        });
+      }
+
+      case 'export_asset_pack': {
+        const genre =
+          args.genre === 'horror' ||
+          args.genre === 'visual_novel' ||
+          args.genre === 'dungeon' ||
+          args.genre === 'scifi' ||
+          args.genre === 'universal'
+            ? (args.genre as PixerAssetPackGenre)
+            : 'universal';
+        const pack = exportProjectAsAssetPack(this.session.getProject(), {
+          id: typeof args.id === 'string' ? args.id : undefined,
+          name: typeof args.name === 'string' ? args.name : undefined,
+          genre,
+        });
+        return makeToolSuccess({ ok: true, pack });
       }
 
       case 'export_project_json':

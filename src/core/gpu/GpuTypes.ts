@@ -1,3 +1,5 @@
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
+
 export const GAME_W = 320;
 export const GAME_H = 180;
 export const OVERSCAN_PAD = 1;
@@ -7,6 +9,13 @@ export const FLOATS_PER_INSTANCE = 24;
 export const MAX_INSTANCES_PER_PASS = 16384;
 export const FLOATS_PER_QUAD3D = 28;
 export const MAX_QUAD3D_INSTANCES = 12288;
+export const FLOATS_PER_MESH3D_VERTEX = 20;
+export const MAX_MESH3D_VERTICES = 65536;
+export const MAX_MESH3D_INDICES = 196608;
+export const MAX_MESH3D_ALPHA_VERTICES = 16384;
+export const MAX_MESH3D_ALPHA_INDICES = 49152;
+export const MAX_LINE3D_VERTICES = 16384;
+export const SHADOW_MAP_SIZE = 1024;
 export const MAX_DYNAMIC_LIGHTS = 24;
 
 export const MAX_ATLAS_PAGES = 8;
@@ -115,24 +124,48 @@ export interface GpuCamera3DState {
   enabled: boolean;
   camCenterX: number;
   camCenterY: number;
+  camCenterZ: number;
   zoom: number;
+  yawDeg: number;
   pitchDeg: number;
+  rollDeg: number;
   fovDeg: number;
+  projection: Camera3DProjectionMode;
   viewW: number;
   viewH: number;
   occOriginWorldX: number;
   occOriginWorldY: number;
   occTileSizeWorld: number;
+  sunDirX: number;
+  sunDirY: number;
+  sunDirZ: number;
+  shadowMapEnabled: boolean;
+  shadowStrength: number;
 }
 
 export interface Quad3DPassData {
   camera: GpuCamera3DState;
+  quadViews?: readonly [GpuCamera3DState, GpuCamera3DState, GpuCamera3DState, GpuCamera3DState];
   opaqueData: Float32Array;
   opaqueCount: number;
   alphaData: Float32Array;
   alphaCount: number;
   additiveData: Float32Array;
   additiveCount: number;
+}
+
+export interface Mesh3DPassData {
+  opaqueVertices: Float32Array;
+  opaqueVertexCount: number;
+  opaqueIndices: Uint32Array;
+  opaqueIndexCount: number;
+  alphaVertices: Float32Array;
+  alphaVertexCount: number;
+  alphaIndices: Uint32Array;
+  alphaIndexCount: number;
+  lineVertices: Float32Array;
+  lineVertexCount: number;
+  lightPosZ?: Float32Array;
 }
 
 export interface SkyGradient {
@@ -188,6 +221,7 @@ export interface IGpuBackend {
     lightCount?: number,
     occlusion?: GpuOcclusionState,
     quad3d?: Quad3DPassData,
+    mesh3d?: Mesh3DPassData,
   ): number; // returns draw calls executed
   resize(pixelWidth: number, pixelHeight: number): void;
   dispose(): void;

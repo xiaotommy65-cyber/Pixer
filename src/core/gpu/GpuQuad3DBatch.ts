@@ -1,4 +1,5 @@
 import type { SpriteId, TextureAtlas } from '../../assets/TextureAtlas.ts';
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import { INV_255, packHexRgb } from './GpuColorCache.ts';
 import {
   FLOATS_PER_QUAD3D,
@@ -9,6 +10,31 @@ import {
 
 const MAX_QUAD3D_BLEND_INSTANCES = 4096;
 const DEG_TO_RAD = Math.PI / 180;
+
+function createCamera3DState(): GpuCamera3DState {
+  return {
+    enabled: false,
+    camCenterX: 0,
+    camCenterY: 0,
+    camCenterZ: 0,
+    zoom: 1,
+    yawDeg: 0,
+    pitchDeg: 42,
+    rollDeg: 0,
+    fovDeg: 38,
+    projection: 'perspective',
+    viewW: 320,
+    viewH: 180,
+    occOriginWorldX: 0,
+    occOriginWorldY: 0,
+    occTileSizeWorld: 32,
+    sunDirX: -0.38,
+    sunDirY: 0.48,
+    sunDirZ: 0.79,
+    shadowMapEnabled: true,
+    shadowStrength: 0.45,
+  };
+}
 
 /**
  * Zero-GC 3D Quad batching & HD-2D geometry emitters (floors, neighbor-culled extruded walls,
@@ -24,22 +50,23 @@ export class GpuQuad3DBatch {
   public spriteCount = 0;
   public lightCount = 0;
 
-  public readonly cameraState: GpuCamera3DState = {
-    enabled: false,
-    camCenterX: 0,
-    camCenterY: 0,
-    zoom: 1,
-    pitchDeg: 42,
-    fovDeg: 38,
-    viewW: 320,
-    viewH: 180,
-    occOriginWorldX: 0,
-    occOriginWorldY: 0,
-    occTileSizeWorld: 32,
-  };
+  public readonly cameraState: GpuCamera3DState = createCamera3DState();
+  private quadViewEnabled = false;
+  private readonly quadViewStates: readonly [
+    GpuCamera3DState,
+    GpuCamera3DState,
+    GpuCamera3DState,
+    GpuCamera3DState,
+  ] = [
+    createCamera3DState(),
+    createCamera3DState(),
+    createCamera3DState(),
+    createCamera3DState(),
+  ];
 
   private readonly passData: Quad3DPassData = {
     camera: this.cameraState,
+    quadViews: undefined,
     opaqueData: this.opaqueItems,
     opaqueCount: 0,
     alphaData: this.alphaItems,
@@ -50,11 +77,16 @@ export class GpuQuad3DBatch {
 
   public resetFrame(): void {
     this.cameraState.enabled = false;
+    this.quadViewEnabled = false;
     this.opaqueCount = 0;
     this.alphaCount = 0;
     this.addCount = 0;
     this.spriteCount = 0;
     this.lightCount = 0;
+  }
+
+  public setQuadViewEnabled(enabled: boolean): void {
+    this.quadViewEnabled = enabled;
   }
 
   public setCamera3D(
@@ -68,18 +100,41 @@ export class GpuQuad3DBatch {
     occOriginWorldX = 0,
     occOriginWorldY = 0,
     occTileSizeWorld = 32,
+    yawDeg = 0,
+    rollDeg = 0,
+    camCenterZ = 0,
+    projection: Camera3DProjectionMode = 'perspective',
   ): void {
     this.cameraState.enabled = true;
     this.cameraState.camCenterX = Number.isFinite(camCenterX) ? camCenterX : 0;
     this.cameraState.camCenterY = Number.isFinite(camCenterY) ? camCenterY : 0;
+    this.cameraState.camCenterZ = Number.isFinite(camCenterZ) ? camCenterZ : 0;
     this.cameraState.zoom = Number.isFinite(zoom) ? Math.max(0.1, zoom) : 1;
-    this.cameraState.pitchDeg = Number.isFinite(pitchDeg) ? Math.max(20, Math.min(78, pitchDeg)) : 42;
-    this.cameraState.fovDeg = Number.isFinite(fovDeg) ? Math.max(20, Math.min(65, fovDeg)) : 38;
+    this.cameraState.yawDeg = Number.isFinite(yawDeg) ? yawDeg : 0;
+    this.cameraState.pitchDeg = Number.isFinite(pitchDeg) ? Math.max(-90, Math.min(90, pitchDeg)) : 42;
+    this.cameraState.rollDeg = Number.isFinite(rollDeg) ? rollDeg : 0;
+    this.cameraState.fovDeg = Number.isFinite(fovDeg) ? Math.max(16, Math.min(85, fovDeg)) : 38;
+    this.cameraState.projection = projection;
     this.cameraState.viewW = Number.isFinite(viewW) && viewW > 0 ? viewW : 320;
     this.cameraState.viewH = Number.isFinite(viewH) && viewH > 0 ? viewH : 180;
     this.cameraState.occOriginWorldX = Number.isFinite(occOriginWorldX) ? occOriginWorldX : 0;
     this.cameraState.occOriginWorldY = Number.isFinite(occOriginWorldY) ? occOriginWorldY : 0;
     this.cameraState.occTileSizeWorld = Number.isFinite(occTileSizeWorld) ? Math.max(1, occTileSizeWorld) : 32;
+  }
+
+  public setSunLight3D(
+    dirX: number,
+    dirY: number,
+    dirZ: number,
+    shadowMapEnabled = true,
+    shadowStrength = 0.45,
+  ): void {
+    const len = Math.hypot(dirX, dirY, dirZ) || 1;
+    this.cameraState.sunDirX = dirX / len;
+    this.cameraState.sunDirY = dirY / len;
+    this.cameraState.sunDirZ = dirZ / len;
+    this.cameraState.shadowMapEnabled = shadowMapEnabled;
+    this.cameraState.shadowStrength = Math.max(0, Math.min(0.95, shadowStrength));
   }
 
   public getStats(): { opaqueCount: number; alphaCount: number; additiveCount: number; enabled: boolean } {
@@ -95,7 +150,62 @@ export class GpuQuad3DBatch {
     this.passData.opaqueCount = this.opaqueCount;
     this.passData.alphaCount = this.alphaCount;
     this.passData.additiveCount = this.addCount;
-    return this.cameraState.enabled ? this.passData : undefined;
+    if (!this.cameraState.enabled) {
+      this.passData.quadViews = undefined;
+      return undefined;
+    }
+    if (this.quadViewEnabled) {
+      const cam = this.cameraState;
+      const subW = cam.viewW * 0.5;
+      const subH = cam.viewH * 0.5;
+      for (let i = 0; i < 4; i++) {
+        const qv = this.quadViewStates[i];
+        qv.enabled = true;
+        qv.camCenterX = cam.camCenterX;
+        qv.camCenterY = cam.camCenterY;
+        qv.camCenterZ = cam.camCenterZ;
+        qv.zoom = cam.zoom;
+        qv.fovDeg = cam.fovDeg;
+        qv.viewW = subW;
+        qv.viewH = subH;
+        qv.occOriginWorldX = cam.occOriginWorldX;
+        qv.occOriginWorldY = cam.occOriginWorldY;
+        qv.occTileSizeWorld = cam.occTileSizeWorld;
+        qv.sunDirX = cam.sunDirX;
+        qv.sunDirY = cam.sunDirY;
+        qv.sunDirZ = cam.sunDirZ;
+        qv.shadowMapEnabled = cam.shadowMapEnabled;
+        qv.shadowStrength = cam.shadowStrength;
+      }
+      const q0 = this.quadViewStates[0];
+      q0.projection = 'perspective';
+      q0.yawDeg = cam.yawDeg;
+      q0.pitchDeg = cam.pitchDeg === 90 ? 42 : cam.pitchDeg;
+      q0.rollDeg = cam.rollDeg;
+
+      const q1 = this.quadViewStates[1];
+      q1.projection = 'ortho_top';
+      q1.yawDeg = 0;
+      q1.pitchDeg = 90;
+      q1.rollDeg = 0;
+
+      const q2 = this.quadViewStates[2];
+      q2.projection = 'ortho_front';
+      q2.yawDeg = 0;
+      q2.pitchDeg = 0;
+      q2.rollDeg = 0;
+
+      const q3 = this.quadViewStates[3];
+      q3.projection = 'ortho_side';
+      q3.yawDeg = 90;
+      q3.pitchDeg = 0;
+      q3.rollDeg = 0;
+
+      this.passData.quadViews = this.quadViewStates;
+    } else {
+      this.passData.quadViews = undefined;
+    }
+    return this.passData;
   }
 
   public pushQuad3D(
@@ -262,6 +372,7 @@ export class GpuQuad3DBatch {
     roughness = 0.58,
     metallic = 0.1,
     obliqueShadowAlpha = 0.35,
+    emissive = 0,
   ): void {
     if (
       !Number.isFinite(x) ||
@@ -327,14 +438,50 @@ export class GpuQuad3DBatch {
       topRect.page ?? 0,
       roughness,
       metallic,
-      0,
+      emissive,
     );
 
+    const hasNorth = (neighborMask & 1) !== 0;
     const hasEast = (neighborMask & 2) !== 0;
     const hasSouth = (neighborMask & 4) !== 0;
     const hasWest = (neighborMask & 8) !== 0;
     const sideMode = sideId ? 0 : 4;
     const sidePage = sideRect.page ?? 0;
+
+    // 1b. North Back Vertical Face (-Y normal, visible under 360° Yaw orbit)
+    if (!hasNorth) {
+      this.pushQuad3D(
+        pass,
+        x + w,
+        y,
+        zTop,
+        -w,
+        0,
+        0,
+        0,
+        0,
+        -wallH,
+        sideId ? sideRect.u0 : Math.max(0.5, w / 16),
+        sideId ? sideRect.v0 : Math.max(0.25, wallH / 16),
+        sideId ? sideRect.u1 : (x + y + 17) * 0.017,
+        sideId ? sideRect.v1 : 0,
+        wr,
+        wg,
+        wb,
+        alpha,
+        0,
+        -1,
+        0,
+        sideMode,
+        0,
+        0.78,
+        paletteRow,
+        sidePage,
+        roughness,
+        metallic,
+        emissive,
+      );
+    }
 
     // 2. South Front Vertical Face (+Y normal, faces camera directly)
     if (!hasSouth) {
@@ -367,7 +514,7 @@ export class GpuQuad3DBatch {
         sidePage,
         roughness,
         metallic,
-        0,
+        emissive,
       );
     }
 
@@ -402,7 +549,7 @@ export class GpuQuad3DBatch {
         sidePage,
         roughness,
         metallic,
-        0,
+        emissive,
       );
     }
 
@@ -437,7 +584,7 @@ export class GpuQuad3DBatch {
         sidePage,
         roughness,
         metallic,
-        0,
+        emissive,
       );
     }
 
@@ -552,8 +699,11 @@ export class GpuQuad3DBatch {
     const rad = tiltDeg * DEG_TO_RAD;
     const sinT = Math.sin(rad);
     const cosT = Math.cos(rad);
-    const ox = footX - dw * 0.5 + swayX;
-    const oy = footY - sinT * dh;
+    const yawRad = this.cameraState.yawDeg * DEG_TO_RAD;
+    const cosY = Math.cos(yawRad);
+    const sinY = Math.sin(yawRad);
+    const ox = footX - cosY * (dw * 0.5) + cosY * swayX + sinY * sinT * dh;
+    const oy = footY - sinY * (dw * 0.5) + sinY * swayX - cosY * sinT * dh;
     const oz = footZ + cosT * dh;
     const pass: 0 | 1 | 2 = additive ? 2 : alpha >= 0.99 && opaqueCutout ? 0 : 1;
     this.pushQuad3D(
@@ -561,11 +711,11 @@ export class GpuQuad3DBatch {
       ox,
       oy,
       oz,
-      dw,
+      cosY * dw,
+      sinY * dw,
       0,
-      0,
-      -swayX,
-      sinT * dh,
+      -cosY * swayX - sinY * sinT * dh,
+      -sinY * swayX + cosY * sinT * dh,
       -cosT * dh,
       u0,
       rect.v0,
@@ -575,8 +725,8 @@ export class GpuQuad3DBatch {
       g,
       b,
       alpha,
-      0,
-      cosT,
+      -sinY * cosT,
+      cosY * cosT,
       sinT,
       0,
       flash,
@@ -715,16 +865,19 @@ export class GpuQuad3DBatch {
     const tiltRad = 24 * DEG_TO_RAD;
     const sinT = Math.sin(tiltRad);
     const cosT = Math.cos(tiltRad);
+    const yawRad = this.cameraState.yawDeg * DEG_TO_RAD;
+    const cosY = Math.cos(yawRad);
+    const sinY = Math.sin(yawRad);
     this.pushQuad3D(
       additive ? 2 : 1,
-      cx - half,
-      cy - sinT * half,
+      cx - cosY * half + sinY * sinT * half,
+      cy - sinY * half - cosY * sinT * half,
       cz + cosT * half,
-      size,
+      cosY * size,
+      sinY * size,
       0,
-      0,
-      0,
-      sinT * size,
+      -sinY * sinT * size,
+      cosY * sinT * size,
       -cosT * size,
       0,
       0,
@@ -734,8 +887,8 @@ export class GpuQuad3DBatch {
       ((n >> 8) & 255) * INV_255,
       (n & 255) * INV_255,
       alpha,
-      0,
-      cosT,
+      -sinY * cosT,
+      cosY * cosT,
       sinT,
       2,
       0,

@@ -7,20 +7,39 @@ import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
 import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import {
   compileCustomSpriteToRgba,
+  decodeZlibB64ToRgba,
+  encodeRgbaToZlibB64,
   syncProjectCustomSpritesToAtlas,
   uint8ToBase64,
 } from '../../src/core/ecs/EcsCustomSpriteCompiler.ts';
+import { cloneEcsProject, validateCustomSpriteDef } from '../../src/core/ecs/EcsProjectSchema.ts';
 import { EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
 import {
+  PIXEL_FORGE_BAKING_PROFILES,
+  PIXEL_FORGE_PALETTES,
+  applyRgbaOutline,
+  buildAssetPackInstallCommands,
+  buildBuiltinStarterPack,
   buildInteropStudioCommands,
+  buildPixelForgeCommitCommands,
   buildSampleAsepriteFile,
   buildSampleLdtkSample,
   buildSampleTiledZlibSample,
+  cropOpaqueBoundsRgba,
+  detectEmissiveLightFromRgba,
+  detectPixelBlockSize,
+  downscaleToPixelGridRgba,
   encodeMinimalAsepriteBinary,
+  exportProjectAsAssetPack,
+  forgeImageToCustomSprites,
   loadExternalInteropFiles,
   parseAsepriteBinary,
   parseAsepriteJsonSheet,
   parseTiledMap,
+  quantizeRgbaOklab,
+  stripEdgeBackgroundRgba,
+  synthesizeWallTopCapRgba,
+  validateAssetPackManifest,
   type DecodedPngImage,
 } from '../../src/core/interop/index.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../../src/core/types/WorldTypes.ts';
@@ -338,4 +357,340 @@ test('MCP import_external_map imports LDtk/Tiled atomically and returns BFS reac
   const reach = toolRes.structuredContent.reachability as { pass: boolean; softLockRisks: string[] };
   assert.equal(reach.pass, true);
   assert.equal(reach.softLockRisks.length, 0);
+});
+
+test('256x256 & 160x192 high-res portrait sprites validate, encode/decode zlib-b64, and pack into TextureAtlas', () => {
+  const w = 160;
+  const h = 192;
+  const portraitRgba = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const off = (y * w + x) * 4;
+      portraitRgba[off] = (x * 2) & 255;
+      portraitRgba[off + 1] = (y * 2) & 255;
+      portraitRgba[off + 2] = 180;
+      portraitRgba[off + 3] = 255;
+    }
+  }
+  const b64 = encodeRgbaToZlibB64(portraitRgba);
+  const portraitDef = {
+    id: 'vn_heroine_portrait',
+    name: 'Heroine 160x192',
+    width: w,
+    height: h,
+    kind: 'rgba_b64' as const,
+    rgbaB64: b64,
+  };
+  assert.deepEqual(validateCustomSpriteDef(portraitDef, 'portrait'), []);
+
+  // Max ceiling 256x256 is valid, while 257x256 is rejected
+  const maxDef = {
+    id: 'boss_256',
+    name: 'Boss 256',
+    width: 256,
+    height: 256,
+    kind: 'rgba_b64' as const,
+    rgbaB64: encodeRgbaToZlibB64(new Uint8Array(256 * 256 * 4)),
+  };
+  assert.deepEqual(validateCustomSpriteDef(maxDef, 'boss'), []);
+  const oversizedErrors = validateCustomSpriteDef({ ...maxDef, width: 257 }, 'oversized');
+  assert.ok(oversizedErrors.length > 0 && oversizedErrors[0].includes('8..256'));
+
+  const decoded = decodeZlibB64ToRgba(b64, w * h * 4);
+  assert.deepEqual(decoded.slice(0, 12), portraitRgba.slice(0, 12));
+
+  const atlas = new TextureAtlas();
+  const project = cloneEcsProject(OBSIDIAN_CITADEL_PROJECT);
+  project.customSprites = { ...(project.customSprites ?? {}), [portraitDef.id]: portraitDef };
+  const synced = syncProjectCustomSpritesToAtlas(atlas, project);
+  assert.ok(synced.has('vn_heroine_portrait'));
+  assert.equal(atlas.hasSprite('vn_heroine_portrait'), true, '160x192 custom sprite must register into TextureAtlas');
+  const rect = atlas.getRect('vn_heroine_portrait');
+  assert.equal(rect.w, 160);
+  assert.equal(rect.h, 192);
+});
+
+test('PixelForgeProcessor strips backgrounds, crops, detects k*k grid, quantizes Oklab, outlines, and slices sprite sheets', () => {
+  // Build a 64x64 synthetic 4x-upscaled (16x16 logical pixel grid) sprite over a bright magenta backdrop
+  const sw = 64;
+  const sh = 64;
+  const src = new Uint8Array(sw * sh * 4);
+  const blockSize = 4;
+  for (let ly = 0; ly < 16; ly++) {
+    for (let lx = 0; lx < 16; lx++) {
+      const inBody = lx >= 3 && lx <= 12 && ly >= 2 && ly <= 13;
+      const r = inBody ? (lx < 8 ? 220 : 72) + (((lx + ly) & 1) ? 18 : -18) : 255;
+      const g = inBody ? (ly < 8 ? 160 : 95) + (((lx ^ ly) & 1) ? 14 : -14) : 0;
+      const b = inBody ? 110 + ((ly & 1) ? 12 : -12) : 255;
+      for (let sy = 0; sy < blockSize; sy++) {
+        for (let sx = 0; sx < blockSize; sx++) {
+          const x = lx * blockSize + sx;
+          const y = ly * blockSize + sy;
+          const off = (y * sw + x) * 4;
+          src[off] = r;
+          src[off + 1] = g;
+          src[off + 2] = b;
+          src[off + 3] = 255;
+        }
+      }
+    }
+  }
+
+  const stripped = stripEdgeBackgroundRgba(src, sw, sh, 40);
+  assert.equal(stripped[3], 0, 'Corner backdrop pixel should become transparent');
+  assert.equal(stripped[(20 * sw + 20) * 4 + 3], 255, 'Interior subject pixel should stay opaque');
+
+  const cropped = cropOpaqueBoundsRgba(stripped, sw, sh, 0);
+  assert.equal(cropped.cropped, true);
+  assert.equal(cropped.width, 40);
+  assert.equal(cropped.height, 48);
+
+  const detected = detectPixelBlockSize(stripped, sw, sh);
+  assert.equal(detected, 4, 'Should detect 4x upscaled pixel grid');
+
+  const downscaled = downscaleToPixelGridRgba(cropped.rgba, cropped.width, cropped.height, 16, 16, 'grid_majority', true);
+  for (let i = 3; i < downscaled.length; i += 4) {
+    assert.ok(downscaled[i] === 0 || downscaled[i] === 255, 'grid_majority must enforce hard alpha cutout (0 or 255)');
+  }
+
+  const horrorPalette = PIXEL_FORGE_PALETTES.find((p) => p.id === 'asylum_horror')!;
+  const locked = quantizeRgbaOklab(downscaled, 16, 16, {
+    colorMode: 'palette_lock',
+    paletteId: 'asylum_horror',
+    dither: false,
+  });
+  const allowedRgb = new Set(
+    horrorPalette.colors.map((hex) => {
+      const n = parseInt(hex.slice(1), 16);
+      return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+    }),
+  );
+  let opaqueLockedCount = 0;
+  for (let i = 0; i < 16 * 16; i++) {
+    const off = i * 4;
+    if (locked[off + 3] === 255) {
+      opaqueLockedCount++;
+      assert.ok(
+        allowedRgb.has(`${locked[off]},${locked[off + 1]},${locked[off + 2]}`),
+        'palette_lock output pixel must strictly belong to asylum_horror palette',
+      );
+    }
+  }
+  assert.ok(opaqueLockedCount > 0);
+
+  const kmeans = quantizeRgbaOklab(downscaled, 16, 16, { colorMode: 'adaptive_kmeans', maxColors: 4 });
+  assert.equal(kmeans.length, 16 * 16 * 4);
+
+  const outlined = applyRgbaOutline(locked, 16, 16, '#090b12');
+  assert.equal(outlined[(1 * 16 + 8) * 4 + 3] >= 0, true);
+
+  // Test 2x2 sprite sheet slicing -> 4 sprites + AnimationStateMachineDef + atomic commit + 1-step undo
+  const sheetW = 32;
+  const sheetH = 32;
+  const sheetRgba = new Uint8Array(sheetW * sheetH * 4);
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 2; c++) {
+      for (let y = 4; y < 12; y++) {
+        for (let x = 4; x < 12; x++) {
+          const px = c * 16 + x;
+          const py = r * 16 + y;
+          const off = (py * sheetW + px) * 4;
+          sheetRgba[off] = 60 + c * 80;
+          sheetRgba[off + 1] = 120 + r * 60;
+          sheetRgba[off + 2] = 200;
+          sheetRgba[off + 3] = 255;
+        }
+      }
+    }
+  }
+  const forged = forgeImageToCustomSprites(
+    { id: 'ghoul_sheet', name: 'Ghoul', rgba: sheetRgba, width: sheetW, height: sheetH },
+    {
+      id: 'ghoul_sheet',
+      targetWidth: 16,
+      targetHeight: 16,
+      colorMode: 'palette_lock',
+      paletteId: 'cozy_vn',
+      outlineHex: '#090b12',
+      stripBackground: false,
+      sheetCols: 2,
+      sheetRows: 2,
+    },
+  );
+  assert.equal(forged.sprites.length, 4);
+  assert.equal(forged.animations.length, 1);
+  assert.equal(forged.animations[0].clips.length, 2);
+
+  const session = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
+  const initialSpriteCount = Object.keys(session.getProject().customSprites ?? {}).length;
+  const cmds = buildPixelForgeCommitCommands(forged, session.getProject(), {
+    registerPrefab: true,
+    registerTileLayer: 'decor',
+  });
+  const batchRes = session.dispatchBatch(cmds, 'Forge 2x2 Ghoul Sheet');
+  assert.equal(batchRes.ok, true);
+  assert.ok(session.getProject().customSprites?.ghoul_sheet_f0);
+  assert.ok(session.getProject().prefabs.prefab_ghoul_sheet_f0);
+  assert.ok(session.getProject().animations.some((a) => a.id === 'anim_ghoul_sheet'));
+
+  const undoRes = session.undo();
+  assert.equal(undoRes.ok, true);
+  assert.equal(Object.keys(session.getProject().customSprites ?? {}).length, initialSpriteCount);
+});
+
+test('PixerAssetPack validates manifests, installs horror/vn/dungeon starter packs atomically, round-trips export & MCP tools', () => {
+  const bad = validateAssetPackManifest({ schemaVersion: 99, id: 'INVALID ID!' });
+  assert.equal(bad.ok, false);
+
+  for (const genre of ['horror', 'visual_novel', 'dungeon'] as const) {
+    const pack = buildBuiltinStarterPack(genre);
+    const valid = validateAssetPackManifest(pack);
+    assert.equal(valid.ok, true, `Starter pack '${genre}' must pass schema validation`);
+    if (genre === 'horror' || genre === 'visual_novel') {
+      const portrait = pack.sprites.find((s) => s.width === 160 && s.height === 192);
+      assert.ok(portrait, `Starter pack '${genre}' should include a 160x192 portrait sprite`);
+    }
+
+    const session = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
+    const beforePrefabs = Object.keys(session.getProject().prefabs).length;
+    const cmds = buildAssetPackInstallCommands(pack, session.getProject(), { applyAtmosphere: true });
+    const installRes = session.dispatchBatch(cmds, `Install ${genre}`);
+    assert.equal(installRes.ok, true, `Install '${genre}' pack must succeed atomically`);
+    assert.ok(Object.keys(session.getProject().prefabs).length > beforePrefabs);
+    const firstTile = pack.tileDefs?.[0];
+    if (firstTile) {
+      assert.ok(
+        session.getProject().worldMap?.tileDefs?.some((t) => t.sprite === firstTile.sprite),
+        `Starter pack '${genre}' tile sprite must exist in worldMap.tileDefs`,
+      );
+    }
+
+    const exported = exportProjectAsAssetPack(session.getProject(), {
+      id: `exported-${genre}`,
+      genre,
+    });
+    const revalid = validateAssetPackManifest(exported);
+    assert.equal(revalid.ok, true, `Exported pack for '${genre}' must round-trip validation`);
+
+    // 1-step Undo must revert the entire pack install
+    const undoRes = session.undo();
+    assert.equal(undoRes.ok, true);
+    assert.equal(Object.keys(session.getProject().prefabs).length, beforePrefabs);
+  }
+
+  // Verify MCP tools install_asset_pack & export_asset_pack
+  const mcp = new PixerMcpSession(OBSIDIAN_CITADEL_PROJECT);
+  const installResp = mcp.handleRequest({
+    jsonrpc: '2.0',
+    id: 101,
+    method: 'tools/call',
+    params: {
+      name: 'install_asset_pack',
+      arguments: { builtinGenre: 'horror', applyAtmosphere: true },
+    },
+  });
+  assert.ok(installResp && !installResp.error);
+  const installOut = installResp.result as { isError: boolean; structuredContent: Record<string, unknown> };
+  assert.equal(installOut.isError, false);
+  assert.equal(installOut.structuredContent.ok, true);
+  assert.equal(installOut.structuredContent.genre, 'horror');
+  assert.equal(installOut.structuredContent.appliedAtmosphere, true);
+
+  const exportResp = mcp.handleRequest({
+    jsonrpc: '2.0',
+    id: 102,
+    method: 'tools/call',
+    params: {
+      name: 'export_asset_pack',
+      arguments: { id: 'mcp-horror-export', genre: 'horror' },
+    },
+  });
+  assert.ok(exportResp && !exportResp.error);
+  const exportOut = exportResp.result as { isError: boolean; structuredContent: { ok: boolean; pack: unknown } };
+  assert.equal(exportOut.isError, false);
+  assert.equal(exportOut.structuredContent.ok, true);
+  assert.equal(validateAssetPackManifest(exportOut.structuredContent.pack).ok, true);
+});
+
+test('Pixel Forge multi-pipeline baking profiles emit wall top/side pairs, emissive light props, and 160x192 portraits', () => {
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'wall_top_side'));
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'billboard_actor'));
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'emissive_light_prop'));
+  assert.ok(PIXEL_FORGE_BAKING_PROFILES.some((p) => p.id === 'portrait_160x192'));
+
+  // 1. Wall top/side baking from a single 32x32 brick texture
+  const brickRgba = new Uint8Array(32 * 32 * 4);
+  for (let i = 0; i < 32 * 32; i++) {
+    brickRgba[i * 4] = 120;
+    brickRgba[i * 4 + 1] = 130;
+    brickRgba[i * 4 + 2] = 160;
+    brickRgba[i * 4 + 3] = 255;
+  }
+  const topCap = synthesizeWallTopCapRgba(brickRgba, 32, 32);
+  assert.ok(topCap[0] < brickRgba[0], 'Synthesized wall top border should be darker beveled cap');
+
+  const wallOut = forgeImageToCustomSprites(
+    { id: 'crypt_wall', rgba: brickRgba, width: 32, height: 32 },
+    {
+      id: 'crypt_wall',
+      bakingProfile: 'wall_top_side',
+      targetWidth: 32,
+      targetHeight: 32,
+      colorMode: 'palette_lock',
+      paletteId: 'obsidian_dungeon',
+      stripBackground: false,
+      cropOpaque: false,
+    },
+  );
+  assert.equal(wallOut.sprites.length, 2);
+  assert.equal(wallOut.sprites[0].id, 'crypt_wall_top');
+  assert.equal(wallOut.wallSideSpriteId, 'crypt_wall_side');
+
+  const session = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
+  const wallCmds = buildPixelForgeCommitCommands(wallOut, session.getProject(), {
+    registerTileLayer: 'wall',
+    tileSolid: true,
+    tileExtrudeH: 28,
+  });
+  const wallRes = session.dispatchBatch(wallCmds, 'Bake Wall Pair');
+  assert.equal(wallRes.ok, true);
+  const bakedTile = session.getProject().worldMap?.tileDefs?.find((t) => t.sprite === 'crypt_wall_top');
+  assert.ok(bakedTile && bakedTile.sideSprite === 'crypt_wall_side');
+
+  // 2. Emissive light prop auto-detection + LightSource prefab wiring
+  const lanternRgba = new Uint8Array(32 * 32 * 4);
+  for (let y = 8; y < 24; y++) {
+    for (let x = 8; x < 24; x++) {
+      const off = (y * 32 + x) * 4;
+      const isCore = x >= 12 && x <= 19 && y >= 12 && y <= 19;
+      lanternRgba[off] = isCore ? 255 : 40;
+      lanternRgba[off + 1] = isCore ? 210 : 45;
+      lanternRgba[off + 2] = isCore ? 90 : 60;
+      lanternRgba[off + 3] = 255;
+    }
+  }
+  const detected = detectEmissiveLightFromRgba(lanternRgba, 32, 32);
+  assert.ok(detected.brightRatio > 0.2 && detected.emissive > 0.6 && detected.radius >= 88);
+
+  const lanternOut = forgeImageToCustomSprites(
+    { id: 'amber_brazier', rgba: lanternRgba, width: 32, height: 32 },
+    {
+      id: 'amber_brazier',
+      bakingProfile: 'emissive_light_prop',
+      targetWidth: 32,
+      targetHeight: 32,
+      colorMode: 'true_color',
+      stripBackground: false,
+      cropOpaque: false,
+    },
+  );
+  const lightCmds = buildPixelForgeCommitCommands(lanternOut, session.getProject(), {
+    registerPrefab: true,
+    attachLight: true,
+  });
+  const lightRes = session.dispatchBatch(lightCmds, 'Bake Emissive Light Prop');
+  assert.equal(lightRes.ok, true);
+  const brazierPrefab = session.getProject().prefabs.prefab_amber_brazier;
+  assert.ok(brazierPrefab?.components.light, 'emissive_light_prop baking must attach LightSource component');
+  assert.ok((brazierPrefab.components.sprite?.emissive ?? 0) > 0.5);
 });

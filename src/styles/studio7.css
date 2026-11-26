@@ -40,11 +40,6 @@
   box-sizing: border-box;
 }
 
-/* Standalone Immersive Game Mode: hide developer workstation topbar */
-.atelier-shell.is-standalone-game .p7-topbar {
-  display: none;
-}
-
 .p7-brand {
   font-size: 18px;
   font-weight: 800;
@@ -129,10 +124,6 @@
 .atelier-shell.has-p7-topbar .window-status-chip {
   top: calc(var(--p7-topbar-h) + 12px) !important;
   z-index: 97;
-}
-
-.atelier-shell.has-p7-topbar .desk-world-stage {
-  padding-top: var(--p7-topbar-h);
 }
 
 /* Studio Workstation Root (Mode A — Primary Creative Surface) */
@@ -789,31 +780,6 @@
   color: var(--p7-text-muted);
   margin: 0;
   line-height: 1.5;
-}
-
-/* Legacy Pack On-Demand Loader Banner in Arcade Mode */
-.p7-legacy-btn {
-  appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 999px;
-  padding: 6px 12px;
-  background: rgba(15, 23, 42, 0.78);
-  color: #f8fafc;
-  font-family: var(--p7-font-sans);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  backdrop-filter: blur(8px);
-}
-
-.p7-legacy-btn:hover {
-  background: rgba(30, 41, 59, 0.92);
-}
-
-.p7-legacy-btn.is-loaded {
-  border-color: rgba(74, 222, 128, 0.5);
-  color: #86efac;
 }
 
 /* Full-width Select & Pixer 9.0 Batch 9.5 Visual Script Event Graph Editor */
@@ -1699,3 +1665,194 @@
   color: var(--p7-text, #e2e8f0);
   cursor: pointer;
 }
+
+/* ==================== Phase 6 Cutscene Director Rows ==================== */
+.p7-cutscene-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--p7-hairline);
+  border-radius: 6px;
+  background: var(--p7-bg);
+}
+
+.p7-cutscene-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* ==================== Phase C Spatial 3D Toolbar & Model Atelier Modal ==================== */
+.p7-spatial3d-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--p7-hairline);
+  background: var(--p7-surface);
+}
+
+.p7-model-atelier-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 270;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(2, 6, 23, 0.82);
+  backdrop-filter: blur(4px);
+  font-family: var(--p7-font-sans);
+  color: var(--p7-text);
+}
+
+.p7-model-atelier-backdrop[hidden] {
+  display: none;
+}
+
+.p7-model-atelier-dialog {
+  width: min(1140px, 100%);
+  height: min(760px, calc(100vh - 40px));
+  display: flex;
+  flex-direction: column;
+  background: var(--p7-surface);
+  border: 1px solid var(--p7-border);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.p7-model-atelier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--p7-bg);
+  border-bottom: 1px solid var(--p7-border);
+  flex-shrink: 0;
+}
+
+.p7-model-atelier-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 256px minmax(0, 1fr) 300px;
+  background: var(--p7-bg);
+  overflow: hidden;
+}
+
+.p7-model-atelier-left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--p7-surface);
+  border-right: 1px solid var(--p7-border);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.p7-model-atelier-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 16px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--p7-bg);
+}
+
+.p7-model-atelier-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--p7-surface);
+  border-left: 1px solid var(--p7-border);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.p7-model-atelier-viewbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 6px;
+  background: var(--p7-surface);
+  border: 1px solid var(--p7-hairline);
+}
+
+.p7-model-atelier-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  image-rendering: pixelated;
+}
+
+.p7-model-atelier-canvas:active {
+  cursor: grabbing;
+}
+
+.p7-model-atelier-parts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.p7-model-atelier-part-row {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--p7-hairline);
+  border-radius: 6px;
+  background: var(--p7-bg);
+  color: var(--p7-text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.p7-model-atelier-part-row:hover {
+  background: var(--p7-surface-hover);
+}
+
+.p7-model-atelier-part-row.is-selected {
+  border-color: var(--p7-accent);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.p7-model-atelier-vec3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.p7-model-atelier-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--p7-bg);
+  border-top: 1px solid var(--p7-border);
+  flex-shrink: 0;
+}
+

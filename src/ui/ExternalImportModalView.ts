@@ -1,5 +1,6 @@
 import { compileCustomSpriteToRgba } from '../core/ecs/EcsCustomSpriteCompiler.ts';
-import type { EcsCustomSpriteDef } from '../core/ecs/EcsProjectSchema.ts';
+import type { EcsCustomSpriteDef, EcsProjectV2 } from '../core/ecs/EcsProjectSchema.ts';
+import type { EcsStudioCommand } from '../core/ecs/EcsStudioSession.ts';
 import type { EcsMapLayerName } from '../core/ecs/EcsTilemapTypes.ts';
 import {
   buildSampleAsepriteFile,
@@ -10,9 +11,16 @@ import {
   type InteropImportResult,
 } from '../core/interop/index.ts';
 import { InteropWorkerClient } from './InteropWorkerClient.ts';
+import { PixelForgeImportTab } from './PixelForgeImportTab.ts';
 
 export interface ExternalImportModalCallbacks {
   onCommit: (result: InteropImportResult, options: InteropCommitOptions) => void;
+  getProject?: () => EcsProjectV2;
+  onCommitCommands?: (
+    cmds: EcsStudioCommand[],
+    summary: string,
+    focusHint?: { leftTab?: 'map' | 'prefabs' | 'atlas' },
+  ) => void;
 }
 
 function renderCustomSpriteThumb(def: EcsCustomSpriteDef, boxSize = 48): HTMLCanvasElement {
@@ -64,10 +72,18 @@ export class ExternalImportModalView {
 
   private readonly fileInput: HTMLInputElement;
   private readonly supplementPngInput: HTMLInputElement;
+  private readonly standardPaneEl: HTMLDivElement;
   private readonly dropzoneEl: HTMLDivElement;
   private readonly statusEl: HTMLDivElement;
   private readonly previewEl: HTMLDivElement;
+  private readonly footerEl: HTMLDivElement;
   private readonly commitBtn: HTMLButtonElement;
+  private readonly tabStandardBtn: HTMLButtonElement;
+  private readonly tabForgeBtn: HTMLButtonElement;
+  private readonly tabPacksBtn: HTMLButtonElement;
+  private readonly forgeTab: PixelForgeImportTab | null;
+
+  private activeTab: 'standard' | 'forge' | 'packs' = 'standard';
 
   private currentFiles: InteropBundleFile[] = [];
   private parsedResult: InteropImportResult | null = null;
@@ -241,11 +257,50 @@ export class ExternalImportModalView {
     this.previewEl = document.createElement('div');
     this.previewEl.className = 'p7-interop-preview';
 
-    body.append(this.fileInput, this.supplementPngInput, this.dropzoneEl, sampleRow, this.statusEl, this.previewEl);
+    const tabSeg = document.createElement('div');
+    tabSeg.className = 'p7-segmented';
+    this.tabStandardBtn = document.createElement('button');
+    this.tabStandardBtn.type = 'button';
+    this.tabStandardBtn.className = 'p7-seg-btn is-active';
+    this.tabStandardBtn.textContent = '標準格式 (Aseprite / LDtk / Tiled)';
+    this.tabStandardBtn.addEventListener('click', () => this.switchTab('standard'), { signal });
+
+    this.tabForgeBtn = document.createElement('button');
+    this.tabForgeBtn.type = 'button';
+    this.tabForgeBtn.className = 'p7-seg-btn';
+    this.tabForgeBtn.setAttribute('data-testid', 'interop-tab-forge');
+    this.tabForgeBtn.textContent = 'Pixel Forge 任意圖洗圖';
+    this.tabForgeBtn.addEventListener('click', () => this.switchTab('forge'), { signal });
+
+    this.tabPacksBtn = document.createElement('button');
+    this.tabPacksBtn.type = 'button';
+    this.tabPacksBtn.className = 'p7-seg-btn';
+    this.tabPacksBtn.setAttribute('data-testid', 'interop-tab-packs');
+    this.tabPacksBtn.textContent = '題材資產包 (Asset Packs)';
+    this.tabPacksBtn.addEventListener('click', () => this.switchTab('packs'), { signal });
+    tabSeg.append(this.tabStandardBtn, this.tabForgeBtn, this.tabPacksBtn);
+
+    this.standardPaneEl = document.createElement('div');
+    this.standardPaneEl.className = 'p7-interop-options';
+    this.standardPaneEl.append(this.fileInput, this.supplementPngInput, this.dropzoneEl, sampleRow, this.statusEl, this.previewEl);
+
+    if (callbacks.getProject && callbacks.onCommitCommands) {
+      this.forgeTab = new PixelForgeImportTab({
+        getProject: callbacks.getProject,
+        onCommitCommands: callbacks.onCommitCommands,
+        onRequestClose: () => this.close(),
+      });
+      body.append(tabSeg, this.standardPaneEl, this.forgeTab.forgePaneEl, this.forgeTab.packsPaneEl);
+    } else {
+      this.forgeTab = null;
+      this.tabForgeBtn.hidden = true;
+      this.tabPacksBtn.hidden = true;
+      body.append(this.standardPaneEl);
+    }
 
     // Footer
-    const footer = document.createElement('div');
-    footer.className = 'p7-interop-footer';
+    this.footerEl = document.createElement('div');
+    this.footerEl.className = 'p7-interop-footer';
     const footNote = document.createElement('div');
     footNote.className = 'p7-meta-line';
     footNote.textContent = '像素以無損 Zlib RGBA / Oklab PBR 寫入動態 MaxRects 圖集池，純本機解析不上傳伺服器。';
@@ -267,9 +322,9 @@ export class ExternalImportModalView {
     this.commitBtn.addEventListener('click', () => this.handleCommit(), { signal });
 
     footActions.append(cancelBtn, this.commitBtn);
-    footer.append(footNote, footActions);
+    this.footerEl.append(footNote, footActions);
 
-    dialog.append(header, body, footer);
+    dialog.append(header, body, this.footerEl);
     this.element.appendChild(dialog);
 
     // Backdrop & Escape close
@@ -292,7 +347,21 @@ export class ExternalImportModalView {
     );
   }
 
+  private switchTab(tab: 'standard' | 'forge' | 'packs'): void {
+    this.activeTab = tab;
+    this.tabStandardBtn.classList.toggle('is-active', tab === 'standard');
+    this.tabForgeBtn.classList.toggle('is-active', tab === 'forge');
+    this.tabPacksBtn.classList.toggle('is-active', tab === 'packs');
+    this.standardPaneEl.hidden = tab !== 'standard';
+    this.footerEl.hidden = tab !== 'standard';
+    if (this.forgeTab) {
+      this.forgeTab.forgePaneEl.hidden = tab !== 'forge';
+      this.forgeTab.packsPaneEl.hidden = tab !== 'packs';
+    }
+  }
+
   public open(): void {
+    this.switchTab(this.activeTab);
     this.element.hidden = false;
     this.renderPreview();
   }
@@ -552,6 +621,7 @@ export class ExternalImportModalView {
   }
 
   public destroy(): void {
+    this.forgeTab?.destroy();
     this.workerClient.destroy();
     this.ac.abort();
     this.element.remove();

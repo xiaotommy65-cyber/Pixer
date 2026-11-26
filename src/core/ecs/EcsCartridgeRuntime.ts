@@ -738,6 +738,14 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
 
   public patchLiveAtmosphere(patch: Partial<EcsProjectV2['atmosphere']>): void {
     Object.assign(this.project.atmosphere, patch);
+    if (!this.worldMapCtrl.director.isCutscenePlaying()) {
+      if (patch.tiltShiftBlur !== undefined) {
+        this.worldMapCtrl.director.tiltShiftBlur = patch.tiltShiftBlur;
+      }
+      if (patch.tiltShiftFocusY !== undefined) {
+        this.worldMapCtrl.director.tiltShiftFocusY = patch.tiltShiftFocusY;
+      }
+    }
   }
 
   public getProject(): EcsProjectV2 {
@@ -1087,10 +1095,12 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
   public step(dt: number, input: InputState, _params: RuntimeParams): SimEvent[] {
     this.eventsOut.length = 0;
     const juiceScale = this.project.atmosphere.juiceScale ?? 1.0;
-    const simDt = this.juice.advanceRealTime(dt, juiceScale);
+    const realSimDt = this.juice.advanceRealTime(dt, juiceScale);
+    const timeScale = this.worldMapCtrl.hasWorldMap() ? this.worldMapCtrl.director.timeScale : 1.0;
+    const simDt = realSimDt * timeScale;
     const vp = this.snap.viewport!;
     const transitionedToPlay = this.gameFlow.step(dt);
-    if (transitionedToPlay) {
+    if (transitionedToPlay === 'intro_complete') {
       this.cameraRig.setShot(resolveSceneCameraShot('playing'), 6.2);
     }
     this.cameraRig.step(dt, vp.width / Math.max(1, vp.height));
@@ -1139,7 +1149,16 @@ export class EcsCartridgeRuntime implements CartridgeInstance, DebuggableCartrid
 
     if (this.worldMapCtrl.hasWorldMap()) {
       const vp = this.snap.viewport!;
-      this.worldMapCtrl.step(simDt, this.world, input, vp.width, vp.height, this.eventsOut, this.wmCallbacks);
+      this.worldMapCtrl.step(
+        simDt,
+        this.world,
+        input,
+        vp.width,
+        vp.height,
+        this.eventsOut,
+        this.wmCallbacks,
+        realSimDt,
+      );
       // Evaluate parameter-driven transitions immediately (dt=0 avoids double-stepping frame timers)
       this.sysAnimatorStateMachine(this.world.core, 0);
       this.syncWorldMapRoomSnap();

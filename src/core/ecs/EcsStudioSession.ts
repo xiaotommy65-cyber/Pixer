@@ -1,8 +1,10 @@
 import { VIEWPORT_PRESETS, type ViewportPreset } from '../gpu/GpuTypes.ts';
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import type { AnimationStateMachineDef } from '../sim/AnimationStateMachine.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../types/WorldTypes.ts';
 import { EcsCartridgeRuntime } from './EcsCartridgeRuntime.ts';
 import type { EcsEventGraphLayoutMap } from './EcsEventGraph.ts';
+import { validateModel3DDef, type EcsModel3DDef } from './EcsModel3D.ts';
 import {
   cloneEcsProject,
   getEntityPrefabId,
@@ -23,9 +25,11 @@ import {
 } from './EcsProjectSchema.ts';
 import {
   createEmptyRoom,
+  fillRoomBox3D,
   fillRoomRect,
   floodFillRoom,
   setRoomTile,
+  setRoomVoxel,
   type EcsMapInteractionRule,
   type EcsMapLayerName,
   type EcsMapPortalDef,
@@ -33,6 +37,8 @@ import {
   type EcsTileDef,
   type EcsTopDownAiProfile,
   type EcsTopDownHeroConfig,
+  type EcsVoxelCellDef,
+  type EcsVoxelShape,
 } from './EcsTilemapTypes.ts';
 
 export const ECS_ATTACHABLE_COMPONENTS = [
@@ -49,6 +55,7 @@ export const ECS_ATTACHABLE_COMPONENTS = [
   'triggerZone',
   'verletChain',
   'spatial3d',
+  'mesh3d',
 ] as const;
 
 export type EcsAttachableComponent = (typeof ECS_ATTACHABLE_COMPONENTS)[number];
@@ -191,7 +198,37 @@ export type EcsStudioCommand =
   | { type: 'upsert_animation'; animation: AnimationStateMachineDef }
   | { type: 'remove_animation'; animationId: string }
   | { type: 'upsert_cutscene'; cutscene: EcsCutsceneDef }
-  | { type: 'remove_cutscene'; cutsceneId: string };
+  | { type: 'remove_cutscene'; cutsceneId: string }
+  | { type: 'set_room_voxel'; roomId: string; cell: EcsVoxelCellDef }
+  | {
+      type: 'fill_room_box_3d';
+      roomId: string;
+      c0: number;
+      r0: number;
+      z0: number;
+      c1: number;
+      r1: number;
+      z1: number;
+      tileId: number;
+      shape?: EcsVoxelShape;
+    }
+  | { type: 'clear_room_voxels'; roomId: string; zLevel?: number }
+  | { type: 'upsert_model_3d'; model: EcsModel3DDef }
+  | { type: 'remove_model_3d'; modelId: string }
+  | {
+      type: 'set_camera_3d_pose';
+      yawDeg?: number;
+      pitchDeg?: number;
+      rollDeg?: number;
+      fovDeg?: number;
+      camCenterZ?: number;
+      cameraProjection3d?: Camera3DProjectionMode;
+      quadView?: boolean;
+      shadowMapEnabled?: boolean;
+      shadowMapStrength?: number;
+      showAxisGizmo3d?: boolean;
+      showOrthoGrid3d?: boolean;
+    };
 
 export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'ensure_world_map', category: 'world_map', fields: 'cols?, rows?, roomName?', note: 'Initialize a 32px multi-room HD-2D worldMap if missing.' },
@@ -212,22 +249,37 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'upsert_hud_gauge', category: 'rules', fields: 'gauge: {kind,x,y,label,globalKey?,color,w?,h?,maxVal?}', note: 'Add or update a global-bound HUD indicator.' },
   { type: 'remove_hud_gauge', category: 'rules', fields: 'label', note: 'Remove a HUD gauge by label.' },
   { type: 'create_prefab', category: 'prefab', fields: 'prefab: EcsPrefabDef', note: 'Register a reusable entity blueprint.' },
+  { type: 'update_prefab', category: 'prefab', fields: 'prefabId, name?, category?, patch?, attachComponent?, detachComponent?', note: 'Update a Prefab blueprint name, category, or components in-place.' },
+  { type: 'delete_prefab', category: 'prefab', fields: 'prefabId, mode?: "unlink"|"remove_instances"', note: 'Delete a Prefab blueprint and either bake/unlink instances or remove them.' },
+  { type: 'save_entity_as_prefab', category: 'prefab', fields: 'entityId, prefabId, name?, category?, linkSourceEntity?', note: 'Promote an entity into a reusable Prefab blueprint and optionally link it.' },
   { type: 'instantiate_prefab', category: 'prefab', fields: 'prefabId, entityId?, name?, x?, y?, roomId?, overrides?', note: 'Spawn a linked prefab instance in a room.' },
+  { type: 'revert_prefab_overrides', category: 'prefab', fields: 'entityId, keepPosition?', note: 'Reset sparse component overrides on a Prefab instance back to blueprint defaults.' },
+  { type: 'unlink_prefab', category: 'prefab', fields: 'entityId', note: 'Bake resolved Prefab components onto an entity and break its Prefab link.' },
   { type: 'spawn_entity', category: 'entity', fields: 'entity: EcsEntityInitDef', note: 'Spawn a standalone ECS entity.' },
   { type: 'patch_entity', category: 'entity', fields: 'entityId, patch: EcsComponentOverrides', note: 'Patch entity transform/sprite/health/light/etc.' },
   { type: 'remove_entity', category: 'entity', fields: 'entityId', note: 'Remove an entity.' },
   { type: 'attach_component', category: 'entity', fields: 'entityId, component, value', note: 'Attach any dynamic ECS component.' },
+  { type: 'detach_component', category: 'entity', fields: 'entityId, component', note: 'Detach an ECS component from an entity (tracking detached prefab overrides).' },
   { type: 'upsert_custom_sprite', category: 'assets', fields: 'sprite: {id, name?, width, height, kind: "grid"|"procedural"|"rgba_b64", palette?, paletteRow?, pixels?, rgbaB64?, recipe?: {pattern, baseHex, secondaryHex?, accentHex?, outlineHex?, seed?, dither?, bevel?, emissiveCore?, frameBorder?}}', note: 'Create or update a project-embedded custom pixel sprite (grid, Oklab procedural, or lossless zlib RGBA from Aseprite/LDtk/Tiled) hot-compiled into TextureAtlas.' },
   { type: 'remove_custom_sprite', category: 'assets', fields: 'spriteId', note: 'Delete a project-embedded custom sprite and recycle its dynamic atlas slot.' },
   { type: 'upsert_animation', category: 'assets', fields: 'animation: {id, initialState, clips: [{name, frames[], fps, loop?, events?}], transitions: [{from, to, param, op, value, priority?}]}', note: 'Create or update a multi-frame AnimationStateMachineDef (bind via components.animatorId on entities or prefabs).' },
   { type: 'remove_animation', category: 'assets', fields: 'animationId', note: 'Remove an AnimationStateMachineDef by ID.' },
+  { type: 'load_project', category: 'scene', fields: 'project: EcsProjectV2', note: 'Validate and load a full EcsProjectV2 document, replacing the active project.' },
+  { type: 'set_viewport', category: 'scene', fields: 'preset?, width?, height?', note: 'Switch canvas viewport resolution via preset or explicit width/height.' },
   { type: 'upsert_cutscene', category: 'scene', fields: 'cutscene: {id, name, trigger?, roomId?, triggerGlobal?, handbackDurationSec?, skippable?, shots: [{id, durationSec, subject?, secondarySubject?, shotSize?: "EWS"|"WS"|"MS"|"CU"|"ECU", anchor?: "center"|"left_third"|"right_third"|"upper_third"|"lower_third"|"lead_room"|"two_shot", motion?: "cut"|"spring"|"push_in"|"pull_out"|"pan_smooth"|"impact_zoom", timeScale?, holdBeatSec?, motivation?, speaker?, subtitle?, splashTitle?, splashSubtitle?}]}', note: 'Create or update an Actor-Relative & Toric Space multi-shot cutscene / PV sequence with 3-Phase Seamless Spring Handback.' },
   { type: 'remove_cutscene', category: 'scene', fields: 'cutsceneId', note: 'Remove a cutscene / PV sequence by ID.' },
   { type: 'set_atmosphere', category: 'scene', fields: 'patch: {skyTop?, skyBottom?, ambientDarkness?, waterLevelNorm?, waterTint?, shadowOcclusion?, shadowStrength?, shadowSoftness?, tiltShiftBlur?, tiltShiftFocusY?, ambientParticles?: "none"|"embers"|"fireflies"|"dust"|"snow", ambientParticleDensity?, juiceScale?}', note: 'Configure HD-2D sky, 2D raymarched wall shadow occlusion, Tilt-Shift DoF, ambient GPU particles, and combat hitstop/shake juice scale.' },
   { type: 'set_global', category: 'scene', fields: 'key, value', note: 'Set initial project global variable.' },
   { type: 'set_projection', category: 'scene', fields: 'patch: {mode?: "ortho_2d"|"hd2d_iso"|"hd2d_3d"|"first_person_25d", pitchDeg?, fovDeg?, wallHeightScale?, billboardTiltDeg?, obliqueShadowAlpha?, elevationScale?, perspectiveSkew?, activeDimensionMask?, allowDimensionShift?}', note: 'Switch between True 3D HD-2D Perspective (hd2d_3d), 3/4 Strong-Volume 2.5D (hd2d_iso), ortho_2d, or first_person_25d.' },
   { type: 'upsert_script', category: 'script', fields: 'script: EcsScriptDef, graphLayout?', note: 'Upsert sandbox VM script / EventGraph.' },
-];
+  { type: 'remove_script', category: 'script', fields: 'scriptId', note: 'Delete a script and graph layout, and detach it from all entities.' },
+  { type: 'set_room_voxel', category: 'world_map', fields: 'roomId, cell: {col,row,zLevel,tileId,shape?,rotZ?}', note: 'Place or remove (tileId<=0) a multi-story 3D voxel cell in a room.' },
+  { type: 'fill_room_box_3d', category: 'world_map', fields: 'roomId, c0, r0, z0, c1, r1, z1, tileId, shape?', note: 'Fill a 3D rectangular voxel box across columns, rows, and z-stories.' },
+  { type: 'clear_room_voxels', category: 'world_map', fields: 'roomId, zLevel?', note: 'Clear all 3D voxels in a room (or on a specific zLevel story).' },
+  { type: 'upsert_model_3d', category: 'assets', fields: 'model: {id, name, parts[], rawMesh?, clips?, boundsSize?}', note: 'Create or update a 3D cuboid or glTF rawMesh model asset in project.models3d.' },
+  { type: 'remove_model_3d', category: 'assets', fields: 'modelId', note: 'Remove a 3D model asset from project.models3d.' },
+  { type: 'set_camera_3d_pose', category: 'scene', fields: 'yawDeg?, pitchDeg?, rollDeg?, fovDeg?, camCenterZ?, cameraProjection3d?, quadView?, shadowMapEnabled?, shadowMapStrength?, showAxisGizmo3d?, showOrthoGrid3d?', note: 'Configure 6DoF 3D camera pose, orthographic projection, quad-view split, shadow map, and 3D gizmos.' },
+] as const;
 
 export interface EcsCommandResult {
   ok: boolean;
@@ -280,6 +332,7 @@ function mergeOverridesIntoTarget(
     'triggerZone',
     'verletChain',
     'spatial3d',
+    'mesh3d',
   ] as const;
 
   for (const key of objectKeys) {
@@ -297,6 +350,7 @@ function mergeOverridesIntoTarget(
       else if (key === 'collider') defaults = { radius: 12 };
       else if (key === 'pathFollower') defaults = { pathId: '', speed: 48 };
       else if (key === 'rhythmLane') defaults = { lane: 0, judgeX: 112 };
+      else if (key === 'mesh3d') defaults = { modelId: '' };
       target[key] = { ...defaults, ...(prevVal ?? {}), ...patchVal };
     }
   }
@@ -387,6 +441,37 @@ export class EcsStudioSession {
         height: def.height,
         kind: def.kind,
         ...(def.kind === 'procedural' && def.recipe ? { pattern: def.recipe.pattern } : {}),
+      });
+    }
+    return out;
+  }
+
+  public listModels3D(): Array<{
+    id: string;
+    name: string;
+    partCount: number;
+    hasRawMesh: boolean;
+    clipCount: number;
+    boundsSize?: readonly [number, number, number];
+  }> {
+    const map = this.doc.models3d;
+    if (!map) return [];
+    const out: Array<{
+      id: string;
+      name: string;
+      partCount: number;
+      hasRawMesh: boolean;
+      clipCount: number;
+      boundsSize?: readonly [number, number, number];
+    }> = [];
+    for (const def of Object.values(map)) {
+      out.push({
+        id: def.id,
+        name: def.name,
+        partCount: def.parts.length,
+        hasRawMesh: Boolean(def.rawMesh),
+        clipCount: def.clips?.length ?? 0,
+        ...(def.boundsSize ? { boundsSize: def.boundsSize } : {}),
       });
     }
     return out;
@@ -1106,6 +1191,115 @@ export class EcsStudioSession {
         }
         next.cutscenes = list.filter((c) => c.id !== cmd.cutsceneId);
         summary = `移除導演分鏡腳本「${cmd.cutsceneId}」`;
+        break;
+      }
+      case 'set_room_voxel': {
+        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
+        if (!room) {
+          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
+        }
+        setRoomVoxel(room, cmd.cell);
+        summary =
+          cmd.cell.tileId <= 0
+            ? `清除 ${room.name} (${cmd.cell.col},${cmd.cell.row},z${cmd.cell.zLevel}) 體素`
+            : `設定 ${room.name} (${cmd.cell.col},${cmd.cell.row},z${cmd.cell.zLevel}) 體素`;
+        break;
+      }
+      case 'fill_room_box_3d': {
+        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
+        if (!room) {
+          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
+        }
+        const filled = fillRoomBox3D(
+          room,
+          cmd.c0,
+          cmd.r0,
+          cmd.z0,
+          cmd.c1,
+          cmd.r1,
+          cmd.z1,
+          cmd.tileId,
+          cmd.shape,
+        );
+        summary = `3D 體素填充 ${room.name} 共 ${filled} 格`;
+        break;
+      }
+      case 'clear_room_voxels': {
+        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
+        if (!room) {
+          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
+        }
+        if (cmd.zLevel !== undefined) {
+          const targetZ = cmd.zLevel | 0;
+          if (room.voxels) {
+            room.voxels = room.voxels.filter((v) => (v.zLevel | 0) !== targetZ);
+          }
+          summary = `清除 ${room.name} z=${targetZ} 層體素`;
+        } else {
+          room.voxels = [];
+          summary = `清除 ${room.name} 全部 3D 體素`;
+        }
+        break;
+      }
+      case 'upsert_model_3d': {
+        const modelErrs = validateModel3DDef(cmd.model, 'model');
+        if (modelErrs.length > 0) {
+          return { ok: false, revision: this.revision, summary: '3D 模型定義驗證失敗', errors: modelErrs };
+        }
+        let cloned: EcsModel3DDef;
+        try {
+          cloned = structuredClone(cmd.model);
+        } catch {
+          cloned = JSON.parse(JSON.stringify(cmd.model)) as EcsModel3DDef;
+        }
+        if (!next.models3d) next.models3d = {};
+        next.models3d[cloned.id] = cloned;
+        summary = `註冊 3D 模型「${cloned.name}」(${cloned.id})`;
+        break;
+      }
+      case 'remove_model_3d': {
+        if (!next.models3d || !next.models3d[cmd.modelId]) {
+          return {
+            ok: false,
+            revision: this.revision,
+            summary: '找不到 3D 模型',
+            errors: [`Model3D '${cmd.modelId}' not found`],
+          };
+        }
+        const copy = { ...next.models3d };
+        delete copy[cmd.modelId];
+        next.models3d = copy;
+        summary = `移除 3D 模型「${cmd.modelId}」`;
+        break;
+      }
+      case 'set_camera_3d_pose': {
+        const baseProj: EcsProjectionConfig = next.projection ?? {
+          mode: 'hd2d_3d',
+          elevationScale: 1.0,
+          pitchDeg: 42,
+          fovDeg: 38,
+          wallHeightScale: 1.25,
+          billboardTiltDeg: 12,
+          obliqueShadowAlpha: 0.42,
+          activeDimensionMask: 3,
+          inactiveDimAlpha: 0.16,
+          allowDimensionShift: false,
+        };
+        next.projection = {
+          ...baseProj,
+          ...(cmd.yawDeg !== undefined ? { yawDeg: cmd.yawDeg } : {}),
+          ...(cmd.pitchDeg !== undefined ? { pitchDeg: cmd.pitchDeg } : {}),
+          ...(cmd.rollDeg !== undefined ? { rollDeg: cmd.rollDeg } : {}),
+          ...(cmd.fovDeg !== undefined ? { fovDeg: cmd.fovDeg } : {}),
+          ...(cmd.camCenterZ !== undefined ? { camCenterZ: cmd.camCenterZ } : {}),
+          ...(cmd.cameraProjection3d !== undefined ? { cameraProjection3d: cmd.cameraProjection3d } : {}),
+          ...(cmd.quadView !== undefined ? { quadView: cmd.quadView } : {}),
+          ...(cmd.shadowMapEnabled !== undefined ? { shadowMapEnabled: cmd.shadowMapEnabled } : {}),
+          ...(cmd.shadowMapStrength !== undefined ? { shadowMapStrength: cmd.shadowMapStrength } : {}),
+          ...(cmd.showAxisGizmo3d !== undefined ? { showAxisGizmo3d: cmd.showAxisGizmo3d } : {}),
+          ...(cmd.showOrthoGrid3d !== undefined ? { showOrthoGrid3d: cmd.showOrthoGrid3d } : {}),
+        };
+        summary = `更新 3D 相機姿態 (${next.projection.cameraProjection3d ?? 'perspective'} · yaw ${Math.round(next.projection.yawDeg ?? 0)}° · pitch ${Math.round(next.projection.pitchDeg ?? 42)}°)`;
         break;
       }
       default:

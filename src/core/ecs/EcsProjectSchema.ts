@@ -1,5 +1,6 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
 import type { ViewportPreset } from '../gpu/GpuTypes.ts';
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import type { AnimationStateMachineDef } from '../sim/AnimationStateMachine.ts';
 import type { CartridgeId, SimEvent } from '../types/WorldTypes.ts';
 import {
@@ -7,16 +8,20 @@ import {
   type EcsCameraMotionKind,
   type EcsCutsceneDef,
   type EcsCutsceneShotDef,
+  type EcsCutsceneTrigger,
   type EcsScreenAnchor,
   type EcsShotSize,
-} from './EcsCinematicDirector.ts';
+} from './EcsCutsceneSchema.ts';
+import { validateModel3DDef, type EcsModel3DDef } from './EcsModel3D.ts';
 import type { EcsWorldMapDef } from './EcsTilemapTypes.ts';
+import { validateVoxelCellDef } from './EcsVoxelVolume.ts';
 
 export {
   validateCutsceneDef,
   type EcsCameraMotionKind,
   type EcsCutsceneDef,
   type EcsCutsceneShotDef,
+  type EcsCutsceneTrigger,
   type EcsScreenAnchor,
   type EcsShotSize,
 };
@@ -200,6 +205,22 @@ export interface EcsSpatial3DComponent {
   /** Bitmask of realms/dimensions (1 = 表世界, 2 = 裡世界, 3 = 全維度). */
   dimensionMask?: number;
   shadowScale?: number;
+  yaw?: number;
+  pitch?: number;
+  roll?: number;
+  depth?: number;
+  stepHeight?: number;
+  ceilingZ?: number;
+}
+
+export interface EcsMeshRenderer3DComponent {
+  modelId: string;
+  scaleX?: number;
+  scaleY?: number;
+  scaleZ?: number;
+  animClip?: string;
+  castShadow?: boolean;
+  billboardYawMode?: 'fixed' | 'camera_4way' | 'camera_8way';
 }
 
 export type EcsProjectionMode = 'ortho_2d' | 'hd2d_iso' | 'hd2d_3d' | 'first_person_25d';
@@ -214,8 +235,26 @@ export interface EcsProjectionConfig {
   inactiveDimAlpha?: number;
   /** Enables live Realm 1 <-> Realm 2 shifting via shoulderR input. */
   allowDimensionShift?: boolean;
-  /** Camera pitch angle above ground plane in degrees for hd2d_3d (default 42, range 20..72). */
+  /** Camera pitch angle above ground plane in degrees for hd2d_3d (default 42). */
   pitchDeg?: number;
+  /** Camera yaw angle around +Z axis in degrees (default 0). */
+  yawDeg?: number;
+  /** Camera roll angle around forward axis in degrees (default 0). */
+  rollDeg?: number;
+  /** Camera target elevation Z in world px (default 0). */
+  camCenterZ?: number;
+  /** 3D camera projection mode ('perspective' | 'ortho_top' | 'ortho_front' | 'ortho_side' | 'ortho_iso' | 'ortho_free'). */
+  cameraProjection3d?: Camera3DProjectionMode;
+  /** Enables 4-quadrant CAD quad-view split (Persp / Top XY / Front XZ / Side YZ). */
+  quadView?: boolean;
+  /** Enables 1024x1024 directional shadow map in 3D passes (default true). */
+  shadowMapEnabled?: boolean;
+  /** Directional shadow map darkening strength (0..0.95). */
+  shadowMapStrength?: number;
+  /** Draws canonical Z-Up RGB XYZ axis gizmo at camera focus target. */
+  showAxisGizmo3d?: boolean;
+  /** Draws orthographic reference grid on Z=camCenterZ plane. */
+  showOrthoGrid3d?: boolean;
   /** Vertical field of view in degrees for hd2d_3d / first_person_25d (default 38). */
   fovDeg?: number;
   /** Wall and column extrusion height multiplier (default 1.15, range 0.5..2.2). */
@@ -241,6 +280,7 @@ export interface EcsComponentBundle {
   triggerZone?: EcsTriggerZoneComponent;
   verletChain?: EcsVerletChainComponent;
   spatial3d?: EcsSpatial3DComponent;
+  mesh3d?: EcsMeshRenderer3DComponent;
   lifetime?: number;
   vars?: number[]; // up to 8 numeric slots per entity
   scripts?: string[];
@@ -262,6 +302,7 @@ export interface EcsComponentOverrides {
   triggerZone?: Partial<EcsTriggerZoneComponent>;
   verletChain?: Partial<EcsVerletChainComponent>;
   spatial3d?: Partial<EcsSpatial3DComponent>;
+  mesh3d?: Partial<EcsMeshRenderer3DComponent>;
   lifetime?: number;
   vars?: number[];
   scripts?: string[];
@@ -392,6 +433,9 @@ export function resolveEntityComponents(
 
   const spatial3d = mergeOptObj(base?.spatial3d, comp.spatial3d, over.spatial3d, isDetached('spatial3d'));
   if (spatial3d) out.spatial3d = spatial3d;
+
+  const mesh3d = mergeOptObj(base?.mesh3d, comp.mesh3d, over.mesh3d, isDetached('mesh3d'));
+  if (mesh3d) out.mesh3d = mesh3d;
 
   const lifetime = over.lifetime ?? comp.lifetime ?? (!isDetached('lifetime') ? base?.lifetime : undefined);
   if (lifetime !== undefined) out.lifetime = lifetime;
@@ -549,6 +593,8 @@ export interface EcsProjectV2 {
   worldMap?: EcsWorldMapDef;
   /** Optional project-embedded custom pixel sprites (palette grids or Oklab+Bayer procedural recipes, M1). */
   customSprites?: Record<string, EcsCustomSpriteDef>;
+  /** Optional project-embedded 3D cuboid / glTF models (Phase B). */
+  models3d?: Record<string, EcsModel3DDef>;
   paths: Record<string, EcsWaypoint[]>;
   animations: AnimationStateMachineDef[];
   prefabs: Record<string, EcsPrefabDef>;
@@ -590,8 +636,8 @@ export function validateCustomSpriteDef(def: unknown, keyHint?: string): string[
   }
   const w = Number(s.width);
   const h = Number(s.height);
-  if (!Number.isInteger(w) || w < 8 || w > 128 || !Number.isInteger(h) || h < 8 || h > 128) {
-    errors.push(`${label} dimensions ${String(s.width)}x${String(s.height)} must be integers in 8..128`);
+  if (!Number.isInteger(w) || w < 8 || w > 256 || !Number.isInteger(h) || h < 8 || h > 256) {
+    errors.push(`${label} dimensions ${String(s.width)}x${String(s.height)} must be integers in 8..256`);
   }
   if (s.kind !== 'grid' && s.kind !== 'procedural' && s.kind !== 'rgba_b64') {
     errors.push(`${label}.kind must be 'grid', 'procedural', or 'rgba_b64'`);
@@ -662,9 +708,36 @@ export function validateEcsProjectV2(raw: unknown): EcsValidationResult {
       }
     }
   }
+  if (p.models3d !== undefined) {
+    if (typeof p.models3d !== 'object' || p.models3d === null || Array.isArray(p.models3d)) {
+      errors.push('models3d must be a record map');
+    } else {
+      for (const [key, def] of Object.entries(p.models3d)) {
+        errors.push(...validateModel3DDef(def, `models3d.${key}`));
+      }
+    }
+  }
+  if (p.worldMap?.rooms) {
+    for (let rIdx = 0; rIdx < p.worldMap.rooms.length; rIdx++) {
+      const room = p.worldMap.rooms[rIdx];
+      if (room?.voxels !== undefined) {
+        if (!Array.isArray(room.voxels)) {
+          errors.push(`worldMap.rooms[${rIdx}].voxels must be an array`);
+        } else {
+          for (let vIdx = 0; vIdx < room.voxels.length; vIdx++) {
+            errors.push(...validateVoxelCellDef(room.voxels[vIdx], `worldMap.rooms[${rIdx}].voxels[${vIdx}]`));
+          }
+        }
+      }
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
 export function cloneEcsProject(proj: EcsProjectV2): EcsProjectV2 {
-  return JSON.parse(JSON.stringify(proj)) as EcsProjectV2;
+  try {
+    return structuredClone(proj);
+  } catch {
+    return JSON.parse(JSON.stringify(proj)) as EcsProjectV2;
+  }
 }

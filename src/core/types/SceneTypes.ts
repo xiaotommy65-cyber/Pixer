@@ -1,16 +1,21 @@
 import type { SpriteId } from '../../assets/TextureAtlas.ts';
+import type { EcsModel3DDef } from '../ecs/EcsModel3D.ts';
+import type { EcsVoxelShape } from '../ecs/EcsVoxelVolume.ts';
+import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import type {
   OrthogonalArtBlueprint,
   OrthogonalFacing,
   OrthogonalPose,
 } from '../sim/OrthogonalArt.ts';
-import type { CartridgeId } from './CartridgeTypes.ts';
+import type { CartridgeId } from './CartridgeId.ts';
 import type {
   ChronicleHudSnapshot,
   RpgHudSnapshot,
   ShmupHudSnapshot,
   StageProgressInfo,
 } from './HudTypes.ts';
+
+export type { CartridgeId };
 
 export type WallMaterialKind = 'stone' | 'earth' | 'timber' | 'astral';
 
@@ -49,11 +54,19 @@ export interface SimEventDetail {
 
 export interface TileDesc {
   sprite: SpriteId;
+  /** Optional vertical side-face sprite for 3D extruded walls (defaults to `sprite`). */
+  sideSprite?: SpriteId;
   x: number;
   y: number;
   w: number;
   h: number;
   tint?: string;
+  /** PBR-Lite surface roughness (0.05..1.0). */
+  roughness?: number;
+  /** PBR-Lite metallic reflectance (0..1.0). */
+  metallic?: number;
+  /** Self-illumination / Pass 2 bloom intensity (0..2.0). */
+  emissive?: number;
   unlockable?: boolean;
   /** 2.5D HD-2D vertical wall extrusion height (world px). */
   extrudeH?: number;
@@ -124,6 +137,35 @@ export interface EntityDesc {
   billboardScale?: number;
   /** If true, entity is omitted in 1P raycast view (e.g. the player's own 3P body). */
   hideInFirstPerson?: boolean;
+  /** Optional 3D model asset ID (in `snap.models3d`) rendered via `emitModel3DToGpu`. */
+  model3dId?: string;
+  modelScaleX?: number;
+  modelScaleY?: number;
+  modelScaleZ?: number;
+  modelAnimClip?: string;
+  modelAnimTime?: number;
+  billboardYawMode?: 'fixed' | 'camera_4way' | 'camera_8way';
+}
+
+export interface VoxelRenderDesc {
+  col: number;
+  row: number;
+  zLevel: number;
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+  d: number;
+  h: number;
+  shape: EcsVoxelShape;
+  sprite: SpriteId;
+  sideSprite?: SpriteId;
+  cullMask: number;
+  tint?: string;
+  roughness?: number;
+  metallic?: number;
+  emissive?: number;
+  alpha?: number;
 }
 
 export interface ParticleDesc {
@@ -152,6 +194,8 @@ export interface ParticleDesc {
 export interface LightDesc {
   x: number;
   y: number;
+  /** Optional 3D elevation Z coordinate in world px (defaults to 24 in 3D passes). */
+  z?: number;
   radius: number;
   color: string;
   intensity: number;
@@ -167,7 +211,7 @@ export interface DebugRectDesc {
 }
 
 export interface HudPrimitiveDesc {
-  kind: 'bar' | 'box' | 'aim_line' | 'text';
+  kind: 'bar' | 'box' | 'aim_line' | 'text' | 'sprite';
   x: number;
   y: number;
   w: number;
@@ -176,6 +220,8 @@ export interface HudPrimitiveDesc {
   y2?: number;
   ratio?: number;
   text?: string;
+  sprite?: SpriteId;
+  flipX?: boolean;
   scale?: number;
   align?: 'left' | 'center' | 'right';
   shadowColor?: string;
@@ -274,8 +320,28 @@ export interface Hd2dDepthConfig {
   splitToneWarmth?: number;
   /** Enables true 3D perspective box-wall + upright pixel billboard GPU rendering (`hd2d_3d`). */
   mode3d?: boolean;
+  /** Enables 4-quadrant CAD quad-view split (Persp / Top XY / Front XZ / Side YZ). */
+  quadView?: boolean;
   /** 3D camera pitch angle in degrees above ground plane (default 42). */
   pitchDeg?: number;
+  /** 3D camera yaw angle in degrees around +Z axis (0..360, default 0). */
+  yawDeg?: number;
+  /** 3D camera roll angle in degrees around forward axis (default 0). */
+  rollDeg?: number;
+  /** 3D camera target elevation Z in world px (default 0). */
+  camCenterZ?: number;
+  /** 3D projection mode ('perspective' | 'ortho_top' | 'ortho_front' | 'ortho_side' | 'ortho_iso' | 'ortho_free'). */
+  cameraProjection3d?: Camera3DProjectionMode;
+  /** Directional sunlight vector pointing toward sun (default [-0.38, 0.48, 0.79]). */
+  sunDir?: [number, number, number];
+  /** Enables 1024x1024 PCF Directional Shadow Map in 3D passes (default true). */
+  shadowMapEnabled?: boolean;
+  /** Directional Shadow Map darkening strength 0..0.95 (default 0.45). */
+  shadowMapStrength?: number;
+  /** Draws canonical Z-Up RGB XYZ axis gizmo at camera focus target. */
+  showAxisGizmo3d?: boolean;
+  /** Draws world-space orthographic reference grid on Z=camCenterZ plane. */
+  showOrthoGrid3d?: boolean;
   /** 3D camera vertical field of view in degrees (default 38). */
   fovDeg?: number;
   /** Wall & column height multiplier (default 1.15). */
@@ -355,6 +421,8 @@ export interface RenderSceneSnapshot {
   bgClouds: BgCloudDesc[];
   tiles: TileDesc[];
   fgTiles?: TileDesc[];
+  voxels3d?: readonly VoxelRenderDesc[];
+  models3d?: Readonly<Record<string, EcsModel3DDef>>;
   entities: EntityDesc[];
   particles: ParticleDesc[];
   lights: LightDesc[];

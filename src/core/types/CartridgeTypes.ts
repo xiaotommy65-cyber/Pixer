@@ -1,16 +1,9 @@
+import type { BuiltinCartridgeId, CartridgeId } from './CartridgeId.ts';
 import type { RpgHudSnapshot, RpgMenuOption } from './HudTypes.ts';
 import type { InputState, RuntimeParams } from './InputTypes.ts';
 import type { RenderSceneSnapshot, SimEvent } from './SceneTypes.ts';
 
-export type BuiltinCartridgeId =
-  | 'cloudberry-hop'
-  | 'sugar-starlight'
-  | 'rhythm-bastion'
-  | 'astral-rift'
-  | 'obsidian-citadel'
-  | 'emerald-ruins';
-
-export type CartridgeId = BuiltinCartridgeId | (string & {});
+export type { BuiltinCartridgeId, CartridgeId };
 
 export type AiCapabilityFlag = 'stage-gen' | 'dialog' | 'sprite-gen' | 'tactical-advisor';
 

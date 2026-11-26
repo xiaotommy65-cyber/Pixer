@@ -520,3 +520,259 @@ export function computeVisibility(
   }
   return visible;
 }
+
+const DZ3 = [0, 1, -1] as const;
+
+function runAStar3DCore(
+  cols: number,
+  rows: number,
+  stories: number,
+  startCol: number,
+  startRow: number,
+  startZ: number,
+  goalCol: number,
+  goalRow: number,
+  goalZ: number,
+  canStep3D: (fromCol: number, fromRow: number, fromZ: number, toCol: number, toRow: number, toZ: number) => boolean,
+  stepCost3D?: (col: number, row: number, z: number) => number,
+  minStepCost = 1,
+  customWs?: PathfinderWorkspace,
+): PathfinderWorkspace | null {
+  const w = cols | 0;
+  const h = rows | 0;
+  const s = stories | 0;
+  if (w <= 0 || h <= 0 || s <= 0) return null;
+  if (startCol < 0 || startCol >= w || startRow < 0 || startRow >= h || startZ < 0 || startZ >= s) return null;
+  if (goalCol < 0 || goalCol >= w || goalRow < 0 || goalRow >= h || goalZ < 0 || goalZ >= s) return null;
+
+  const layerSize = w * h;
+  const totalCells = layerSize * s;
+  const ws = ensureWorkspace(totalCells, customWs);
+  const sid = ws.searchId;
+  const minW = Number.isFinite(minStepCost) && minStepCost > 0 ? minStepCost : 0;
+
+  const startKey = (startZ * h + startRow) * w + startCol;
+  const goalKey = (goalZ * h + goalRow) * w + goalCol;
+  ws.lastStartKey = startKey;
+  ws.lastGoalKey = goalKey;
+  if (startKey === goalKey) {
+    ws.gScore[startKey] = 0;
+    ws.parentCell[startKey] = -1;
+    ws.lastReached = true;
+    return ws;
+  }
+
+  const h0 = Math.max(Math.abs(goalCol - startCol) + Math.abs(goalRow - startRow), Math.abs(goalZ - startZ)) * minW;
+  ws.openStamp[startKey] = sid;
+  ws.gScore[startKey] = 0;
+  ws.hScore[startKey] = h0;
+  ws.fScore[startKey] = h0;
+  ws.parentCell[startKey] = -1;
+  ws.heapNodes[0] = startKey;
+  ws.heapPos[startKey] = 0;
+  let heapSize = 1;
+
+  let reached = false;
+  while (heapSize > 0) {
+    const cur = popMin(ws, heapSize--);
+    ws.closedStamp[cur] = sid;
+    if (cur === goalKey) {
+      reached = true;
+      break;
+    }
+
+    const cz = (cur / layerSize) | 0;
+    const rem = cur - cz * layerSize;
+    const cx = rem % w;
+    const cy = (rem - cx) / w;
+    const curG = ws.gScore[cur];
+
+    // Explore 4 cardinal horizontal neighbors across dz in {0, +1, -1}, plus same-cell dz in {+1, -1}
+    for (let zi = 0; zi < 3; zi++) {
+      const dz = DZ3[zi];
+      const nz = cz + dz;
+      if (nz < 0 || nz >= s) continue;
+      const zBase = nz * layerSize;
+
+      // Same-cell vertical climb/descend when dz !== 0
+      if (dz !== 0) {
+        const nkSame = zBase + cy * w + cx;
+        if (ws.closedStamp[nkSame] !== sid && canStep3D(cx, cy, cz, cx, cy, nz)) {
+          const rawCost = stepCost3D ? stepCost3D(cx, cy, nz) : 1;
+          const edgeCost = Number.isFinite(rawCost) && rawCost > minW ? rawCost : Math.max(0, minW);
+          const nextG = curG + edgeCost;
+          const isSeen = ws.openStamp[nkSame] === sid;
+          if (!isSeen || nextG < ws.gScore[nkSame]) {
+            const hEst = Math.max(Math.abs(goalCol - cx) + Math.abs(goalRow - cy), Math.abs(goalZ - nz)) * minW;
+            if (!isSeen) {
+              ws.openStamp[nkSame] = sid;
+              ws.heapPos[nkSame] = -1;
+            }
+            ws.gScore[nkSame] = nextG;
+            ws.hScore[nkSame] = hEst;
+            ws.fScore[nkSame] = nextG + hEst;
+            ws.parentCell[nkSame] = cur;
+
+            const pos = ws.heapPos[nkSame];
+            if (pos >= 0) {
+              siftUp(ws, pos);
+            } else {
+              ws.heapNodes[heapSize] = nkSame;
+              ws.heapPos[nkSame] = heapSize;
+              siftUp(ws, heapSize);
+              heapSize++;
+            }
+          }
+        }
+      }
+
+      for (let d = 0; d < 4; d++) {
+        const nx = cx + DX4[d];
+        const ny = cy + DY4[d];
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        const nk = zBase + ny * w + nx;
+        if (ws.closedStamp[nk] === sid) continue;
+        if (!canStep3D(cx, cy, cz, nx, ny, nz)) continue;
+
+        const rawCost = stepCost3D ? stepCost3D(nx, ny, nz) : 1;
+        const edgeCost = Number.isFinite(rawCost) && rawCost > minW ? rawCost : Math.max(0, minW);
+        const nextG = curG + edgeCost;
+
+        const isSeen = ws.openStamp[nk] === sid;
+        if (!isSeen || nextG < ws.gScore[nk]) {
+          const hEst = Math.max(Math.abs(goalCol - nx) + Math.abs(goalRow - ny), Math.abs(goalZ - nz)) * minW;
+          if (!isSeen) {
+            ws.openStamp[nk] = sid;
+            ws.heapPos[nk] = -1;
+          }
+          ws.gScore[nk] = nextG;
+          ws.hScore[nk] = hEst;
+          ws.fScore[nk] = nextG + hEst;
+          ws.parentCell[nk] = cur;
+
+          const pos = ws.heapPos[nk];
+          if (pos >= 0) {
+            siftUp(ws, pos);
+          } else {
+            ws.heapNodes[heapSize] = nk;
+            ws.heapPos[nk] = heapSize;
+            siftUp(ws, heapSize);
+            heapSize++;
+          }
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < heapSize; i++) {
+    ws.heapPos[ws.heapNodes[i]] = -1;
+  }
+
+  ws.lastReached = reached;
+  return ws;
+}
+
+/**
+ * Zero-GC Multi-Story 3D A* single next cell step.
+ * Returns packed key `(z * rows + row) * cols + col` or `-1` if unreachable/at goal.
+ */
+export function findAStar3DNextCell(
+  cols: number,
+  rows: number,
+  stories: number,
+  startCol: number,
+  startRow: number,
+  startZ: number,
+  goalCol: number,
+  goalRow: number,
+  goalZ: number,
+  canStep3D: (fromCol: number, fromRow: number, fromZ: number, toCol: number, toRow: number, toZ: number) => boolean,
+  stepCost3D?: (col: number, row: number, z: number) => number,
+  minStepCost = 1,
+  workspace?: PathfinderWorkspace,
+): number {
+  const sc = startCol | 0;
+  const sr = startRow | 0;
+  const sz = startZ | 0;
+  const gc = goalCol | 0;
+  const gr = goalRow | 0;
+  const gz = goalZ | 0;
+  if (sc === gc && sr === gr && sz === gz) return -1;
+
+  const ws = runAStar3DCore(cols, rows, stories, sc, sr, sz, gc, gr, gz, canStep3D, stepCost3D, minStepCost, workspace);
+  if (!ws || !ws.lastReached) return -1;
+
+  const startKey = ws.lastStartKey;
+  let cur = ws.lastGoalKey;
+  while (cur >= 0) {
+    const p = ws.parentCell[cur];
+    if (p === startKey) return cur;
+    cur = p;
+  }
+  return -1;
+}
+
+/**
+ * Zero-GC Multi-Story 3D Binary Min-Heap A* full path search writing packed cell keys
+ * `(z * rows + row) * cols + col` into `outPathCells`.
+ * Returns number of cells written (or `0` if unreachable).
+ */
+export function findAStar3DPathInto(
+  cols: number,
+  rows: number,
+  stories: number,
+  startCol: number,
+  startRow: number,
+  startZ: number,
+  goalCol: number,
+  goalRow: number,
+  goalZ: number,
+  canStep3D: (fromCol: number, fromRow: number, fromZ: number, toCol: number, toRow: number, toZ: number) => boolean,
+  outPathCells: Int32Array | Uint16Array,
+  outMeta?: { totalCost: number; steps: number },
+  stepCost3D?: (col: number, row: number, z: number) => number,
+  minStepCost = 1,
+  workspace?: PathfinderWorkspace,
+): number {
+  const ws = runAStar3DCore(
+    cols,
+    rows,
+    stories,
+    startCol | 0,
+    startRow | 0,
+    startZ | 0,
+    goalCol | 0,
+    goalRow | 0,
+    goalZ | 0,
+    canStep3D,
+    stepCost3D,
+    minStepCost,
+    workspace,
+  );
+  if (!ws || !ws.lastReached) {
+    if (outMeta) {
+      outMeta.totalCost = Infinity;
+      outMeta.steps = 0;
+    }
+    return 0;
+  }
+
+  const goalKey = ws.lastGoalKey;
+  let count = 0;
+  let cur = goalKey;
+  while (cur >= 0 && count < ws.tempPath.length) {
+    ws.tempPath[count++] = cur;
+    cur = ws.parentCell[cur];
+  }
+
+  const writeCount = count < outPathCells.length ? count : outPathCells.length;
+  for (let i = 0; i < writeCount; i++) {
+    outPathCells[i] = ws.tempPath[count - 1 - i];
+  }
+
+  if (outMeta) {
+    outMeta.totalCost = ws.gScore[goalKey];
+    outMeta.steps = count;
+  }
+  return writeCount;
+}
