@@ -12,19 +12,24 @@ import type { EcsCustomSpriteDef } from '../core/ecs/EcsProjectSchema.ts';
 import type { EcsMapLayerName } from '../core/ecs/EcsTilemapTypes.ts';
 import type { GpuEngine } from '../core/gpu/GpuEngine.ts';
 import type { SaveService } from '../core/runtime/SaveService.ts';
-import { btn, el } from './dom.ts';
+import { el } from './dom.ts';
+import {
+  buildSpriteAtelierDom,
+  syncAtelierPaletteColors,
+  syncAtelierPaletteSelection,
+  syncAtelierToolbarState,
+  type PaintTool,
+  type SlotKey,
+  type SlotState,
+  type SpriteAtelierDomRefs,
+} from './SpriteAtelierDomBuilder.ts';
 import {
   applyOutlineAndBevelBuffer,
-  BEAR_PRESET_A,
-  BEAR_PRESET_B,
-  BUNNY_PRESET_A,
-  BUNNY_PRESET_B,
   floodFillBuffer,
   GRID_PRESETS,
   hexToRgb,
   indicesToGrid,
   loadImageFileSource,
-  PIXEL_STAMPS,
   quantizeImageToPaletteBuffer,
   renderNormalLitPreview,
   resampleBuffer,
@@ -63,17 +68,6 @@ export interface PublishActionResult {
 export interface SpriteAtelierPublishBridge {
   onPublishMapTile: (req: PublishMapTileRequest) => PublishActionResult;
   onPublishPrefabStamp: (req: PublishPrefabStampRequest) => PublishActionResult;
-}
-
-type SlotKey = 'hero' | 'custom_enemy' | 'custom_item' | 'custom_tile' | 'studio_claw';
-type PaintTool = 'pencil' | 'eraser' | 'fill' | 'eyedropper';
-
-interface SlotState {
-  label: string;
-  gridW: number;
-  gridH: number;
-  frameCount: 2 | 3 | 4;
-  frames: [Uint8Array, Uint8Array, Uint8Array, Uint8Array];
 }
 
 interface UndoEntry {
@@ -117,33 +111,8 @@ export class SpriteAtelierView {
 
   private boardCanvas: HTMLCanvasElement;
   private boardCtx: CanvasRenderingContext2D | null;
-  private paletteEls: HTMLButtonElement[] = [];
-  private slotBtns = new Map<SlotKey, HTMLButtonElement>();
-  private frameBtns: HTMLButtonElement[] = [];
-  private frameCountSelect: HTMLSelectElement;
-  private sizeBtn: HTMLButtonElement;
-  private themeSelect: HTMLSelectElement;
-  private stampBtns = new Map<string, HTMLButtonElement>();
-  private pencilBtn: HTMLButtonElement;
-  private eraserBtn: HTMLButtonElement;
-  private fillBtn: HTMLButtonElement;
-  private eyedropBtn: HTMLButtonElement;
-  private onionBtn: HTMLButtonElement;
-  private mirrorBtn: HTMLButtonElement;
-  private undoBtn: HTMLButtonElement;
-  private importInput: HTMLInputElement;
-  private importBtn: HTMLButtonElement;
-  private importStatusEl: HTMLElement;
-  private previewCanvas: HTMLCanvasElement;
-  private previewCtx: CanvasRenderingContext2D | null;
+  private readonly dom: SpriteAtelierDomRefs;
   private previewImgData: ImageData | null = null;
-  private lightCoordEl: HTMLElement;
-  private publishNameInput: HTMLInputElement;
-  private publishLayerSelect: HTMLSelectElement;
-  private publishSolidCheck: HTMLInputElement;
-  private publishHazardCheck: HTMLInputElement;
-  private publishLightCheck: HTMLInputElement;
-  private publishStatusEl: HTMLElement;
 
   private readonly texelHeightScratch = new Float32Array(48 * 64);
   private readonly texelRgbScratch = new Uint8Array(48 * 64 * 4);
@@ -237,102 +206,6 @@ export class SpriteAtelierView {
     };
 
     this.element = el('section', 'studio-card');
-
-    const head = el('div', 'studio-head');
-    const headTitleWrap = el('div');
-    headTitleWrap.append(
-      el('h2', undefined, '🎨 精靈畫室 3.1（16×16 / 32×32 / 48×64 HD-2D 像素工坊）'),
-      el(
-        'p',
-        'studio-sub',
-        '支援多尺寸畫布、PNG 圖片 Oklab 量化匯入、自動描邊立體化、法線打光預覽，並可一鍵發佈為地圖瓦片與物件印章！',
-      ),
-    );
-    head.appendChild(headTitleWrap);
-
-    // Slot selector row
-    const slotRow = el('div', 'tool-row');
-    (Object.keys(this.slots) as SlotKey[]).forEach((key) => {
-      const b = btn(
-        key === 'hero' ? 'toy-btn is-active' : 'toy-btn',
-        this.slots[key].label,
-        undefined,
-        () => {
-          this.activeSlot = key;
-          this.activeFrameIdx = Math.min(this.activeFrameIdx, this.slots[key].frameCount - 1);
-          this.syncToolbarState();
-          this.renderBoard();
-        },
-        this.ac.signal,
-      );
-      this.slotBtns.set(key, b);
-      slotRow.appendChild(b);
-    });
-
-    // Frame count + 4 frame tabs + Size toggle + Onion skin
-    const frameBar = el('div', 'tool-row');
-    this.sizeBtn = btn(
-      'toy-btn is-mint',
-      '📐 16×16',
-      '循環切換目前槽位解析度：16×16 → 32×32 → 48×64（自動保留像素縮放）',
-      () => this.toggleSlotGridSize(),
-      this.ac.signal,
-    );
-    frameBar.appendChild(this.sizeBtn);
-
-    this.frameCountSelect = el('select', 'atelier-select');
-    this.frameCountSelect.title = '動畫總幀數';
-    for (const n of [2, 3, 4] as const) {
-      const opt = el('option');
-      opt.value = String(n);
-      opt.textContent = `${n} 幀動畫`;
-      this.frameCountSelect.appendChild(opt);
-    }
-    this.frameCountSelect.addEventListener(
-      'change',
-      () => {
-        const nextCount = Number(this.frameCountSelect.value) as 2 | 3 | 4;
-        this.slots[this.activeSlot].frameCount = nextCount;
-        if (this.activeFrameIdx >= nextCount) this.activeFrameIdx = nextCount - 1;
-        this.editEpoch++;
-        this.syncToolbarState();
-        this.renderBoard();
-      },
-      { signal: this.ac.signal },
-    );
-    frameBar.appendChild(this.frameCountSelect);
-
-    ['A', 'B', 'C', 'D'].forEach((label, idx) => {
-      const fBtn = btn(
-        idx === 0 ? 'toy-btn is-active' : 'toy-btn',
-        `幀 ${label}`,
-        undefined,
-        () => {
-          this.activeFrameIdx = idx;
-          this.syncToolbarState();
-          this.renderBoard();
-        },
-        this.ac.signal,
-      );
-      this.frameBtns.push(fBtn);
-      frameBar.appendChild(fBtn);
-    });
-
-    this.onionBtn = btn(
-      'toy-btn',
-      '🧅 洋蔥皮',
-      '在背景半透明顯示前一幀參考線（不寫入紋理）',
-      () => {
-        this.onionSkin = !this.onionSkin;
-        this.syncToolbarState();
-        this.renderBoard();
-      },
-      this.ac.signal,
-    );
-    frameBar.appendChild(this.onionBtn);
-
-    head.append(slotRow, frameBar);
-
     const layout = el('div', 'atelier-grid-layout');
 
     // Interactive Canvas Drawing Surface
@@ -342,7 +215,121 @@ export class SpriteAtelierView {
     this.boardCanvas.height = BOARD_CANVAS_PX;
     this.boardCtx = this.boardCanvas.getContext('2d');
     boardWrap.appendChild(this.boardCanvas);
+    this.bindBoardPointerEvents();
 
+    this.dom = buildSpriteAtelierDom({
+      signal: this.ac.signal,
+      previewCanvasPx: PREVIEW_CANVAS_PX,
+      slots: this.slots,
+      onSelectSlot: (key) => {
+        this.activeSlot = key;
+        this.activeFrameIdx = Math.min(this.activeFrameIdx, this.slots[key].frameCount - 1);
+        this.syncToolbarState();
+        this.renderBoard();
+      },
+      onToggleGridSize: () => this.toggleSlotGridSize(),
+      onChangeFrameCount: (nextCount) => {
+        this.slots[this.activeSlot].frameCount = nextCount;
+        if (this.activeFrameIdx >= nextCount) this.activeFrameIdx = nextCount - 1;
+        this.editEpoch++;
+        this.syncToolbarState();
+        this.renderBoard();
+      },
+      onSelectFrame: (idx) => {
+        this.activeFrameIdx = idx;
+        this.syncToolbarState();
+        this.renderBoard();
+      },
+      onToggleOnionSkin: () => {
+        this.onionSkin = !this.onionSkin;
+        this.syncToolbarState();
+        this.renderBoard();
+      },
+      onPreviewPointerMove: (nx, ny) => {
+        this.lightHover = true;
+        this.lightNormX = nx;
+        this.lightNormY = ny;
+        this.lightAngle = Math.atan2(ny, nx);
+        this.updateLightReadout();
+      },
+      onPreviewPointerLeave: () => {
+        this.lightHover = false;
+      },
+      onSelectTheme: (themeIdx) => {
+        this.selectedThemeIdx = themeIdx;
+        this.syncPaletteColors();
+        this.renderBoard();
+      },
+      onSelectPaletteColor: (idx) => {
+        this.selectedColor = idx;
+        this.activeStamp = null;
+        if (idx === 0) this.activeTool = 'eraser';
+        else if (this.activeTool === 'eraser' || this.activeTool === 'eyedropper') this.activeTool = 'pencil';
+        this.syncPaletteSelection();
+        this.syncToolbarState();
+      },
+      onSelectTool: (tool) => {
+        if (tool === 'toggle_fill') {
+          this.activeTool = this.activeTool === 'fill' ? 'pencil' : 'fill';
+        } else if (tool === 'toggle_eyedropper') {
+          this.activeTool = this.activeTool === 'eyedropper' ? 'pencil' : 'eyedropper';
+        } else {
+          this.activeTool = tool;
+        }
+        this.activeStamp = null;
+        this.syncToolbarState();
+      },
+      onToggleMirrorX: () => {
+        this.mirrorX = !this.mirrorX;
+        this.syncToolbarState();
+      },
+      onUndo: () => this.undoLastEdit(),
+      onCopyPrevFrame: () => {
+        const slot = this.slots[this.activeSlot];
+        const prevIdx = (this.activeFrameIdx - 1 + slot.frameCount) % slot.frameCount;
+        this.saveUndoSnapshot();
+        slot.frames[this.activeFrameIdx].set(slot.frames[prevIdx]);
+        this.commitAtlasUpdate();
+        this.renderBoard();
+      },
+      onAutoOutline: () => this.applyAutoOutlineAndBevel(),
+      onImportFile: (file) => void this.importImageFile(file),
+      onToggleStamp: (stamp) => {
+        this.activeStamp = this.activeStamp?.id === stamp.id ? null : stamp;
+        if (this.activeStamp && this.activeTool === 'fill') this.activeTool = 'pencil';
+        this.syncToolbarState();
+      },
+      onApplyHeroPreset: (gridA, gridB) => {
+        this.synth.unlock();
+        this.synth.playPreset('star');
+        this.activeSlot = 'hero';
+        this.saveUndoSnapshot();
+        this.ensureHeroSize16();
+        parseGridToIndices(gridA, this.slots.hero.frames[0]);
+        parseGridToIndices(gridB, this.slots.hero.frames[1]);
+        this.commitAtlasUpdate(true);
+        this.syncToolbarState();
+        this.renderBoard();
+      },
+      onPublishMapTile: () => this.handlePublishMapTile(),
+      onPublishPrefabStamp: () => this.handlePublishPrefabStamp(),
+    });
+
+    if (this.dom.previewCtx) {
+      this.previewImgData = this.dom.previewCtx.createImageData(PREVIEW_CANVAS_PX, PREVIEW_CANVAS_PX);
+    }
+
+    layout.append(boardWrap, this.dom.sidebar);
+    this.element.append(this.dom.head, layout);
+
+    this.syncPaletteColors();
+    this.syncPaletteSelection();
+    this.syncToolbarState();
+    this.updateLightReadout();
+    this.renderBoard();
+  }
+
+  private bindBoardPointerEvents(): void {
     let lastPaintedKey = -1;
     const stopDrawing = () => {
       this.isDrawing = false;
@@ -437,335 +424,6 @@ export class SpriteAtelierView {
     this.boardCanvas.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
     window.addEventListener('pointerup', stopDrawing, { signal: this.ac.signal });
     window.addEventListener('blur', stopDrawing, { signal: this.ac.signal });
-
-    // Sidebar controls
-    const sidebar = el('div', 'atelier-sidebar');
-
-    // Interactive 96x96 HD-2D Normal + Point-Light Preview Card
-    const previewCard = el('div', 'atelier-preview-card');
-    this.previewCanvas = el('canvas', 'atelier-preview-canvas');
-    this.previewCanvas.width = PREVIEW_CANVAS_PX;
-    this.previewCanvas.height = PREVIEW_CANVAS_PX;
-    this.previewCtx = this.previewCanvas.getContext('2d');
-    if (this.previewCtx) {
-      this.previewImgData = this.previewCtx.createImageData(PREVIEW_CANVAS_PX, PREVIEW_CANVAS_PX);
-    }
-
-    this.previewCanvas.addEventListener(
-      'pointermove',
-      (e) => {
-        const rect = this.previewCanvas.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) return;
-        this.lightHover = true;
-        this.lightNormX = Math.max(-1, Math.min(1, ((e.clientX - rect.left) / rect.width) * 2 - 1));
-        this.lightNormY = Math.max(-1, Math.min(1, ((e.clientY - rect.top) / rect.height) * 2 - 1));
-        this.lightAngle = Math.atan2(this.lightNormY, this.lightNormX);
-        this.updateLightReadout();
-      },
-      { passive: true, signal: this.ac.signal },
-    );
-    this.previewCanvas.addEventListener(
-      'pointerleave',
-      () => {
-        this.lightHover = false;
-      },
-      { signal: this.ac.signal },
-    );
-
-    const previewMeta = el('div', 'atelier-preview-meta');
-    const previewTitle = el('strong', undefined, 'HD-2D 即時法線打光預覽');
-    this.lightCoordEl = el('div', 'atelier-light-readout', '光源角度 -130° (-0.55, -0.65)');
-
-    this.themeSelect = el('select', 'atelier-select');
-    this.themeSelect.title = '切換 8 組 LUT 主題預設';
-    PALETTE_THEMES.forEach((t, idx) => {
-      const opt = el('option');
-      opt.value = String(idx);
-      opt.textContent = `🎨 ${idx}: ${t.label}`;
-      this.themeSelect.appendChild(opt);
-    });
-    this.themeSelect.addEventListener(
-      'change',
-      () => {
-        this.selectedThemeIdx = Number(this.themeSelect.value) || 0;
-        this.syncPaletteColors();
-        this.renderBoard();
-      },
-      { signal: this.ac.signal },
-    );
-    previewMeta.append(previewTitle, this.lightCoordEl, this.themeSelect);
-    previewCard.append(this.previewCanvas, previewMeta);
-
-    // 16-Color LUT Palette (14..15 marked as Bloom glow)
-    const paletteGrid = el('div', 'palette-grid');
-    for (let idx = 0; idx < 16; idx++) {
-      const isGlow = idx === 14 || idx === 15;
-      const chip = btn(
-        idx === 0 ? 'palette-chip is-eraser' : isGlow ? 'palette-chip is-emissive' : 'palette-chip',
-        isGlow ? '✨' : '',
-        idx === 0 ? '透明橡皮擦' : isGlow ? `色號 ${idx} (Bloom 發光色)` : `色號 ${idx}`,
-        () => {
-          this.selectedColor = idx;
-          this.activeStamp = null;
-          if (idx === 0) this.activeTool = 'eraser';
-          else if (this.activeTool === 'eraser' || this.activeTool === 'eyedropper') this.activeTool = 'pencil';
-          this.syncPaletteSelection();
-          this.syncToolbarState();
-        },
-        this.ac.signal,
-      );
-      this.paletteEls.push(chip);
-      paletteGrid.appendChild(chip);
-    }
-
-    // Core Studio Tools
-    const tools = el('div', 'tool-row atelier-tool-group');
-    this.pencilBtn = btn(
-      'toy-btn is-active',
-      '✏️ 畫筆',
-      undefined,
-      () => {
-        this.activeTool = 'pencil';
-        this.activeStamp = null;
-        this.syncToolbarState();
-      },
-      this.ac.signal,
-    );
-    this.eraserBtn = btn(
-      'toy-btn',
-      '🧽 橡皮',
-      '切換橡皮擦工具（亦可於畫布上按右鍵擦除）',
-      () => {
-        this.activeTool = 'eraser';
-        this.activeStamp = null;
-        this.syncToolbarState();
-      },
-      this.ac.signal,
-    );
-    this.fillBtn = btn(
-      'toy-btn',
-      '🪣 油漆桶',
-      undefined,
-      () => {
-        this.activeTool = this.activeTool === 'fill' ? 'pencil' : 'fill';
-        this.activeStamp = null;
-        this.syncToolbarState();
-      },
-      this.ac.signal,
-    );
-    this.eyedropBtn = btn(
-      'toy-btn',
-      '💧 吸色',
-      '點擊畫布吸取色號（亦可按住 Alt 點擊）',
-      () => {
-        this.activeTool = this.activeTool === 'eyedropper' ? 'pencil' : 'eyedropper';
-        this.activeStamp = null;
-        this.syncToolbarState();
-      },
-      this.ac.signal,
-    );
-    this.mirrorBtn = btn(
-      'toy-btn',
-      '🪞 左右對稱',
-      undefined,
-      () => {
-        this.mirrorX = !this.mirrorX;
-        this.syncToolbarState();
-      },
-      this.ac.signal,
-    );
-    this.undoBtn = btn(
-      'toy-btn',
-      '↩ 復原',
-      '最多支援 20 步復原',
-      () => this.undoLastEdit(),
-      this.ac.signal,
-    );
-    const copyPrevBtn = btn(
-      'toy-btn',
-      '📋 複製上幀',
-      undefined,
-      () => {
-        const slot = this.slots[this.activeSlot];
-        const prevIdx = (this.activeFrameIdx - 1 + slot.frameCount) % slot.frameCount;
-        this.saveUndoSnapshot();
-        slot.frames[this.activeFrameIdx].set(slot.frames[prevIdx]);
-        this.commitAtlasUpdate();
-        this.renderBoard();
-      },
-      this.ac.signal,
-    );
-    tools.append(
-      this.pencilBtn,
-      this.eraserBtn,
-      this.fillBtn,
-      this.eyedropBtn,
-      this.mirrorBtn,
-      this.undoBtn,
-      copyPrevBtn,
-    );
-
-    // Pro Actions: Auto-Outline/Bevel + PNG/AI Image Import
-    const proRow = el('div', 'tool-row atelier-tool-group');
-    const autoOutlineBtn = btn(
-      'toy-btn is-honey',
-      '✨ 自動描邊立體化',
-      '為目前圖層加上 1px 深色輪廓並提亮左上方高光邊緣',
-      () => this.applyAutoOutlineAndBevel(),
-      this.ac.signal,
-    );
-
-    this.importInput = el('input', 'panel-hidden');
-    this.importInput.type = 'file';
-    this.importInput.accept = 'image/png,image/webp,image/jpeg';
-    this.importInput.addEventListener(
-      'change',
-      () => {
-        const file = this.importInput.files?.[0];
-        this.importInput.value = '';
-        if (file) void this.importImageFile(file);
-      },
-      { signal: this.ac.signal },
-    );
-
-    this.importBtn = btn(
-      'toy-btn is-mint',
-      '📥 匯入 PNG / AI 圖',
-      '自動去背裁切並以 Oklab 感知色距量化至 Toybox 16 色盤',
-      () => this.importInput.click(),
-      this.ac.signal,
-    );
-    this.importStatusEl = el('span', 'studio-sub');
-    proRow.append(autoOutlineBtn, this.importBtn, this.importInput, this.importStatusEl);
-
-    // 6 Pixel Stamps
-    const stampRow = el('div', 'tool-row');
-    for (const stamp of PIXEL_STAMPS) {
-      const sBtn = btn(
-        'toy-btn is-mint',
-        stamp.label,
-        `點擊畫布蓋上「${stamp.label}」像素圖章`,
-        () => {
-          this.activeStamp = this.activeStamp?.id === stamp.id ? null : stamp;
-          if (this.activeStamp && this.activeTool === 'fill') this.activeTool = 'pencil';
-          this.syncToolbarState();
-        },
-        this.ac.signal,
-      );
-      this.stampBtns.set(stamp.id, sBtn);
-      stampRow.appendChild(sBtn);
-    }
-
-    // 4 Hero Presets
-    const presetRow = el('div', 'tool-row');
-    const addPresetBtn = (label: string, gridA: string[], gridB: string[]) => {
-      presetRow.appendChild(
-        btn(
-          'toy-btn is-honey',
-          label,
-          undefined,
-          () => {
-            this.synth.unlock();
-            this.synth.playPreset('star');
-            this.activeSlot = 'hero';
-            this.saveUndoSnapshot();
-            this.ensureHeroSize16();
-            parseGridToIndices(gridA, this.slots.hero.frames[0]);
-            parseGridToIndices(gridB, this.slots.hero.frames[1]);
-            this.commitAtlasUpdate(true);
-            this.syncToolbarState();
-            this.renderBoard();
-          },
-          this.ac.signal,
-        ),
-      );
-    };
-    addPresetBtn('🌱 嫩芽騎士', DEFAULT_HERO_FRAME_A, DEFAULT_HERO_FRAME_B);
-    addPresetBtn('🍓 草莓小兔', BUNNY_PRESET_A, BUNNY_PRESET_B);
-    addPresetBtn('🍯 蜂蜜小熊', BEAR_PRESET_A, BEAR_PRESET_B);
-    addPresetBtn('🧣 緋空跑酷俠', PARKOUR_SPRITE_GRIDS.parkour_hero_idle, PARKOUR_SPRITE_GRIDS.parkour_hero_dash);
-
-    // One-Click Publish to Workstation Map Designer (M1)
-    const publishCard = el('div', 'atelier-publish-card');
-    const pubTitle = el('strong', 'atelier-publish-title', '🚀 一鍵發佈至工作站地圖 (動態 GPU 圖集)');
-
-    const pubForm = el('div', 'atelier-publish-grid');
-    this.publishNameInput = el('input', 'atelier-input');
-    this.publishNameInput.type = 'text';
-    this.publishNameInput.placeholder = '自訂資產名稱（例：翠玉地磚）';
-    this.publishNameInput.value = '自訂像素磚 #1';
-    this.publishNameInput.setAttribute('aria-label', '自訂資產名稱');
-
-    this.publishLayerSelect = el('select', 'atelier-select');
-    this.publishLayerSelect.setAttribute('aria-label', '目標地圖圖層');
-    const layerOpts: [EcsMapLayerName, string][] = [
-      ['ground', '圖層：地板 (ground)'],
-      ['wall', '圖層：立體城牆 (wall · 20px)'],
-      ['decor', '圖層：裝飾 (decor)'],
-    ];
-    for (const [val, text] of layerOpts) {
-      const o = el('option');
-      o.value = val;
-      o.textContent = text;
-      this.publishLayerSelect.appendChild(o);
-    }
-    this.publishLayerSelect.addEventListener(
-      'change',
-      () => {
-        if (this.publishLayerSelect.value === 'wall') {
-          this.publishSolidCheck.checked = true;
-        }
-      },
-      { signal: this.ac.signal },
-    );
-    pubForm.append(this.publishNameInput, this.publishLayerSelect);
-
-    const flagsRow = el('div', 'atelier-publish-flags');
-    const mkFlag = (labelText: string, checked: boolean): HTMLInputElement => {
-      const lbl = el('label', 'atelier-flag-label');
-      const cb = el('input');
-      cb.type = 'checkbox';
-      cb.checked = checked;
-      lbl.append(cb, document.createTextNode(labelText));
-      flagsRow.appendChild(lbl);
-      return cb;
-    };
-    this.publishSolidCheck = mkFlag('實體碰撞', false);
-    this.publishHazardCheck = mkFlag('傷害陷阱', false);
-    this.publishLightCheck = mkFlag('附帶光源', false);
-
-    const pubBtns = el('div', 'tool-row atelier-publish-actions');
-    const pubTileBtn = btn(
-      'toy-btn is-honey',
-      '🧩 發佈為地圖瓦片',
-      '將目前畫布即時編譯進動態 GPU 圖集並加入地圖瓦片盤',
-      () => this.handlePublishMapTile(),
-      this.ac.signal,
-    );
-    pubTileBtn.setAttribute('data-atelier-publish-tile', 'true');
-
-    const pubPrefabBtn = btn(
-      'toy-btn is-mint',
-      '📌 發佈為物件印章',
-      '將目前畫布即時編譯並註冊為可放置的 ECS Prefab 印章',
-      () => this.handlePublishPrefabStamp(),
-      this.ac.signal,
-    );
-    pubPrefabBtn.setAttribute('data-atelier-publish-prefab', 'true');
-
-    pubBtns.append(pubTileBtn, pubPrefabBtn);
-    this.publishStatusEl = el('div', 'studio-sub atelier-publish-status', '支援 16×16 / 32×32 / 48×64 即時熱編譯，無需重開專案。');
-    publishCard.append(pubTitle, pubForm, flagsRow, pubBtns, this.publishStatusEl);
-
-    sidebar.append(previewCard, paletteGrid, tools, proRow, stampRow, presetRow, publishCard);
-    layout.append(boardWrap, sidebar);
-    this.element.append(head, layout);
-
-    this.syncPaletteColors();
-    this.syncPaletteSelection();
-    this.syncToolbarState();
-    this.updateLightReadout();
-    this.renderBoard();
   }
 
   public destroy(): void {
@@ -793,11 +451,11 @@ export class SpriteAtelierView {
     this.activeSlot = 'custom_tile';
     this.activeFrameIdx = 0;
     this.applySlotGridSize('custom_tile', width, height);
-    this.publishLayerSelect.value = defaultLayer;
-    this.publishSolidCheck.checked = defaultLayer === 'wall';
-    this.publishHazardCheck.checked = false;
-    this.publishNameInput.value = `自訂像素磚 #${this.publishCounter}`;
-    this.publishStatusEl.textContent = `已切換至 ${width}×${height} 瓦片槽位，繪製後可一鍵發佈。`;
+    this.dom.publishLayerSelect.value = defaultLayer;
+    this.dom.publishSolidCheck.checked = defaultLayer === 'wall';
+    this.dom.publishHazardCheck.checked = false;
+    this.dom.publishNameInput.value = `自訂像素磚 #${this.publishCounter}`;
+    this.dom.publishStatusEl.textContent = `已切換至 ${width}×${height} 瓦片槽位，繪製後可一鍵發佈。`;
     this.syncToolbarState();
     this.renderBoard();
   }
@@ -820,12 +478,12 @@ export class SpriteAtelierView {
 
   private handlePublishMapTile(): void {
     if (!this.publishBridge) {
-      this.publishStatusEl.textContent = '工作站發佈通道未連線';
+      this.dom.publishStatusEl.textContent = '工作站發佈通道未連線';
       return;
     }
     const slot = this.slots[this.activeSlot];
-    const layer = (this.publishLayerSelect.value as EcsMapLayerName) || 'ground';
-    const rawName = this.publishNameInput.value.trim() || `自訂瓦片 #${this.publishCounter}`;
+    const layer = (this.dom.publishLayerSelect.value as EcsMapLayerName) || 'ground';
+    const rawName = this.dom.publishNameInput.value.trim() || `自訂瓦片 #${this.publishCounter}`;
     const sprite = this.buildCurrentCustomSpriteDef('atelier_tile', rawName);
     const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
     const lightHex = theme.colors[14] || theme.colors[15] || '#ffd447';
@@ -833,44 +491,44 @@ export class SpriteAtelierView {
       sprite,
       name: rawName,
       layer,
-      solid: this.publishSolidCheck.checked || layer === 'wall',
-      hazard: this.publishHazardCheck.checked,
+      solid: this.dom.publishSolidCheck.checked || layer === 'wall',
+      hazard: this.dom.publishHazardCheck.checked,
       ...(layer === 'wall' ? { extrudeH: 20 } : {}),
       ...(layer === 'decor' && slot.gridH > 32 ? { renderH: Math.min(64, slot.gridH) } : {}),
-      ...(this.publishLightCheck.checked
+      ...(this.dom.publishLightCheck.checked
         ? { ambientLight: { radius: 96, color: lightHex, intensity: 0.72 } }
         : {}),
     });
     this.synth.unlock();
     this.synth.playPreset(res.ok ? 'star' : 'snap');
-    this.publishStatusEl.textContent = res.message;
+    this.dom.publishStatusEl.textContent = res.message;
     if (res.ok) {
-      this.publishNameInput.value = `自訂像素磚 #${this.publishCounter}`;
+      this.dom.publishNameInput.value = `自訂像素磚 #${this.publishCounter}`;
     }
   }
 
   private handlePublishPrefabStamp(): void {
     if (!this.publishBridge) {
-      this.publishStatusEl.textContent = '工作站發佈通道未連線';
+      this.dom.publishStatusEl.textContent = '工作站發佈通道未連線';
       return;
     }
-    const rawName = this.publishNameInput.value.trim() || `自訂物件 #${this.publishCounter}`;
+    const rawName = this.dom.publishNameInput.value.trim() || `自訂物件 #${this.publishCounter}`;
     const sprite = this.buildCurrentCustomSpriteDef('atelier_prop', rawName);
     const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
     const lightHex = theme.colors[14] || theme.colors[15] || '#ffd447';
     const res = this.publishBridge.onPublishPrefabStamp({
       sprite,
       name: rawName,
-      solid: this.publishSolidCheck.checked,
-      ...(this.publishLightCheck.checked
+      solid: this.dom.publishSolidCheck.checked,
+      ...(this.dom.publishLightCheck.checked
         ? { ambientLight: { radius: 96, color: lightHex, intensity: 0.72 } }
         : {}),
     });
     this.synth.unlock();
     this.synth.playPreset(res.ok ? 'star' : 'snap');
-    this.publishStatusEl.textContent = res.message;
+    this.dom.publishStatusEl.textContent = res.message;
     if (res.ok) {
-      this.publishNameInput.value = `自訂物件 #${this.publishCounter}`;
+      this.dom.publishNameInput.value = `自訂物件 #${this.publishCounter}`;
     }
   }
 
@@ -970,7 +628,7 @@ export class SpriteAtelierView {
     if (this.undoStack.length > MAX_UNDO_STEPS) {
       this.undoStack.shift();
     }
-    this.undoBtn.disabled = false;
+    this.dom.undoBtn.disabled = false;
   }
 
   private undoLastEdit(): void {
@@ -1062,12 +720,12 @@ export class SpriteAtelierView {
   }
 
   private async importImageFile(file: File): Promise<void> {
-    this.importStatusEl.textContent = '量化中…';
+    this.dom.importStatusEl.textContent = '量化中…';
     let pushedUndo = false;
     try {
       const loaded = await loadImageFileSource(file);
       if (!loaded) {
-        this.importStatusEl.textContent = '無法讀取圖片';
+        this.dom.importStatusEl.textContent = '無法讀取圖片';
         return;
       }
 
@@ -1097,7 +755,7 @@ export class SpriteAtelierView {
         this.undoStack.pop();
         pushedUndo = false;
         this.syncToolbarState();
-        this.importStatusEl.textContent = res === 'transparent' ? '圖片完全透明' : '無法建立畫布';
+        this.dom.importStatusEl.textContent = res === 'transparent' ? '圖片完全透明' : '無法建立畫布';
         return;
       }
 
@@ -1106,13 +764,13 @@ export class SpriteAtelierView {
       this.commitAtlasUpdate();
       this.syncToolbarState();
       this.renderBoard();
-      this.importStatusEl.textContent = `已匯入 ${gw}×${gh} Oklab 量化`;
+      this.dom.importStatusEl.textContent = `已匯入 ${gw}×${gh} Oklab 量化`;
     } catch {
       if (pushedUndo) {
         this.undoStack.pop();
         this.syncToolbarState();
       }
-      this.importStatusEl.textContent = '圖片解析失敗';
+      this.dom.importStatusEl.textContent = '圖片解析失敗';
     }
   }
 
@@ -1146,44 +804,24 @@ export class SpriteAtelierView {
   }
 
   private syncPaletteColors(): void {
-    const theme = PALETTE_THEMES[this.selectedThemeIdx] ?? PALETTE_THEMES[0];
-    this.paletteEls.forEach((chip, idx) => {
-      if (idx === 0) return;
-      const hex = theme.colors[idx] ?? '#ffffff';
-      chip.style.backgroundColor = hex;
-      const isGlow = (idx === 14 && theme.emissive14 > 0) || (idx === 15 && theme.emissive15 > 0);
-      chip.classList.toggle('is-emissive-active', isGlow);
-    });
+    syncAtelierPaletteColors(this.dom.paletteEls, this.selectedThemeIdx);
   }
 
   private syncPaletteSelection(): void {
-    this.paletteEls.forEach((chip, i) => {
-      chip.classList.toggle('is-selected', i === this.selectedColor);
-    });
+    syncAtelierPaletteSelection(this.dom.paletteEls, this.selectedColor);
   }
 
   private syncToolbarState(): void {
-    const slot = this.slots[this.activeSlot];
-    for (const [key, b] of this.slotBtns.entries()) {
-      b.classList.toggle('is-active', key === this.activeSlot);
-    }
-    this.sizeBtn.textContent = `📐 ${slot.gridW}×${slot.gridH}`;
-    this.sizeBtn.classList.toggle('is-active', slot.gridW !== 16 || slot.gridH !== 16);
-    this.frameCountSelect.value = String(slot.frameCount);
-    this.frameBtns.forEach((b, i) => {
-      b.classList.toggle('panel-hidden', i >= slot.frameCount);
-      b.classList.toggle('is-active', i === this.activeFrameIdx);
+    syncAtelierToolbarState(this.dom, {
+      activeSlot: this.activeSlot,
+      slot: this.slots[this.activeSlot],
+      activeFrameIdx: this.activeFrameIdx,
+      activeTool: this.activeTool,
+      activeStamp: this.activeStamp,
+      onionSkin: this.onionSkin,
+      mirrorX: this.mirrorX,
+      undoCount: this.undoStack.length,
     });
-    this.pencilBtn.classList.toggle('is-active', this.activeTool === 'pencil' && !this.activeStamp);
-    this.eraserBtn.classList.toggle('is-active', this.activeTool === 'eraser' && !this.activeStamp);
-    this.fillBtn.classList.toggle('is-active', this.activeTool === 'fill' && !this.activeStamp);
-    this.eyedropBtn.classList.toggle('is-active', this.activeTool === 'eyedropper' && !this.activeStamp);
-    this.onionBtn.classList.toggle('is-active', this.onionSkin);
-    this.mirrorBtn.classList.toggle('is-active', this.mirrorX);
-    this.undoBtn.disabled = this.undoStack.length === 0;
-    for (const [id, b] of this.stampBtns.entries()) {
-      b.classList.toggle('is-active', this.activeStamp?.id === id);
-    }
   }
 
   private updateLightReadout(): void {
@@ -1191,7 +829,7 @@ export class SpriteAtelierView {
     const next = `光源角度 ${deg}° (${this.lightNormX.toFixed(2)}, ${this.lightNormY.toFixed(2)})`;
     if (next !== this.lastLightReadout) {
       this.lastLightReadout = next;
-      this.lightCoordEl.textContent = next;
+      this.dom.lightCoordEl.textContent = next;
     }
   }
 
@@ -1289,7 +927,7 @@ export class SpriteAtelierView {
       this.updateLightReadout();
     }
 
-    const ctx = this.previewCtx;
+    const ctx = this.dom.previewCtx;
     const img = this.previewImgData;
     if (!ctx || !img) return;
 
