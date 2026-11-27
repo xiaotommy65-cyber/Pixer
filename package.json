@@ -14,7 +14,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "sim": "node --expose-gc --experimental-strip-types scripts/headless-sim.ts",
-    "test": "node --experimental-strip-types --test scripts/sim/EcsCore.test.ts scripts/sim/WorldMap.test.ts scripts/sim/Engine10Core.test.ts scripts/sim/Interop.test.ts scripts/sim/DualPerspective3D.test.ts scripts/sim/Spatial3DMesh.test.ts scripts/sim/WorldMap3D.test.ts scripts/sim/Model3DInterop.test.ts scripts/sim/Hd2dFeel.test.ts scripts/sim/CloudOffload.test.ts",
+    "test": "node --experimental-strip-types --test scripts/sim/EcsCore.test.ts scripts/sim/WorldMap.test.ts scripts/sim/Engine10Core.test.ts scripts/sim/Interop.test.ts scripts/sim/DualPerspective3D.test.ts scripts/sim/Spatial3DMesh.test.ts scripts/sim/WorldMap3D.test.ts scripts/sim/Model3DInterop.test.ts scripts/sim/Hd2dFeel.test.ts scripts/sim/CloudOffload.test.ts scripts/sim/Workstation2.test.ts",
     "mcp": "node --experimental-strip-types scripts/pixer-mcp.ts",
     "audit": "node --experimental-strip-types scripts/pixer-audit.ts",
     "audit:status": "node --experimental-strip-types scripts/pixer-audit.ts --only=status",
