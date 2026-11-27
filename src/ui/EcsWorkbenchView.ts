@@ -609,6 +609,7 @@ export class EcsWorkbenchView {
         this.session,
         {
           selectedEntityId: this.selectedEntityId,
+          selectedEntityIds: this.selectedEntityIds,
           selectedPrefabId: this.selectedPrefabId,
           filterQuery: this.filterQuery,
         },
@@ -618,6 +619,12 @@ export class EcsWorkbenchView {
           },
           onInstantiatePrefab: (prefabId) => this.instantiatePrefabOntoViewport(prefabId),
           onSelectEntity: (entityId) => this.setSelectedEntityIds([entityId]),
+          onToggleSelectEntity: (entityId) => {
+            const next = this.selectedEntityIds.includes(entityId)
+              ? this.selectedEntityIds.filter((id) => id !== entityId)
+              : [...this.selectedEntityIds, entityId];
+            this.setSelectedEntityIds(next);
+          },
         },
       );
     } else if (this.leftTab === 'prefabs') {

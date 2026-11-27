@@ -459,7 +459,8 @@ export class EcsWorkbenchMapCanvasController {
       viewW: vctx.subW, viewH: vctx.subH, cam3d: vctx.cam3d, offsetX: vctx.offsetX, offsetY: vctx.offsetY, poses: allPoses,
     });
     if (hitId) {
-      const nextIds = e.shiftKey
+      const multiMod = e.shiftKey || e.ctrlKey || e.metaKey;
+      const nextIds = multiMod
         ? (selectedIds.includes(hitId) ? selectedIds.filter((id) => id !== hitId) : [...selectedIds, hitId])
         : [hitId];
       this.deps.onSelectionChange?.(nextIds);
