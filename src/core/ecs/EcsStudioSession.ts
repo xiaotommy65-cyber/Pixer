@@ -21,12 +21,14 @@ import {
 } from './EcsProjectSchema.ts';
 import {
   ECS_ATTACHABLE_COMPONENTS,
+  handleAlignEntities,
   handleAttachComponent,
   handleClearRoomVoxels,
   handleCreatePrefab,
   handleDeletePrefab,
   handleDeleteRoom,
   handleDetachComponent,
+  handleDuplicateEntities,
   handleEnsureWorldMap,
   handleFillRect,
   handleFillRoomBox3D,
@@ -55,6 +57,7 @@ import {
   handleSetWorldMapConfig,
   handleSpawnEntity,
   handleStampRoomAscii,
+  handleTransformEntities,
   handleUnlinkPrefab,
   handleUpdatePrefab,
   handleUpsertAiProfile,
@@ -68,6 +71,7 @@ import {
   handleUpsertRoom,
   handleUpsertScript,
   handleUpsertTileDef,
+  type EcsAlignEntitiesMode,
   type EcsAsciiLegendEntry,
   type EcsAttachableComponent,
   type EcsCommandHandlerOutcome,
@@ -87,10 +91,20 @@ import type {
 
 export {
   ECS_ATTACHABLE_COMPONENTS,
+  type EcsAlignEntitiesMode,
   type EcsAsciiLegendEntry,
   type EcsAttachableComponent,
   type EcsCommandResult,
 };
+
+export interface EcsModel3DSummary {
+  id: string;
+  name: string;
+  partCount: number;
+  hasRawMesh: boolean;
+  clipCount: number;
+  boundsSize?: readonly [number, number, number];
+}
 
 export interface EcsPrefabSummary {
   id: string;
@@ -255,6 +269,30 @@ export type EcsStudioCommand =
       shadowMapStrength?: number;
       showAxisGizmo3d?: boolean;
       showOrthoGrid3d?: boolean;
+    }
+  | {
+      type: 'duplicate_entities';
+      entityIds: string[];
+      offsetX?: number;
+      offsetY?: number;
+      offsetZ?: number;
+      targetRoomId?: string;
+    }
+  | {
+      type: 'transform_entities';
+      entityIds: string[];
+      deltaX?: number;
+      deltaY?: number;
+      deltaZ?: number;
+      deltaYaw?: number;
+      scaleMult?: number;
+      snapGrid?: number;
+      snapStoryZ?: boolean;
+    }
+  | {
+      type: 'align_entities';
+      entityIds: string[];
+      mode: EcsAlignEntitiesMode;
     };
 
 export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
@@ -306,6 +344,9 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'upsert_model_3d', category: 'assets', fields: 'model: {id, name, parts[], rawMesh?, clips?, boundsSize?}', note: 'Create or update a 3D cuboid or glTF rawMesh model asset in project.models3d.' },
   { type: 'remove_model_3d', category: 'assets', fields: 'modelId', note: 'Remove a 3D model asset from project.models3d.' },
   { type: 'set_camera_3d_pose', category: 'scene', fields: 'yawDeg?, pitchDeg?, rollDeg?, fovDeg?, camCenterZ?, autoFollowHeroZ?, roofCutawayMode?, roofCutawayAlpha?, cameraProjection3d?, quadView?, shadowMapEnabled?, shadowMapStrength?, showAxisGizmo3d?, showOrthoGrid3d?', note: 'Configure 6DoF 3D camera pose, auto Z-follow, interior roof cutaway, orthographic projection, quad-view split, shadow map, and 3D gizmos.' },
+  { type: 'duplicate_entities', category: 'entity', fields: 'entityIds[], offsetX?, offsetY?, offsetZ?, targetRoomId?', note: 'Clone one or more entities in a single Undo step with optional 2D/3D offset and target room.' },
+  { type: 'transform_entities', category: 'entity', fields: 'entityIds[], deltaX?, deltaY?, deltaZ?, deltaYaw?, scaleMult?, snapGrid?, snapStoryZ?', note: 'Batch move, elevate, rotate yaw, scale, and grid/story snap entities in one Undo step.' },
+  { type: 'align_entities', category: 'entity', fields: 'entityIds[], mode: "align_x"|"align_y"|"align_z"|"distribute_x"|"distribute_y"|"snap_floor"', note: 'Align/distribute selected entities along X/Y/Z or snap entities to exact 3D voxel floor support height.' },
 ] as const;
 
 export interface EcsHistoryItem {
@@ -411,24 +452,10 @@ export class EcsStudioSession {
     return out;
   }
 
-  public listModels3D(): Array<{
-    id: string;
-    name: string;
-    partCount: number;
-    hasRawMesh: boolean;
-    clipCount: number;
-    boundsSize?: readonly [number, number, number];
-  }> {
+  public listModels3D(): EcsModel3DSummary[] {
     const map = this.doc.models3d;
     if (!map) return [];
-    const out: Array<{
-      id: string;
-      name: string;
-      partCount: number;
-      hasRawMesh: boolean;
-      clipCount: number;
-      boundsSize?: readonly [number, number, number];
-    }> = [];
+    const out: EcsModel3DSummary[] = [];
     for (const def of Object.values(map)) {
       out.push({
         id: def.id,
@@ -488,6 +515,7 @@ export class EcsStudioSession {
       summary: res.summary,
       errors: [],
       createdEntityId: res.createdEntityId,
+      ...(res.createdEntityIds && res.createdEntityIds.length > 0 ? { createdEntityIds: res.createdEntityIds } : {}),
       createdPrefabId: res.createdPrefabId,
       createdSpriteId: res.createdSpriteId,
     };
@@ -589,6 +617,12 @@ export class EcsStudioSession {
         return handleRemoveModel3D(next, cmd.modelId);
       case 'set_camera_3d_pose':
         return handleSetCamera3DPose(next, cmd);
+      case 'duplicate_entities':
+        return handleDuplicateEntities(next, cmd);
+      case 'transform_entities':
+        return handleTransformEntities(next, cmd);
+      case 'align_entities':
+        return handleAlignEntities(next, cmd);
       default:
         return { ok: false, summary: '未知指令', errors: ['Unknown ECS command'] };
     }
@@ -618,7 +652,11 @@ export class EcsStudioSession {
           errors: [`Step ${i} (${cmds[i].type}): ${res.errors.join('; ') || res.summary}`],
         };
       }
-      if (res.createdEntityId) createdEntityIds.push(res.createdEntityId);
+      if (res.createdEntityIds && res.createdEntityIds.length > 0) {
+        createdEntityIds.push(...res.createdEntityIds);
+      } else if (res.createdEntityId) {
+        createdEntityIds.push(res.createdEntityId);
+      }
       if (res.createdPrefabId) createdPrefabIds.push(res.createdPrefabId);
       if (res.createdSpriteId) createdSpriteIds.push(res.createdSpriteId);
     }

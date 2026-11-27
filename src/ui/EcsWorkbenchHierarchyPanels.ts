@@ -21,6 +21,7 @@ export interface PrefabsPaneCallbacks {
 
 export interface HierarchyPaneState {
   selectedEntityId: string | null;
+  selectedEntityIds?: readonly string[];
   selectedPrefabId: string | null;
   filterQuery: string;
 }
@@ -29,6 +30,7 @@ export interface HierarchyPaneCallbacks {
   onFilterChange: (nextQuery: string) => void;
   onInstantiatePrefab: (prefabId: string) => void;
   onSelectEntity: (entityId: string) => void;
+  onToggleSelectEntity?: (entityId: string) => void;
 }
 
 /**
@@ -237,11 +239,19 @@ export function renderHierarchyPane(
       return;
     }
 
+    const selectedSet = new Set(
+      state.selectedEntityIds && state.selectedEntityIds.length > 0
+        ? state.selectedEntityIds
+        : state.selectedEntityId
+          ? [state.selectedEntityId]
+          : [],
+    );
+
     for (const ent of filtered) {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'p7-entity-row';
-      if (!state.selectedPrefabId && ent.id === state.selectedEntityId) row.classList.add('is-selected');
+      if (!state.selectedPrefabId && selectedSet.has(ent.id)) row.classList.add('is-selected');
 
       const resolved = resolveEntityComponents(ent, proj.prefabs);
       const pid = getEntityPrefabId(ent);
@@ -258,7 +268,13 @@ export function renderHierarchyPane(
         : `${resolved.tag || 'entity'} · ${compCount} 元件`;
 
       row.append(nameEl, meta);
-      row.addEventListener('click', () => cb.onSelectEntity(ent.id));
+      row.addEventListener('click', (ev) => {
+        if ((ev.shiftKey || ev.ctrlKey || ev.metaKey) && cb.onToggleSelectEntity) {
+          cb.onToggleSelectEntity(ent.id);
+        } else {
+          cb.onSelectEntity(ent.id);
+        }
+      });
       list.appendChild(row);
     }
   };

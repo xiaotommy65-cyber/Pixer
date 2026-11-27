@@ -1,13 +1,15 @@
 import type { TextureAtlas } from '../assets/TextureAtlas.ts';
 import { critiqueCutsceneAesthetics } from '../core/ai/EcsCinematicOracle.ts';
 import type { EcsCartridgeRuntime } from '../core/ecs/EcsCartridgeRuntime.ts';
-import type { EcsProjectV2 } from '../core/ecs/EcsProjectSchema.ts';
+import { resolveEntityComponents, type EcsProjectV2 } from '../core/ecs/EcsProjectSchema.ts';
 import type { EcsStudioSession } from '../core/ecs/EcsStudioSession.ts';
+import { MAX_VOXEL_STORIES } from '../core/ecs/EcsVoxelVolume.ts';
 import type { GpuEngine } from '../core/gpu/GpuEngine.ts';
 import type { EngineHost } from '../core/runtime/EngineHost.ts';
 import { SceneGpuBridge } from '../core/runtime/SceneGpuBridge.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../core/types/WorldTypes.ts';
 import type { MapDesignerState } from './EcsMapDesignerPanel.ts';
+import { rotateVoxelShape } from './EcsMapDesignerPanelTools.ts';
 import type { WorkbenchDiagReport } from './EcsWorkbenchCatalog.ts';
 import type { EcsWorkbenchMapCanvasController } from './EcsWorkbenchMapCanvasController.ts';
 import type {
@@ -27,6 +29,8 @@ export interface PreviewRuntimeDeps {
   mapState: MapDesignerState;
   getMapCanvasCtrl: () => EcsWorkbenchMapCanvasController;
   getEventGraphView: () => EventGraphEditorView | null;
+  getSelectedEntityIds?: () => readonly string[];
+  onSelectionChange?: (ids: string[]) => void;
   isVisible: () => boolean;
   isModalOpen: () => boolean;
   getCenterMode: () => WorkbenchCenterMode;
@@ -63,6 +67,75 @@ export class EcsWorkbenchPreviewRuntime {
     if (!this.simRunning) {
       this.deps.runtime.getWorldMapController().director.reset(true);
     }
+    this.syncEditorSliceCutaway();
+  }
+
+  public syncEditorSliceCutaway(): void {
+    const wmCtrl = this.deps.runtime.getWorldMapController();
+    if (this.simRunning) {
+      wmCtrl.setEditorSliceCutaway('all', 0);
+    } else {
+      wmCtrl.setEditorSliceCutaway(this.deps.mapState.sliceCutawayMode, this.deps.mapState.activeZLevel);
+    }
+    this.previewDirty = true;
+  }
+
+  public focusEntities(entityIds: readonly string[]): boolean {
+    if (entityIds.length === 0) return false;
+    const proj = this.deps.session.getProject();
+    const activeRoomId = this.deps.runtime.getActiveRoomId();
+    const idSet = new Set(entityIds);
+    const core = this.deps.runtime.world.core;
+    const tagStore = core.getStore(core.components.Tag);
+    let sumX = 0;
+    let sumY = 0;
+    let sumZ = 0;
+    let count = 0;
+    for (const ent of proj.entities) {
+      if (!idSet.has(ent.id)) continue;
+      if (proj.worldMap && activeRoomId && ent.roomId && ent.roomId !== activeRoomId) continue;
+      const resolved = resolveEntityComponents(ent, proj.prefabs);
+      let { x, y } = resolved.transform;
+      let w = resolved.transform.w ?? 16;
+      let h = resolved.transform.h ?? 16;
+      let z = resolved.spatial3d?.z ?? 0;
+      for (let i = 0; i < tagStore.size(); i++) {
+        if (tagStore.getDenseDataAt(i).entityId !== ent.id) continue;
+        const eh = tagStore.getDenseEntityAt(i);
+        const tr = core.getComponent(eh, core.components.Transform2D);
+        if (tr) {
+          x = tr.x;
+          y = tr.y;
+          w = tr.w;
+          h = tr.h;
+        }
+        const sp = core.getComponent(eh, core.components.Spatial3D);
+        if (sp) z = sp.z;
+        break;
+      }
+      sumX += x + w * 0.5;
+      sumY += y + h * 0.5;
+      sumZ += z;
+      count++;
+    }
+    if (count === 0) return false;
+    this.deps.runtime.setEditorCamera(
+      sumX / count - proj.viewport.width * 0.5,
+      sumY / count - proj.viewport.height * 0.5,
+    );
+    if (proj.projection?.mode === 'hd2d_3d') {
+      this.deps.runtime.getWorldMapController().cameraZ = sumZ / count;
+    }
+    this.previewDirty = true;
+    this.renderPreviewNow();
+    return true;
+  }
+
+  public resetEditorCamera(): void {
+    this.deps.runtime.clearEditorCamera();
+    this.syncEditorSliceCutaway();
+    this.previewDirty = true;
+    this.renderPreviewNow();
   }
 
   public isSimRunning(): boolean {
@@ -105,11 +178,13 @@ export class EcsWorkbenchPreviewRuntime {
   public setSimRunning(running: boolean): void {
     this.simRunning = running;
     if (running) {
+      this.deps.mapState.spacePanHeld = false;
       this.deps.runtime.clearEditorCamera();
       this.deps.getMapCanvasCtrl().clearPendingStroke();
     } else if (this.deps.session.getProject().worldMap) {
       this.deps.runtime.getWorldMapController().director.reset(false);
     }
+    this.syncEditorSliceCutaway();
     this.deps.dom.playPauseBtn.textContent = this.getPlayPauseLabel();
     this.deps.getMapCanvasCtrl().syncInteractivity();
     this.previewDirty = true;
@@ -150,6 +225,7 @@ export class EcsWorkbenchPreviewRuntime {
     if (!this.simRunning) {
       this.deps.runtime.getWorldMapController().director.reset(true);
     }
+    this.syncEditorSliceCutaway();
     this.syncViewportSize(proj);
   }
 
@@ -382,6 +458,16 @@ export class EcsWorkbenchPreviewRuntime {
           else this.deps.session.undo();
           return;
         }
+        if ((e.ctrlKey || e.metaKey) && e.code === 'KeyY') {
+          e.preventDefault();
+          this.deps.session.redo();
+          return;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && e.code === 'KeyP') {
+          e.preventDefault();
+          this.setSimRunning(!this.simRunning);
+          return;
+        }
 
         if (isWorldMap) {
           this.handleWorldMapKeyDown(e);
@@ -419,6 +505,10 @@ export class EcsWorkbenchPreviewRuntime {
         else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.heldKeys.up = false;
         else if (e.code === 'ArrowDown' || e.code === 'KeyS') this.heldKeys.down = false;
         else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.heldKeys.dash = false;
+        else if (e.code === 'Space' && this.deps.mapState.spacePanHeld) {
+          this.deps.mapState.spacePanHeld = false;
+          this.deps.getMapCanvasCtrl().syncInteractivity();
+        }
       },
       { signal },
     );
@@ -431,39 +521,116 @@ export class EcsWorkbenchPreviewRuntime {
         this.heldKeys.up = false;
         this.heldKeys.down = false;
         this.heldKeys.dash = false;
+        if (this.deps.mapState.spacePanHeld) {
+          this.deps.mapState.spacePanHeld = false;
+          this.deps.getMapCanvasCtrl().syncInteractivity();
+        }
       },
       { signal },
     );
   }
 
   private handleWorldMapKeyDown(e: KeyboardEvent): void {
-    if (e.code === 'ArrowLeft' || e.code === 'KeyA') this.heldKeys.left = true;
-    else if (e.code === 'ArrowRight' || e.code === 'KeyD') this.heldKeys.right = true;
-    else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.heldKeys.up = true;
-    else if (e.code === 'ArrowDown' || e.code === 'KeyS') this.heldKeys.down = true;
-    else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.heldKeys.dash = true;
-    else if (e.code === 'Space' || e.code === 'KeyK') {
-      e.preventDefault();
-      this.deps.host.unlockAudio();
-      this.pulseJumpFrames = 4;
-    } else if (e.code === 'KeyJ' || e.code === 'KeyZ' || e.code === 'Enter') {
-      this.deps.host.unlockAudio();
-      this.pulseActionFrames = 4;
-    } else if (!this.simRunning) {
-      const toolMap: Record<string, MapDesignerState['tool']> = {
-        KeyB: 'brush',
-        KeyR: 'rect',
-        KeyG: 'fill',
-        KeyE: 'erase',
-        KeyI: 'eyedropper',
-      };
-      const tool = toolMap[e.code];
-      if (tool) {
-        this.deps.mapState.tool = tool;
-        this.previewDirty = true;
-        this.deps.onToolShortcutMutated();
-        this.deps.getMapCanvasCtrl().renderOverlay();
+    if (this.simRunning) {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') this.heldKeys.left = true;
+      else if (e.code === 'ArrowRight' || e.code === 'KeyD') this.heldKeys.right = true;
+      else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.heldKeys.up = true;
+      else if (e.code === 'ArrowDown' || e.code === 'KeyS') this.heldKeys.down = true;
+      else if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') this.heldKeys.dash = true;
+      else if (e.code === 'Space' || e.code === 'KeyK') {
+        e.preventDefault();
+        this.deps.host.unlockAudio();
+        this.pulseJumpFrames = 4;
+      } else if (e.code === 'KeyJ' || e.code === 'KeyZ' || e.code === 'Enter') {
+        this.deps.host.unlockAudio();
+        this.pulseActionFrames = 4;
       }
+      return;
+    }
+
+    // Edit Mode: Godot / 2D+3D Hybrid Keymap
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyD') {
+      e.preventDefault();
+      const sel = this.deps.getSelectedEntityIds?.() ?? [];
+      if (sel.length > 0) {
+        const res = this.deps.session.dispatch({ type: 'duplicate_entities', entityIds: [...sel], offsetX: 16, offsetY: 16 });
+        const created = res.ok ? (res.createdEntityIds?.length ? [...res.createdEntityIds] : res.createdEntityId ? [res.createdEntityId] : null) : null;
+        if (created) this.deps.onSelectionChange?.(created);
+      }
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (!this.deps.mapState.spacePanHeld) {
+        this.deps.mapState.spacePanHeld = true;
+        this.deps.getMapCanvasCtrl().syncInteractivity();
+      }
+      return;
+    }
+    if (e.code === 'Delete' || e.code === 'Backspace') {
+      const sel = this.deps.getSelectedEntityIds?.() ?? [];
+      if (sel.length > 0) {
+        e.preventDefault();
+        if (sel.length === 1) this.deps.session.dispatch({ type: 'remove_entity', entityId: sel[0] });
+        else this.deps.session.dispatchBatch(sel.map((entityId) => ({ type: 'remove_entity', entityId })), `刪除 ${sel.length} 個實體`);
+        this.deps.onSelectionChange?.([]);
+      }
+      return;
+    }
+    if (e.code === 'KeyQ') {
+      e.preventDefault();
+      this.deps.mapState.voxelShape = rotateVoxelShape(this.deps.mapState.voxelShape, e.shiftKey ? -1 : 1);
+      this.previewDirty = true;
+      this.deps.onToolShortcutMutated();
+      this.deps.getMapCanvasCtrl().renderOverlay();
+      return;
+    }
+    if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+      e.preventDefault();
+      const nextZ = Math.max(0, Math.min(MAX_VOXEL_STORIES - 1, this.deps.mapState.activeZLevel + (e.code === 'BracketRight' ? 1 : -1)));
+      if (nextZ !== this.deps.mapState.activeZLevel) {
+        this.deps.mapState.activeZLevel = nextZ;
+        this.syncEditorSliceCutaway();
+        this.deps.onToolShortcutMutated();
+        this.renderPreviewNow();
+      }
+      return;
+    }
+    if (e.code === 'KeyF') {
+      e.preventDefault();
+      this.focusEntities(this.deps.getSelectedEntityIds?.() ?? []);
+      return;
+    }
+    if (e.code === 'Home' || e.code === 'Digit0') {
+      e.preventDefault();
+      this.resetEditorCamera();
+      return;
+    }
+    const toolMap: Record<string, MapDesignerState['tool']> = {
+      KeyV: 'select',
+      KeyB: 'brush',
+      KeyR: 'rect',
+      KeyG: 'fill',
+      KeyE: 'erase',
+      KeyI: 'eyedropper',
+    };
+    const tool = toolMap[e.code];
+    if (tool) {
+      this.deps.mapState.tool = tool;
+      if (tool !== 'stamp') this.deps.mapState.selectedStampPrefabId = null;
+      this.previewDirty = true;
+      this.deps.getMapCanvasCtrl().syncInteractivity();
+      this.deps.onToolShortcutMutated();
+      this.deps.getMapCanvasCtrl().renderOverlay();
+      return;
+    }
+    if (!e.altKey) {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') this.heldKeys.left = true;
+      else if (e.code === 'ArrowRight' || e.code === 'KeyD') this.heldKeys.right = true;
+      else if (e.code === 'ArrowUp' || e.code === 'KeyW') this.heldKeys.up = true;
+      else if (e.code === 'ArrowDown' || e.code === 'KeyS') this.heldKeys.down = true;
     }
   }
 }

@@ -6,7 +6,7 @@ import {
   type EcsEntityInitDef,
   type EcsProjectV2,
 } from '../core/ecs/EcsProjectSchema.ts';
-import type { EcsStudioSession } from '../core/ecs/EcsStudioSession.ts';
+import type { EcsAlignEntitiesMode, EcsStudioSession } from '../core/ecs/EcsStudioSession.ts';
 import {
   COMPONENT_CATALOG,
   collectProjectSpriteOptions,
@@ -20,6 +20,207 @@ export interface EntityInspectorCallbacks {
   onSaveEntityAsPrefab: (entityId: string) => void;
   onEditPrefabTemplate: (prefabId: string) => void;
   onOpenEventGraph: (scriptId: string) => void;
+}
+
+const ALIGN_BUTTONS: readonly { mode: EcsAlignEntitiesMode; label: string }[] = [
+  { mode: 'align_x', label: '左/X 對齊' },
+  { mode: 'align_y', label: '上/Y 對齊' },
+  { mode: 'align_z', label: '同高 Z' },
+  { mode: 'distribute_x', label: '水平等距' },
+  { mode: 'distribute_y', label: '垂直等距' },
+  { mode: 'snap_floor', label: '貼齊地/樓面' },
+];
+
+type SliderSpec = readonly [
+  label: string,
+  min: number,
+  max: number,
+  step: number,
+  val: number,
+  fmt: (v: number) => string,
+  onLive: (v: number) => void,
+  onCommit: (v: number) => void,
+];
+
+function makeBtn(label: string, cls: string, onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = cls;
+  btn.textContent = label;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function makeSection(titleText: string): HTMLDivElement {
+  const sec = document.createElement('div');
+  sec.className = 'p7-section';
+  const title = document.createElement('h3');
+  title.className = 'p7-section-title';
+  title.textContent = titleText;
+  sec.appendChild(title);
+  return sec;
+}
+
+function makeSliderGroup(specs: readonly SliderSpec[]): HTMLDivElement {
+  const group = document.createElement('div');
+  group.className = 'p7-slider-group';
+  for (const [label, min, max, step, val, fmt, onLive, onCommit] of specs) {
+    group.appendChild(createWorkbenchSliderRow(label, min, max, step, val, fmt, onLive, onCommit));
+  }
+  return group;
+}
+
+function makeColorRow(
+  label: string,
+  ariaLabel: string,
+  color: string,
+  onLive: (hex: string) => void,
+  onCommit: (hex: string) => void,
+): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'p7-color-row';
+  const lbl = document.createElement('span');
+  lbl.textContent = label;
+  const right = document.createElement('div');
+  right.className = 'p7-toolbar-group';
+  const hexText = document.createElement('span');
+  hexText.className = 'p7-mono p7-slider-val';
+  hexText.textContent = color.toUpperCase();
+  const inp = document.createElement('input');
+  inp.type = 'color';
+  inp.className = 'p7-color-input';
+  inp.value = color;
+  inp.setAttribute('aria-label', ariaLabel);
+  inp.addEventListener('input', () => {
+    hexText.textContent = inp.value.toUpperCase();
+    onLive(inp.value);
+  });
+  inp.addEventListener('change', () => onCommit(inp.value));
+  right.append(hexText, inp);
+  row.append(lbl, right);
+  return row;
+}
+
+function makeSelectField(
+  label: string,
+  ariaLabel: string,
+  options: readonly { value: string; label: string }[],
+  value: string,
+  onChange: (val: string) => void,
+): HTMLDivElement {
+  const field = document.createElement('div');
+  field.className = 'p7-field';
+  const lbl = document.createElement('label');
+  lbl.textContent = label;
+  const sel = document.createElement('select');
+  sel.className = 'p7-select p7-mono';
+  sel.setAttribute('aria-label', ariaLabel);
+  let hasValue = false;
+  for (const opt of options) {
+    if (opt.value === value) hasValue = true;
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = opt.label;
+    sel.appendChild(o);
+  }
+  if (value && !hasValue) {
+    const cur = document.createElement('option');
+    cur.value = value;
+    cur.textContent = value;
+    sel.appendChild(cur);
+  }
+  sel.value = value;
+  sel.addEventListener('change', () => onChange(sel.value));
+  field.append(lbl, sel);
+  return field;
+}
+
+function makeTextField(
+  label: string,
+  value: string,
+  placeholder: string,
+  onChange: (val: string) => void,
+): HTMLDivElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'p7-field';
+  const lbl = document.createElement('label');
+  lbl.textContent = label;
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'p7-input p7-mono';
+  if (placeholder) inp.placeholder = placeholder;
+  inp.value = value;
+  inp.addEventListener('change', () => onChange(inp.value.trim()));
+  wrap.append(lbl, inp);
+  return wrap;
+}
+
+/**
+ * Builds the Multi-Select Batch Action & Alignment section rendered at the top of the Right Inspector
+ * whenever 2 or more entities are selected.
+ */
+export function buildMultiSelectInspectorSection(
+  proj: EcsProjectV2,
+  session: EcsStudioSession,
+  selectedIds: readonly string[],
+  onSelectionChange: (ids: string[]) => void,
+): HTMLElement {
+  const entityMap = new Map(proj.entities.map((e) => [e.id, e]));
+  const selectedEntities: EcsEntityInitDef[] = [];
+  for (const id of selectedIds) {
+    const ent = entityMap.get(id);
+    if (ent) selectedEntities.push(ent);
+  }
+  const validIds = selectedEntities.map((e) => e.id);
+
+  const sec = document.createElement('div');
+  sec.className = 'p7-section';
+  sec.dataset.testid = 'multi-select-inspector';
+
+  const head = document.createElement('div');
+  head.className = 'p7-section-head';
+  const title = document.createElement('h3');
+  title.className = 'p7-section-title';
+  title.textContent = `已多選 ${validIds.length} 個實體`;
+  head.append(title, makeBtn('清除選取', 'p7-btn p7-btn-xs', () => onSelectionChange([])));
+
+  const pills = document.createElement('div');
+  pills.className = 'p7-interop-tags';
+  for (const ent of selectedEntities) {
+    const pill = makeBtn(ent.name, 'p7-btn p7-btn-xs p7-mono', () => onSelectionChange([ent.id]));
+    pill.title = `單獨選取「${ent.name}」(${ent.id})`;
+    pills.appendChild(pill);
+  }
+
+  const alignGrid = document.createElement('div');
+  alignGrid.className = 'p7-map-tools';
+  for (const ab of ALIGN_BUTTONS) {
+    const btn = makeBtn(ab.label, 'p7-btn p7-btn-xs', () => {
+      if (validIds.length > 0) session.dispatch({ type: 'align_entities', entityIds: [...validIds], mode: ab.mode });
+    });
+    btn.dataset.alignMode = ab.mode;
+    alignGrid.appendChild(btn);
+  }
+
+  const actionRow = document.createElement('div');
+  actionRow.className = 'p7-prefab-actions';
+  const dupBtn = makeBtn('複製群組 (Ctrl+D)', 'p7-btn p7-btn-accent p7-btn-xs', () => {
+    if (validIds.length === 0) return;
+    const res = session.dispatch({ type: 'duplicate_entities', entityIds: [...validIds], offsetX: 16, offsetY: 16 });
+    if (res.ok && res.createdEntityIds && res.createdEntityIds.length > 0) onSelectionChange([...res.createdEntityIds]);
+  });
+  dupBtn.dataset.testid = 'multi-select-duplicate';
+
+  const delBtn = makeBtn('刪除所選 (Del)', 'p7-btn p7-btn-danger p7-btn-xs', () => {
+    if (validIds.length === 0) return;
+    const res = session.dispatchBatch(validIds.map((entityId) => ({ type: 'remove_entity', entityId })), `刪除 ${validIds.length} 個實體`);
+    if (res.ok) onSelectionChange([]);
+  });
+  delBtn.dataset.testid = 'multi-select-delete';
+
+  actionRow.append(dupBtn, delBtn);
+  sec.append(head, pills, alignGrid, actionRow);
+  return sec;
 }
 
 /**
@@ -51,21 +252,12 @@ export function buildEntityInspectorSections(
 
   const headBtns = document.createElement('div');
   headBtns.className = 'p7-head-actions';
-
-  const savePrefBtn = document.createElement('button');
-  savePrefBtn.type = 'button';
-  savePrefBtn.className = 'p7-btn p7-btn-xs';
-  savePrefBtn.textContent = '存為 Prefab';
-  savePrefBtn.addEventListener('click', () => cb.onSaveEntityAsPrefab(ent.id));
-
-  const delBtn = document.createElement('button');
-  delBtn.type = 'button';
-  delBtn.className = 'p7-btn p7-btn-danger p7-btn-xs';
-  delBtn.textContent = '刪除實體';
-  delBtn.addEventListener('click', () => {
-    session.dispatch({ type: 'remove_entity', entityId: ent.id });
-  });
-  headBtns.append(savePrefBtn, delBtn);
+  headBtns.append(
+    makeBtn('存為 Prefab', 'p7-btn p7-btn-xs', () => cb.onSaveEntityAsPrefab(ent.id)),
+    makeBtn('刪除實體', 'p7-btn p7-btn-danger p7-btn-xs', () => {
+      session.dispatch({ type: 'remove_entity', entityId: ent.id });
+    }),
+  );
   trHead.append(trTitle, headBtns);
 
   if (linkedPrefab) {
@@ -77,31 +269,17 @@ export function buildEntityInspectorSections(
 
     const linkActs = document.createElement('div');
     linkActs.className = 'p7-prefab-actions';
-
-    const editTplBtn = document.createElement('button');
-    editTplBtn.type = 'button';
-    editTplBtn.className = 'p7-btn p7-btn-xs p7-btn-accent';
-    editTplBtn.textContent = '編輯模板';
-    editTplBtn.addEventListener('click', () => cb.onEditPrefabTemplate(linkedPrefab.id));
-
-    const revertBtn = document.createElement('button');
-    revertBtn.type = 'button';
-    revertBtn.className = 'p7-btn p7-btn-xs';
-    revertBtn.textContent = '重置覆寫';
-    revertBtn.disabled = overrideCount === 0;
-    revertBtn.addEventListener('click', () => {
+    const revertBtn = makeBtn('重置覆寫', 'p7-btn p7-btn-xs', () => {
       session.dispatch({ type: 'revert_prefab_overrides', entityId: ent.id, keepPosition: true });
     });
-
-    const unlinkBtn = document.createElement('button');
-    unlinkBtn.type = 'button';
-    unlinkBtn.className = 'p7-btn p7-btn-xs';
-    unlinkBtn.textContent = '斷開連結';
-    unlinkBtn.addEventListener('click', () => {
-      session.dispatch({ type: 'unlink_prefab', entityId: ent.id });
-    });
-
-    linkActs.append(editTplBtn, revertBtn, unlinkBtn);
+    revertBtn.disabled = overrideCount === 0;
+    linkActs.append(
+      makeBtn('編輯模板', 'p7-btn p7-btn-xs p7-btn-accent', () => cb.onEditPrefabTemplate(linkedPrefab.id)),
+      revertBtn,
+      makeBtn('斷開連結', 'p7-btn p7-btn-xs', () => {
+        session.dispatch({ type: 'unlink_prefab', entityId: ent.id });
+      }),
+    );
     linkBar.append(linkInfo, linkActs);
     trSec.append(trHead, linkBar);
   } else {
@@ -111,7 +289,6 @@ export function buildEntityInspectorSections(
   const grid = document.createElement('div');
   grid.className = 'p7-prop-grid';
   const tr = resolved.transform;
-
   const addNumField = (label: string, val: number, onCommit: (n: number) => void) => {
     const wrap = document.createElement('div');
     wrap.className = 'p7-field';
@@ -128,7 +305,6 @@ export function buildEntityInspectorSections(
     wrap.append(lbl, inp);
     grid.appendChild(wrap);
   };
-
   const commitTransform = (partial: Partial<typeof tr>) => {
     session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { transform: partial } });
   };
@@ -153,7 +329,6 @@ export function buildEntityInspectorSections(
 
   const compList = document.createElement('div');
   compList.className = 'p7-comp-list';
-
   const coreRow = document.createElement('div');
   coreRow.className = 'p7-comp-row';
   const coreNm = document.createElement('span');
@@ -233,321 +408,101 @@ export function buildEntityInspectorSections(
   // Section 3: Live GPU PBR Material Inspector
   if (resolved.sprite) {
     const sp = resolved.sprite;
-    const matSec = document.createElement('div');
-    matSec.className = 'p7-section';
-    const matTitle = document.createElement('h3');
-    matTitle.className = 'p7-section-title';
-    matTitle.textContent = 'PBR 材質與精靈圖集';
-
-    const sprField = document.createElement('div');
-    sprField.className = 'p7-field';
-    const sprLbl = document.createElement('label');
-    sprLbl.textContent = '高解析精靈資產 (Multi-Page Atlas)';
-    const sprSel = document.createElement('select');
-    sprSel.className = 'p7-select p7-mono';
-    sprSel.setAttribute('aria-label', '精靈紋理選擇');
-
-    const spriteOpts = collectProjectSpriteOptions(proj, atlas);
-    const seen = new Set<string>();
-    for (const opt of spriteOpts) {
-      seen.add(opt.id);
-      const o = document.createElement('option');
-      o.value = opt.id;
-      o.textContent = opt.label;
-      sprSel.appendChild(o);
-    }
-    if (!seen.has(sp.sprite)) {
-      const o = document.createElement('option');
-      o.value = sp.sprite;
-      o.textContent = sp.sprite;
-      sprSel.appendChild(o);
-    }
+    const matSec = makeSection('PBR 材質與精靈圖集');
     const commitSprite = (partial: Partial<typeof sp>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { sprite: partial } });
     };
-    sprSel.value = sp.sprite;
-    sprSel.addEventListener('change', () => commitSprite({ sprite: sprSel.value as SpriteId }));
-    sprField.append(sprLbl, sprSel);
-
-    const sliders = document.createElement('div');
-    sliders.className = 'p7-slider-group';
-    sliders.append(
-      createWorkbenchSliderRow(
-        '金屬度 Metallic',
-        0,
-        1,
-        0.05,
-        sp.metallic ?? 0.25,
-        (v) => v.toFixed(2),
-        (v) => cb.liveMutator.mutateMaterial(ent.id, { metallic: v }),
-        (v) => commitSprite({ metallic: v }),
+    const spriteOpts = collectProjectSpriteOptions(proj, atlas).map((o) => ({ value: o.id, label: o.label }));
+    matSec.append(
+      makeSelectField('高解析精靈資產 (Multi-Page Atlas)', '精靈紋理選擇', spriteOpts, sp.sprite, (v) =>
+        commitSprite({ sprite: v as SpriteId }),
       ),
-      createWorkbenchSliderRow(
-        '粗糙度 Roughness',
-        0.05,
-        1,
-        0.05,
-        sp.roughness ?? 0.42,
-        (v) => v.toFixed(2),
-        (v) => cb.liveMutator.mutateMaterial(ent.id, { roughness: v }),
-        (v) => commitSprite({ roughness: v }),
-      ),
-      createWorkbenchSliderRow(
-        '自發光 Emissive',
-        0,
-        1.5,
-        0.05,
-        sp.emissive ?? 0,
-        (v) => v.toFixed(2),
-        (v) => cb.liveMutator.mutateMaterial(ent.id, { emissive: v }),
-        (v) => commitSprite({ emissive: v }),
-      ),
+      makeSliderGroup([
+        ['金屬度 Metallic', 0, 1, 0.05, sp.metallic ?? 0.25, (v) => v.toFixed(2), (v) => cb.liveMutator.mutateMaterial(ent.id, { metallic: v }), (v) => commitSprite({ metallic: v })],
+        ['粗糙度 Roughness', 0.05, 1, 0.05, sp.roughness ?? 0.42, (v) => v.toFixed(2), (v) => cb.liveMutator.mutateMaterial(ent.id, { roughness: v }), (v) => commitSprite({ roughness: v })],
+        ['自發光 Emissive', 0, 1.5, 0.05, sp.emissive ?? 0, (v) => v.toFixed(2), (v) => cb.liveMutator.mutateMaterial(ent.id, { emissive: v }), (v) => commitSprite({ emissive: v })],
+      ]),
     );
-    matSec.append(matTitle, sprField, sliders);
     sections.push(matSec);
   }
 
   // Section 4: Live Dynamic Light Controls
   if (resolved.light) {
     const lt = resolved.light;
-    const lightSec = document.createElement('div');
-    lightSec.className = 'p7-section';
-    const lightTitle = document.createElement('h3');
-    lightTitle.className = 'p7-section-title';
-    lightTitle.textContent = '動態點光源 LightSource';
-
-    const colRow = document.createElement('div');
-    colRow.className = 'p7-color-row';
-    const colLbl = document.createElement('span');
-    colLbl.textContent = '光色 Color';
-    const colRight = document.createElement('div');
-    colRight.className = 'p7-toolbar-group';
-    const colHexText = document.createElement('span');
-    colHexText.className = 'p7-mono p7-slider-val';
-    colHexText.textContent = lt.color.toUpperCase();
-    const colInput = document.createElement('input');
-    colInput.type = 'color';
-    colInput.className = 'p7-color-input';
-    colInput.value = lt.color;
-    colInput.setAttribute('aria-label', '光源顏色');
-    colInput.addEventListener('input', () => {
-      colHexText.textContent = colInput.value.toUpperCase();
-      cb.liveMutator.mutateLight(ent.id, { color: colInput.value });
-    });
+    const lightSec = makeSection('動態點光源 LightSource');
     const commitLight = (partial: Partial<typeof lt>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { light: partial } });
     };
-    colInput.addEventListener('change', () => commitLight({ color: colInput.value }));
-    colRight.append(colHexText, colInput);
-    colRow.append(colLbl, colRight);
-
-    const lightSliders = document.createElement('div');
-    lightSliders.className = 'p7-slider-group';
-    lightSliders.append(
-      createWorkbenchSliderRow(
-        '照射半徑 Radius',
-        16,
-        180,
-        4,
-        lt.radius,
-        (v) => `${Math.round(v)}px`,
-        (v) => cb.liveMutator.mutateLight(ent.id, { radius: v }),
-        (v) => commitLight({ radius: v }),
-      ),
-      createWorkbenchSliderRow(
-        '光照強度 Intensity',
-        0.1,
-        2.0,
-        0.05,
-        lt.intensity ?? 0.9,
-        (v) => v.toFixed(2),
-        (v) => cb.liveMutator.mutateLight(ent.id, { intensity: v }),
-        (v) => commitLight({ intensity: v }),
-      ),
+    lightSec.append(
+      makeColorRow('光色 Color', '光源顏色', lt.color, (color) => cb.liveMutator.mutateLight(ent.id, { color }), (color) => commitLight({ color })),
+      makeSliderGroup([
+        ['照射半徑 Radius', 16, 180, 4, lt.radius, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateLight(ent.id, { radius: v }), (v) => commitLight({ radius: v })],
+        ['光照強度 Intensity', 0.1, 2.0, 0.05, lt.intensity ?? 0.9, (v) => v.toFixed(2), (v) => cb.liveMutator.mutateLight(ent.id, { intensity: v }), (v) => commitLight({ intensity: v })],
+      ]),
     );
-    lightSec.append(lightTitle, colRow, lightSliders);
     sections.push(lightSec);
   }
 
   // Section 4b: CharacterMotor2D Action Physics Inspector
   if (resolved.characterMotor2d) {
     const m = resolved.characterMotor2d;
-    const motorSec = document.createElement('div');
-    motorSec.className = 'p7-section';
-    const motorTitle = document.createElement('h3');
-    motorTitle.className = 'p7-section-title';
-    motorTitle.textContent = 'CharacterMotor2D 動作馬達';
-
+    const motorSec = makeSection('CharacterMotor2D 動作馬達');
     const commitMotor = (partial: Partial<typeof m>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { characterMotor2d: partial } });
     };
-    const motorSliders = document.createElement('div');
-    motorSliders.className = 'p7-slider-group';
-    motorSliders.append(
-      createWorkbenchSliderRow(
-        '重力 Gravity',
-        100,
-        1600,
-        20,
-        m.gravity ?? 720,
-        (v) => `${Math.round(v)} px/s²`,
-        (v) => cb.liveMutator.mutateMotor(ent.id, { gravity: v }),
-        (v) => commitMotor({ gravity: v }),
-      ),
-      createWorkbenchSliderRow(
-        '跳躍初速 Jump',
-        120,
-        560,
-        10,
-        m.jumpVelocity ?? 290,
-        (v) => `${Math.round(v)} px/s`,
-        (v) => cb.liveMutator.mutateMotor(ent.id, { jumpVelocity: v }),
-        (v) => commitMotor({ jumpVelocity: v }),
-      ),
-      createWorkbenchSliderRow(
-        '移動速度 Speed',
-        40,
-        360,
-        10,
-        m.moveSpeed ?? 150,
-        (v) => `${Math.round(v)} px/s`,
-        (v) => cb.liveMutator.mutateMotor(ent.id, { moveSpeed: v }),
-        (v) => commitMotor({ moveSpeed: v }),
-      ),
-      createWorkbenchSliderRow(
-        '土狼時間 Coyote',
-        0,
-        0.3,
-        0.02,
-        m.coyoteTimeSec ?? 0.12,
-        (v) => `${v.toFixed(2)}s`,
-        (v) => cb.liveMutator.mutateMotor(ent.id, { coyoteTimeSec: v }),
-        (v) => commitMotor({ coyoteTimeSec: v }),
-      ),
-      createWorkbenchSliderRow(
-        '地面高度 Floor Y',
-        0,
-        360,
-        4,
-        m.floorY ?? 224,
-        (v) => (v <= 0 ? '視口底部' : `${Math.round(v)}px`),
-        (v) => cb.liveMutator.mutateMotor(ent.id, { floorY: v }),
-        (v) => commitMotor({ floorY: v }),
-      ),
+    motorSec.append(
+      makeSliderGroup([
+        ['重力 Gravity', 100, 1600, 20, m.gravity ?? 720, (v) => `${Math.round(v)} px/s²`, (v) => cb.liveMutator.mutateMotor(ent.id, { gravity: v }), (v) => commitMotor({ gravity: v })],
+        ['跳躍初速 Jump', 120, 560, 10, m.jumpVelocity ?? 290, (v) => `${Math.round(v)} px/s`, (v) => cb.liveMutator.mutateMotor(ent.id, { jumpVelocity: v }), (v) => commitMotor({ jumpVelocity: v })],
+        ['移動速度 Speed', 40, 360, 10, m.moveSpeed ?? 150, (v) => `${Math.round(v)} px/s`, (v) => cb.liveMutator.mutateMotor(ent.id, { moveSpeed: v }), (v) => commitMotor({ moveSpeed: v })],
+        ['土狼時間 Coyote', 0, 0.3, 0.02, m.coyoteTimeSec ?? 0.12, (v) => `${v.toFixed(2)}s`, (v) => cb.liveMutator.mutateMotor(ent.id, { coyoteTimeSec: v }), (v) => commitMotor({ coyoteTimeSec: v })],
+        ['地面高度 Floor Y', 0, 360, 4, m.floorY ?? 224, (v) => (v <= 0 ? '視口底部' : `${Math.round(v)}px`), (v) => cb.liveMutator.mutateMotor(ent.id, { floorY: v }), (v) => commitMotor({ floorY: v })],
+      ]),
     );
-    motorSec.append(motorTitle, motorSliders);
     sections.push(motorSec);
   }
 
   // Section 4c: GrappleAnchor Inspector
   if (resolved.grappleAnchor) {
     const g = resolved.grappleAnchor;
-    const grapSec = document.createElement('div');
-    grapSec.className = 'p7-section';
-    const grapTitle = document.createElement('h3');
-    grapTitle.className = 'p7-section-title';
-    grapTitle.textContent = 'GrappleAnchor 鉤索錨點';
-
+    const grapSec = makeSection('GrappleAnchor 鉤索錨點');
     const commitGrapple = (partial: Partial<typeof g>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { grappleAnchor: partial } });
     };
-    const grapSliders = document.createElement('div');
-    grapSliders.className = 'p7-slider-group';
-    grapSliders.append(
-      createWorkbenchSliderRow(
-        '捕獲半徑 Radius',
-        40,
-        280,
-        10,
-        g.anchorRadius ?? 150,
-        (v) => `${Math.round(v)}px`,
-        (v) => cb.liveMutator.mutateGrapple(ent.id, { anchorRadius: v }),
-        (v) => commitGrapple({ anchorRadius: v }),
-      ),
-      createWorkbenchSliderRow(
-        '擺盪張力 Tension',
-        0.8,
-        1.0,
-        0.01,
-        g.swingTension ?? 0.98,
-        (v) => v.toFixed(2),
-        (v) => cb.liveMutator.mutateGrapple(ent.id, { swingTension: v }),
-        (v) => commitGrapple({ swingTension: v }),
-      ),
-      createWorkbenchSliderRow(
-        '捲繩速度 Reel',
-        20,
-        240,
-        8,
-        g.reelSpeed ?? 96,
-        (v) => `${Math.round(v)} px/s`,
-        (v) => cb.liveMutator.mutateGrapple(ent.id, { reelSpeed: v }),
-        (v) => commitGrapple({ reelSpeed: v }),
-      ),
+    grapSec.append(
+      makeSliderGroup([
+        ['捕獲半徑 Radius', 40, 280, 10, g.anchorRadius ?? 150, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateGrapple(ent.id, { anchorRadius: v }), (v) => commitGrapple({ anchorRadius: v })],
+        ['擺盪張力 Tension', 0.8, 1.0, 0.01, g.swingTension ?? 0.98, (v) => v.toFixed(2), (v) => cb.liveMutator.mutateGrapple(ent.id, { swingTension: v }), (v) => commitGrapple({ swingTension: v })],
+        ['捲繩速度 Reel', 20, 240, 8, g.reelSpeed ?? 96, (v) => `${Math.round(v)} px/s`, (v) => cb.liveMutator.mutateGrapple(ent.id, { reelSpeed: v }), (v) => commitGrapple({ reelSpeed: v })],
+      ]),
     );
-    grapSec.append(grapTitle, grapSliders);
     sections.push(grapSec);
   }
 
   // Section 4d: TriggerZone Sensor Inspector
   if (resolved.triggerZone) {
     const tz = resolved.triggerZone;
-    const tzSec = document.createElement('div');
-    tzSec.className = 'p7-section';
-    const tzTitle = document.createElement('h3');
-    tzTitle.className = 'p7-section-title';
-    tzTitle.textContent = 'TriggerZone 互動感測區';
-
+    const tzSec = makeSection('TriggerZone 互動感測區');
     const commitZone = (partial: Partial<typeof tz>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { triggerZone: partial } });
     };
     const tzGrid = document.createElement('div');
     tzGrid.className = 'p7-prop-grid';
-
-    const shapeWrap = document.createElement('div');
-    shapeWrap.className = 'p7-field';
-    const shapeLbl = document.createElement('label');
-    shapeLbl.textContent = '感測形狀 Shape';
-    const shapeSel = document.createElement('select');
-    shapeSel.className = 'p7-select p7-mono';
-    shapeSel.setAttribute('aria-label', '感測區形狀');
-    for (const sh of ['circle', 'rect'] as const) {
-      const o = document.createElement('option');
-      o.value = sh;
-      o.textContent = sh === 'circle' ? '圓形 Circle' : '矩形 Rect';
-      shapeSel.appendChild(o);
-    }
-    shapeSel.value = tz.shape ?? 'circle';
-    shapeSel.addEventListener('change', () => commitZone({ shape: shapeSel.value as 'circle' | 'rect' }));
-    shapeWrap.append(shapeLbl, shapeSel);
-
-    const makeTextField = (
-      label: string,
-      value: string,
-      placeholder: string,
-      onChange: (val: string) => void,
-    ): HTMLElement => {
-      const wrap = document.createElement('div');
-      wrap.className = 'p7-field';
-      const lbl = document.createElement('label');
-      lbl.textContent = label;
-      const inp = document.createElement('input');
-      inp.type = 'text';
-      inp.className = 'p7-input p7-mono';
-      if (placeholder) inp.placeholder = placeholder;
-      inp.value = value;
-      inp.addEventListener('change', () => onChange(inp.value.trim()));
-      wrap.append(lbl, inp);
-      return wrap;
-    };
-
     tzGrid.append(
-      shapeWrap,
+      makeSelectField(
+        '感測形狀 Shape',
+        '感測區形狀',
+        [
+          { value: 'circle', label: '圓形 Circle' },
+          { value: 'rect', label: '矩形 Rect' },
+        ],
+        tz.shape ?? 'circle',
+        (v) => commitZone({ shape: v as 'circle' | 'rect' }),
+      ),
       makeTextField('目標標籤 Filter Tag', tz.filterTag ?? '', '留空偵測全部', (v) => commitZone({ filterTag: v })),
       makeTextField('進入事件 Enter', tz.onEnterEvent ?? 'zone_enter', '', (v) => commitZone({ onEnterEvent: v })),
       makeTextField('離開事件 Exit', tz.onExitEvent ?? 'zone_exit', '', (v) => commitZone({ onExitEvent: v })),
     );
-
     const radSlider = createWorkbenchSliderRow(
       '感測半徑 Radius',
       12,
@@ -563,176 +518,63 @@ export function buildEntityInspectorSections(
     oneShotBtn.className = tz.oneShot ? 'p7-btn p7-btn-accent' : 'p7-btn';
     oneShotBtn.textContent = tz.oneShot ? '單次觸發 One-Shot：開啟' : '單次觸發 One-Shot：關閉';
     oneShotBtn.addEventListener('click', () => commitZone({ oneShot: !tz.oneShot }));
-
-    tzSec.append(tzTitle, tzGrid, radSlider, oneShotBtn);
+    tzSec.append(tzGrid, radSlider, oneShotBtn);
     sections.push(tzSec);
   }
 
   // Section 4e: VerletChain Rope/Cape Inspector
   if (resolved.verletChain) {
     const vc = resolved.verletChain;
-    const vcSec = document.createElement('div');
-    vcSec.className = 'p7-section';
-    const vcTitle = document.createElement('h3');
-    vcTitle.className = 'p7-section-title';
-    vcTitle.textContent = 'VerletChain 柔體鍊條';
-
+    const vcSec = makeSection('VerletChain 柔體鍊條');
     const commitVerlet = (partial: Partial<typeof vc>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { verletChain: partial } });
     };
-    const vcColRow = document.createElement('div');
-    vcColRow.className = 'p7-color-row';
-    const vcColLbl = document.createElement('span');
-    vcColLbl.textContent = '鍊條色 Color';
-    const vcColRight = document.createElement('div');
-    vcColRight.className = 'p7-toolbar-group';
-    const vcHex = document.createElement('span');
-    vcHex.className = 'p7-mono p7-slider-val';
-    vcHex.textContent = (vc.color ?? '#f59e0b').toUpperCase();
-    const vcColInp = document.createElement('input');
-    vcColInp.type = 'color';
-    vcColInp.className = 'p7-color-input';
-    vcColInp.value = vc.color ?? '#f59e0b';
-    vcColInp.setAttribute('aria-label', '鍊條顏色');
-    vcColInp.addEventListener('input', () => {
-      vcHex.textContent = vcColInp.value.toUpperCase();
-      cb.liveMutator.mutateVerlet(ent.id, { color: vcColInp.value });
-    });
-    vcColInp.addEventListener('change', () => commitVerlet({ color: vcColInp.value }));
-    vcColRight.append(vcHex, vcColInp);
-    vcColRow.append(vcColLbl, vcColRight);
-
-    const vcSliders = document.createElement('div');
-    vcSliders.className = 'p7-slider-group';
-    vcSliders.append(
-      createWorkbenchSliderRow(
-        '節點數量 Nodes',
-        2,
-        16,
-        1,
-        vc.nodeCount ?? 6,
-        (v) => `${Math.round(v)} 節`,
-        (v) => cb.liveMutator.mutateVerlet(ent.id, { nodeCount: v }),
-        (v) => commitVerlet({ nodeCount: v }),
-      ),
-      createWorkbenchSliderRow(
-        '節段長度 Segment',
-        4,
-        28,
-        1,
-        vc.segmentLength ?? 10,
-        (v) => `${Math.round(v)}px`,
-        (v) => cb.liveMutator.mutateVerlet(ent.id, { segmentLength: v }),
-        (v) => commitVerlet({ segmentLength: v }),
-      ),
-      createWorkbenchSliderRow(
-        '柔體重力 Gravity',
-        0,
-        1200,
-        20,
-        vc.gravity ?? 420,
-        (v) => `${Math.round(v)}`,
-        (v) => cb.liveMutator.mutateVerlet(ent.id, { gravity: v }),
-        (v) => commitVerlet({ gravity: v }),
-      ),
+    vcSec.append(
+      makeColorRow('鍊條色 Color', '鍊條顏色', vc.color ?? '#f59e0b', (color) => cb.liveMutator.mutateVerlet(ent.id, { color }), (color) => commitVerlet({ color })),
+      makeSliderGroup([
+        ['節點數量 Nodes', 2, 16, 1, vc.nodeCount ?? 6, (v) => `${Math.round(v)} 節`, (v) => cb.liveMutator.mutateVerlet(ent.id, { nodeCount: v }), (v) => commitVerlet({ nodeCount: v })],
+        ['節段長度 Segment', 4, 28, 1, vc.segmentLength ?? 10, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateVerlet(ent.id, { segmentLength: v }), (v) => commitVerlet({ segmentLength: v })],
+        ['柔體重力 Gravity', 0, 1200, 20, vc.gravity ?? 420, (v) => `${Math.round(v)}`, (v) => cb.liveMutator.mutateVerlet(ent.id, { gravity: v }), (v) => commitVerlet({ gravity: v })],
+      ]),
     );
-    vcSec.append(vcTitle, vcColRow, vcSliders);
     sections.push(vcSec);
   }
 
   // Section 4f: Spatial3D Elevation & Dimension Mask Inspector
   if (resolved.spatial3d) {
     const sp = resolved.spatial3d;
-    const spSec = document.createElement('div');
-    spSec.className = 'p7-section';
-    const spTitle = document.createElement('h3');
-    spTitle.className = 'p7-section-title';
-    spTitle.textContent = 'Spatial3D 立體高度與維度';
-
+    const spSec = makeSection('Spatial3D 立體高度與維度');
     const commitSpatial = (partial: Partial<typeof sp>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { spatial3d: partial } });
     };
-    const realmField = document.createElement('div');
-    realmField.className = 'p7-field';
-    const realmLbl = document.createElement('label');
-    realmLbl.textContent = '所屬維度位面 (Dimension Mask)';
-    const realmSel = document.createElement('select');
-    realmSel.className = 'p7-select p7-mono';
-    realmSel.setAttribute('aria-label', '實體所屬維度位面');
-    for (const opt of [
-      { v: 1, t: '表世界 [1]' },
-      { v: 2, t: '裡世界 [2]' },
-      { v: 3, t: '全維度共用 [3]' },
-    ]) {
-      const o = document.createElement('option');
-      o.value = String(opt.v);
-      o.textContent = opt.t;
-      realmSel.appendChild(o);
-    }
-    realmSel.value = String(sp.dimensionMask ?? 1);
-    realmSel.addEventListener('change', () => {
-      const mask = Number(realmSel.value) || 1;
-      cb.liveMutator.mutateSpatial3D(ent.id, { dimensionMask: mask });
-      commitSpatial({ dimensionMask: mask });
-    });
-    realmField.append(realmLbl, realmSel);
-
-    const spSliders = document.createElement('div');
-    spSliders.className = 'p7-slider-group';
-    spSliders.append(
-      createWorkbenchSliderRow(
-        '海拔高度 Z',
-        0,
-        120,
-        2,
-        sp.z ?? 0,
-        (v) => `${Math.round(v)}px`,
-        (v) => cb.liveMutator.mutateSpatial3D(ent.id, { z: v }),
-        (v) => commitSpatial({ z: v }),
+    spSec.append(
+      makeSelectField(
+        '所屬維度位面 (Dimension Mask)',
+        '實體所屬維度位面',
+        [
+          { value: '1', label: '表世界 [1]' },
+          { value: '2', label: '裡世界 [2]' },
+          { value: '3', label: '全維度共用 [3]' },
+        ],
+        String(sp.dimensionMask ?? 1),
+        (val) => {
+          const mask = Number(val) || 1;
+          cb.liveMutator.mutateSpatial3D(ent.id, { dimensionMask: mask });
+          commitSpatial({ dimensionMask: mask });
+        },
       ),
-      createWorkbenchSliderRow(
-        '垂直厚度 Height',
-        4,
-        64,
-        2,
-        sp.height ?? 16,
-        (v) => `${Math.round(v)}px`,
-        (v) => cb.liveMutator.mutateSpatial3D(ent.id, { height: v }),
-        (v) => commitSpatial({ height: v }),
-      ),
-      createWorkbenchSliderRow(
-        'Z 軸重力 GravityZ',
-        0,
-        1200,
-        20,
-        sp.gravityZ ?? 0,
-        (v) => (v <= 0 ? '懸浮 (0)' : `${Math.round(v)} px/s²`),
-        (v) => cb.liveMutator.mutateSpatial3D(ent.id, { gravityZ: v }),
-        (v) => commitSpatial({ gravityZ: v }),
-      ),
-      createWorkbenchSliderRow(
-        'Z 跳躍初速 JumpZ',
-        0,
-        420,
-        10,
-        sp.jumpZVelocity ?? 190,
-        (v) => `${Math.round(v)} px/s`,
-        (v) => cb.liveMutator.mutateSpatial3D(ent.id, { jumpZVelocity: v }),
-        (v) => commitSpatial({ jumpZVelocity: v }),
-      ),
+      makeSliderGroup([
+        ['海拔高度 Z', 0, 120, 2, sp.z ?? 0, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateSpatial3D(ent.id, { z: v }), (v) => commitSpatial({ z: v })],
+        ['垂直厚度 Height', 4, 64, 2, sp.height ?? 16, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateSpatial3D(ent.id, { height: v }), (v) => commitSpatial({ height: v })],
+        ['Z 軸重力 GravityZ', 0, 1200, 20, sp.gravityZ ?? 0, (v) => (v <= 0 ? '懸浮 (0)' : `${Math.round(v)} px/s²`), (v) => cb.liveMutator.mutateSpatial3D(ent.id, { gravityZ: v }), (v) => commitSpatial({ gravityZ: v })],
+        ['Z 跳躍初速 JumpZ', 0, 420, 10, sp.jumpZVelocity ?? 190, (v) => `${Math.round(v)} px/s`, (v) => cb.liveMutator.mutateSpatial3D(ent.id, { jumpZVelocity: v }), (v) => commitSpatial({ jumpZVelocity: v })],
+      ]),
     );
-    spSec.append(spTitle, realmField, spSliders);
     sections.push(spSec);
   }
 
   // Section 5: Sandboxed Script VM Rules
-  const scrSec = document.createElement('div');
-  scrSec.className = 'p7-section';
-  const scrTitle = document.createElement('h3');
-  scrTitle.className = 'p7-section-title';
-  scrTitle.textContent = '沙盒腳本虛擬機規則';
-  scrSec.appendChild(scrTitle);
-
+  const scrSec = makeSection('沙盒腳本虛擬機規則');
   const attachedScripts = resolved.scripts ?? [];
   if (attachedScripts.length === 0) {
     const note = document.createElement('p');

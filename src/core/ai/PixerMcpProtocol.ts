@@ -6,6 +6,9 @@ import {
 } from '../ecs/EcsStudioSession.ts';
 import {
   ECS_PROCEDURAL_SPRITE_PATTERNS,
+  getEntityPrefabId,
+  resolveEntityComponents,
+  type EcsComponentBundle,
   type EcsProjectV2,
 } from '../ecs/EcsProjectSchema.ts';
 import { CASTLE_TILE_REGISTRY } from '../ecs/EcsTilemapTypes.ts';
@@ -60,6 +63,138 @@ export interface McpToolDescriptor {
   inputSchema: Record<string, unknown>;
 }
 
+export interface EcsEntityBoxQuery {
+  roomId?: string;
+  minX?: number;
+  maxX?: number;
+  minY?: number;
+  maxY?: number;
+  minZ?: number;
+  maxZ?: number;
+  tag?: string;
+  prefabId?: string;
+  component?: string;
+}
+
+export interface EcsEntityBoxMatch {
+  id: string;
+  tag: string;
+  roomId?: string;
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+  h: number;
+  yaw: number;
+  prefabId?: string;
+  components: string[];
+}
+
+function listEntityBoxComponents(c: EcsComponentBundle): string[] {
+  const keys: string[] = ['transform'];
+  if (c.body2d) keys.push('body2d');
+  if (c.sprite) keys.push('sprite');
+  if (c.animatorId) keys.push('animator');
+  if (c.health) keys.push('health');
+  if (c.pathFollower) keys.push('pathFollower');
+  if (c.light) keys.push('light');
+  if (c.collider) keys.push('collider');
+  if (c.rhythmLane) keys.push('rhythmLane');
+  if (c.characterMotor2d) keys.push('characterMotor2d');
+  if (c.grappleAnchor) keys.push('grappleAnchor');
+  if (c.triggerZone) keys.push('triggerZone');
+  if (c.verletChain) keys.push('verletChain');
+  if (c.spatial3d) keys.push('spatial3d');
+  if (c.mesh3d) keys.push('mesh3d');
+  if (c.lifetime !== undefined) keys.push('lifetime');
+  if (c.scripts && c.scripts.length > 0) keys.push('scripts');
+  return keys;
+}
+
+function roundBoxCoord(v: number): number {
+  const r = Math.round(v * 100) / 100;
+  return r === 0 ? 0 : r;
+}
+
+/**
+ * Pure, DOM-free spatial AABB & metadata entity query shared by MCP (`query_entities_in_box`)
+ * and `AgentBridge` (`ecs.queryEntitiesInBox`).
+ */
+export function queryEntitiesInBox(
+  project: EcsProjectV2,
+  filter: EcsEntityBoxQuery = {},
+): EcsEntityBoxMatch[] {
+  const minX = typeof filter.minX === 'number' && Number.isFinite(filter.minX) ? filter.minX : undefined;
+  const maxX = typeof filter.maxX === 'number' && Number.isFinite(filter.maxX) ? filter.maxX : undefined;
+  const minY = typeof filter.minY === 'number' && Number.isFinite(filter.minY) ? filter.minY : undefined;
+  const maxY = typeof filter.maxY === 'number' && Number.isFinite(filter.maxY) ? filter.maxY : undefined;
+  const minZ = typeof filter.minZ === 'number' && Number.isFinite(filter.minZ) ? filter.minZ : undefined;
+  const maxZ = typeof filter.maxZ === 'number' && Number.isFinite(filter.maxZ) ? filter.maxZ : undefined;
+  const roomFilter = typeof filter.roomId === 'string' && filter.roomId.length > 0 ? filter.roomId : undefined;
+  const tagFilter = typeof filter.tag === 'string' && filter.tag.length > 0 ? filter.tag : undefined;
+  const prefabFilter = typeof filter.prefabId === 'string' && filter.prefabId.length > 0 ? filter.prefabId : undefined;
+  const compFilter = typeof filter.component === 'string' && filter.component.length > 0 ? filter.component : undefined;
+  const defaultRoomId = project.worldMap?.startRoomId;
+
+  const out: EcsEntityBoxMatch[] = [];
+  for (let i = 0; i < project.entities.length; i++) {
+    const ent = project.entities[i];
+    const entRoomId = ent.roomId ?? defaultRoomId;
+    if (roomFilter !== undefined && entRoomId !== roomFilter) continue;
+
+    const pid = getEntityPrefabId(ent);
+    if (prefabFilter !== undefined && pid !== prefabFilter) continue;
+
+    const c = resolveEntityComponents(ent, project.prefabs);
+    const tag = c.tag ?? 'prop';
+    if (tagFilter !== undefined && tag !== tagFilter) continue;
+
+    const x = c.transform.x;
+    const y = c.transform.y;
+    const w = c.transform.w ?? 16;
+    const h = c.transform.h ?? 16;
+    const z = c.spatial3d?.z ?? 0;
+    const yaw = c.spatial3d?.yaw ?? 0;
+
+    if (minX !== undefined) {
+      const pointQueryX = maxX !== undefined && maxX === minX;
+      if (w > 0 && !pointQueryX ? x + w <= minX : x + w < minX) continue;
+    }
+    if (maxX !== undefined && x > maxX) continue;
+
+    if (minY !== undefined) {
+      const pointQueryY = maxY !== undefined && maxY === minY;
+      if (h > 0 && !pointQueryY ? y + h <= minY : y + h < minY) continue;
+    }
+    if (maxY !== undefined && y > maxY) continue;
+
+    if (minZ !== undefined && z < minZ) continue;
+    if (maxZ !== undefined && z > maxZ) continue;
+
+    const components = listEntityBoxComponents(c);
+    if (compFilter !== undefined) {
+      const hasComp =
+        components.includes(compFilter) || (compFilter === 'animatorId' && Boolean(c.animatorId));
+      if (!hasComp) continue;
+    }
+
+    out.push({
+      id: ent.id,
+      tag,
+      ...(entRoomId ? { roomId: entRoomId } : {}),
+      x: roundBoxCoord(x),
+      y: roundBoxCoord(y),
+      z: roundBoxCoord(z),
+      w: roundBoxCoord(w),
+      h: roundBoxCoord(h),
+      yaw: roundBoxCoord(yaw),
+      ...(pid ? { prefabId: pid } : {}),
+      components,
+    });
+  }
+  return out;
+}
+
 export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
   {
     name: 'get_scene_semantics',
@@ -80,8 +215,28 @@ export const PIXER_MCP_TOOLS: readonly McpToolDescriptor[] = [
   {
     name: 'describe_editor_grammar',
     description:
-      'Self-describing schema for AI agents: returns all valid EcsStudioCommand grammars (including upsert_custom_sprite, upsert_animation, set_atmosphere, stamp_room_ascii, upsert_interaction_rule, upsert_ai_profile, upsert_tile_def), attachable components, procedural sprite patterns, custom sprites, and active built-in + custom tile IDs.',
+      'Self-describing schema for AI agents: returns all valid EcsStudioCommand grammars (including duplicate_entities, transform_entities, align_entities, set_room_voxel, fill_room_box_3d, set_camera_3d_pose, upsert_custom_sprite, upsert_animation, set_atmosphere, stamp_room_ascii, upsert_interaction_rule, upsert_ai_profile, upsert_tile_def), attachable components, procedural sprite patterns, voxel shapes, custom sprites, 3D models, and active built-in + custom tile IDs.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'query_entities_in_box',
+    description:
+      'Queries entities matching optional 3D AABB bounds (minX/maxX/minY/maxY/minZ/maxZ), roomId, tag, prefabId, or attached component key, returning compact spatial coordinates, yaw, and components.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        roomId: { type: 'string', description: 'Optional room ID filter.' },
+        minX: { type: 'number', description: 'Optional minimum world X bound.' },
+        maxX: { type: 'number', description: 'Optional maximum world X bound.' },
+        minY: { type: 'number', description: 'Optional minimum world Y bound.' },
+        maxY: { type: 'number', description: 'Optional maximum world Y bound.' },
+        minZ: { type: 'number', description: 'Optional minimum world Z elevation bound.' },
+        maxZ: { type: 'number', description: 'Optional maximum world Z elevation bound.' },
+        tag: { type: 'string', description: 'Optional entity tag filter.' },
+        prefabId: { type: 'string', description: 'Optional linked Prefab ID filter.' },
+        component: { type: 'string', description: 'Optional attached component key filter (e.g. light, spatial3d, mesh3d, health).' },
+      },
+    },
   },
   {
     name: 'get_room_ascii',
@@ -437,6 +592,23 @@ export class PixerMcpSession {
             ...(t.unlockGlobal ? { unlockGlobal: t.unlockGlobal } : {}),
           })),
         });
+      }
+
+      case 'query_entities_in_box': {
+        const filter: EcsEntityBoxQuery = {
+          ...(typeof args.roomId === 'string' ? { roomId: args.roomId } : {}),
+          ...(typeof args.minX === 'number' ? { minX: args.minX } : {}),
+          ...(typeof args.maxX === 'number' ? { maxX: args.maxX } : {}),
+          ...(typeof args.minY === 'number' ? { minY: args.minY } : {}),
+          ...(typeof args.maxY === 'number' ? { maxY: args.maxY } : {}),
+          ...(typeof args.minZ === 'number' ? { minZ: args.minZ } : {}),
+          ...(typeof args.maxZ === 'number' ? { maxZ: args.maxZ } : {}),
+          ...(typeof args.tag === 'string' ? { tag: args.tag } : {}),
+          ...(typeof args.prefabId === 'string' ? { prefabId: args.prefabId } : {}),
+          ...(typeof args.component === 'string' ? { component: args.component } : {}),
+        };
+        const entities = queryEntitiesInBox(this.session.getProject(), filter);
+        return makeToolSuccess({ count: entities.length, entities });
       }
 
       case 'get_room_ascii': {
