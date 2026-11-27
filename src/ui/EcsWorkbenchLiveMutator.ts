@@ -119,7 +119,11 @@ export class EcsWorkbenchLiveMutator {
     this.onPreviewDirty();
   }
 
-  public mutateTransform(entityId: string, patch: { x?: number; y?: number }): void {
+  public mutateTransform(
+    entityId: string,
+    patch: { x?: number; y?: number; scaleX?: number; scaleY?: number },
+    notify = true,
+  ): void {
     const core = this.runtime.world.core;
     const h = findEntityHandle(core, entityId);
     if (h !== null) {
@@ -133,19 +137,36 @@ export class EcsWorkbenchLiveMutator {
           tr.y = patch.y;
           tr.prevY = patch.y;
         }
+        if (patch.scaleX !== undefined && Number.isFinite(patch.scaleX)) {
+          tr.scaleX = Math.max(0.1, Math.min(8, patch.scaleX));
+        }
+        if (patch.scaleY !== undefined && Number.isFinite(patch.scaleY)) {
+          tr.scaleY = Math.max(0.1, Math.min(8, patch.scaleY));
+        }
       }
     }
-    this.onPreviewDirty();
+    if (notify) this.onPreviewDirty();
   }
 
   public mutateSpatial3D(
     entityId: string,
-    patch: { z?: number; height?: number; gravityZ?: number; jumpZVelocity?: number; dimensionMask?: number },
+    patch: {
+      z?: number;
+      height?: number;
+      gravityZ?: number;
+      jumpZVelocity?: number;
+      dimensionMask?: number;
+      yaw?: number;
+    },
+    notify = true,
   ): void {
     const core = this.runtime.world.core;
     const h = findEntityHandle(core, entityId);
     if (h !== null) {
-      const sp = core.getComponent(h, core.components.Spatial3D);
+      let sp = core.getComponent(h, core.components.Spatial3D);
+      if (!sp && (patch.z !== undefined || patch.yaw !== undefined)) {
+        sp = core.addComponent(h, core.components.Spatial3D);
+      }
       if (sp) {
         if (patch.z !== undefined) {
           sp.z = patch.z;
@@ -155,9 +176,37 @@ export class EcsWorkbenchLiveMutator {
         if (patch.gravityZ !== undefined) sp.gravityZ = patch.gravityZ;
         if (patch.jumpZVelocity !== undefined) sp.jumpZVelocity = patch.jumpZVelocity;
         if (patch.dimensionMask !== undefined) sp.dimensionMask = patch.dimensionMask;
+        if (patch.yaw !== undefined && Number.isFinite(patch.yaw)) {
+          const wrapped = ((patch.yaw % 360) + 360) % 360;
+          sp.yaw = wrapped === 360 ? 0 : wrapped;
+        }
       }
     }
-    this.onPreviewDirty();
+    if (notify) this.onPreviewDirty();
+  }
+
+  public mutateMesh3DScale(
+    entityId: string,
+    patch: { scaleX?: number; scaleY?: number; scaleZ?: number },
+    notify = true,
+  ): void {
+    const core = this.runtime.world.core;
+    const h = findEntityHandle(core, entityId);
+    if (h !== null) {
+      const m3 = core.getComponent(h, core.components.MeshRenderer3D);
+      if (m3) {
+        if (patch.scaleX !== undefined && Number.isFinite(patch.scaleX)) {
+          m3.scaleX = Math.max(0.1, Math.min(8, patch.scaleX));
+        }
+        if (patch.scaleY !== undefined && Number.isFinite(patch.scaleY)) {
+          m3.scaleY = Math.max(0.1, Math.min(8, patch.scaleY));
+        }
+        if (patch.scaleZ !== undefined && Number.isFinite(patch.scaleZ)) {
+          m3.scaleZ = Math.max(0.1, Math.min(8, patch.scaleZ));
+        }
+      }
+    }
+    if (notify) this.onPreviewDirty();
   }
 
   public mutatePrefabMaterial(
