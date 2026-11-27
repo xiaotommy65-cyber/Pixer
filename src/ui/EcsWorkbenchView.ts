@@ -1,4 +1,5 @@
 import type { TextureAtlas } from '../assets/TextureAtlas.ts';
+import type { PixelAtelierWorkbenchAgentApi } from '../core/ai/AgentBridge.ts';
 import { analyzeWorldMapReachability } from '../core/ai/EcsSpatialOracle.ts';
 import { EcsCartridgeRuntime } from '../core/ecs/EcsCartridgeRuntime.ts';
 import { syncProjectCustomSpritesToAtlas } from '../core/ecs/EcsCustomSpriteCompiler.ts';
@@ -17,6 +18,7 @@ import {
   renderMapDesignerPane,
   type MapDesignerState,
 } from './EcsMapDesignerPanel.ts';
+import { createWorkbenchAgentApi } from './EcsWorkbenchAgentAdapter.ts';
 import { renderAtlasPanel } from './EcsWorkbenchAtlasPanel.ts';
 import {
   BUILTIN_ECS_PROJECTS,
@@ -27,7 +29,10 @@ import {
   runWorkbenchSpatialDiagnostics,
   type WorkbenchDiagReport,
 } from './EcsWorkbenchCatalog.ts';
-import { buildEntityInspectorSections } from './EcsWorkbenchEntityInspector.ts';
+import {
+  buildEntityInspectorSections,
+  buildMultiSelectInspectorSection,
+} from './EcsWorkbenchEntityInspector.ts';
 import { renderHierarchyPane, renderPrefabsPane } from './EcsWorkbenchHierarchyPanels.ts';
 import { EcsWorkbenchLiveMutator } from './EcsWorkbenchLiveMutator.ts';
 import { EcsWorkbenchMapCanvasController } from './EcsWorkbenchMapCanvasController.ts';
@@ -84,9 +89,11 @@ export class EcsWorkbenchView {
   private modelAtelierModal: ModelAtelierModalView | null = null;
   private modelAtelierLoadPromise: Promise<ModelAtelierModalView | null> | null = null;
   private readonly worldRulesPanel: EcsWorldRulesInspectorPanel;
+  private readonly agentWorkbenchApi: PixelAtelierWorkbenchAgentApi;
 
   private leftTab: WorkbenchLeftTab = 'map';
   private centerMode: WorkbenchCenterMode = 'viewport';
+  private selectedEntityIds: string[] = [];
   private selectedEntityId: string | null = null;
   private selectedPrefabId: string | null = null;
   private filterQuery = '';
@@ -118,6 +125,7 @@ export class EcsWorkbenchView {
     );
     this.lastLoadedProjectId = initialProj.meta.id;
     this.selectedEntityId = initialProj.entities[0]?.id ?? null;
+    this.selectedEntityIds = this.selectedEntityId ? [this.selectedEntityId] : [];
     this.leftTab = initialProj.worldMap ? 'map' : 'hierarchy';
     const initialSimRunning = !initialProj.worldMap;
     this.runtime = new EcsCartridgeRuntime(initialProj);
@@ -236,6 +244,8 @@ export class EcsWorkbenchView {
         mapState: this.mapState,
         getMapCanvasCtrl: () => this.mapCanvasCtrl,
         getEventGraphView: () => this.eventGraphView,
+        getSelectedEntityIds: () => this.selectedEntityIds,
+        onSelectionChange: (ids) => this.setSelectedEntityIds(ids),
         isVisible: () => this.visible,
         isModalOpen: () =>
           Boolean(
@@ -268,15 +278,43 @@ export class EcsWorkbenchView {
       mapState: this.mapState,
       liveMutator: this.liveMutator,
       getSelectedEntityId: () => this.selectedEntityId,
+      getSelectedEntityIds: () => this.selectedEntityIds,
+      onSelectionChange: (ids) => this.setSelectedEntityIds(ids),
+      onToggleQuadSingleView: (view) => {
+        const proj = this.session.getProject();
+        if (proj.projection?.quadView) {
+          this.session.dispatch(
+            view === 'quad'
+              ? { type: 'set_camera_3d_pose', quadView: false }
+              : { type: 'set_camera_3d_pose', cameraProjection3d: view, quadView: false },
+          );
+        } else {
+          this.session.dispatch({ type: 'set_camera_3d_pose', quadView: true });
+        }
+      },
+      onSliceCutawaySync: () => {
+        this.previewRuntime.syncEditorSliceCutaway();
+        this.previewRuntime.renderPreviewNow();
+      },
       isEditingActive: () => this.previewRuntime.isMapEditingActive(),
       onToolStateMutated: () => this.renderLeftPanel(),
-      onEntityStamped: (entityId) => {
-        this.selectedEntityId = entityId;
-        this.renderRightPanel();
-      },
+      onEntityStamped: (entityId) => this.setSelectedEntityIds([entityId]),
       onPreviewDirty: () => {
         this.previewRuntime.markDirty();
       },
+    });
+
+    this.agentWorkbenchApi = createWorkbenchAgentApi({
+      session: this.session,
+      runtime: this.runtime,
+      mapState: this.mapState,
+      previewRuntime: this.previewRuntime,
+      mapCanvasCtrl: this.mapCanvasCtrl,
+      getPreviewCanvas: () => this.dom.previewCanvas,
+      isDestroyed: () => this.destroyed,
+      getSelectedEntityIds: () => this.selectedEntityIds,
+      setSelectedEntityIds: (ids) => this.setSelectedEntityIds(ids),
+      onRefreshUi: () => this.renderAllPanels(),
     });
 
     this.previewRuntime.bindKeyboardShortcuts(signal);
@@ -291,15 +329,19 @@ export class EcsWorkbenchView {
         const customGround = proj.worldMap?.tileDefs?.find((t) => t.layer === 'ground');
         if (customGround) {
           this.mapState.layer = 'ground';
+          this.mapState.editLayer = 'ground';
           this.mapState.selectedTileId = customGround.id;
           this.mapState.tool = 'brush';
           this.mapState.selectedStampPrefabId = null;
         }
+        const firstId = proj.entities[0]?.id ?? null;
+        this.selectedEntityIds = firstId ? [firstId] : [];
+      } else if (this.selectedEntityIds.length > 0) {
+        const validSet = new Set(proj.entities.map((e) => e.id));
+        this.selectedEntityIds = this.selectedEntityIds.filter((id) => validSet.has(id));
       }
+      this.selectedEntityId = this.selectedEntityIds[this.selectedEntityIds.length - 1] ?? null;
       this.previewRuntime.syncSimStateForProjectLoad(proj, sameProject);
-      if (this.selectedEntityId && !proj.entities.some((e) => e.id === this.selectedEntityId)) {
-        this.selectedEntityId = proj.entities[0]?.id ?? null;
-      }
       if (this.selectedPrefabId && !proj.prefabs[this.selectedPrefabId]) {
         this.selectedPrefabId = null;
       }
@@ -308,6 +350,28 @@ export class EcsWorkbenchView {
       this.renderAllPanels();
     });
 
+    this.renderAllPanels();
+  }
+
+  public getAgentWorkbenchApi(): PixelAtelierWorkbenchAgentApi {
+    return this.agentWorkbenchApi;
+  }
+
+  private setSelectedEntityIds(ids: readonly string[]): void {
+    const validSet = new Set(this.session.getProject().entities.map((e) => e.id));
+    const next: string[] = [];
+    const seen = new Set<string>();
+    for (const id of ids) {
+      if (validSet.has(id) && !seen.has(id)) {
+        seen.add(id);
+        next.push(id);
+      }
+    }
+    this.selectedEntityIds = next;
+    this.selectedEntityId = next.length > 0 ? next[next.length - 1] : null;
+    if (next.length > 0) this.selectedPrefabId = null;
+    this.previewRuntime.markDirty();
+    this.mapCanvasCtrl.renderOverlay();
     this.renderAllPanels();
   }
 
@@ -323,6 +387,7 @@ export class EcsWorkbenchView {
 
   public focusPublishedTile(layer: EcsMapLayerName, tileId: number): void {
     this.mapState.layer = layer;
+    this.mapState.editLayer = layer;
     this.mapState.selectedTileId = tileId;
     this.mapState.tool = 'brush';
     this.mapState.selectedStampPrefabId = null;
@@ -507,16 +572,14 @@ export class EcsWorkbenchView {
         this.mapState,
         {
           onStateChange: () => {
+            this.previewRuntime.syncEditorSliceCutaway();
             this.mapCanvasCtrl.syncInteractivity();
             this.renderLeftPanel();
             this.previewRuntime.markDirty();
-            this.mapCanvasCtrl.renderOverlay();
+            this.previewRuntime.renderPreviewNow();
           },
           onSwitchRoom: (roomId) => this.previewRuntime.switchActiveRoom(roomId),
-          onSelectEntity: (entityId) => {
-            this.selectedEntityId = entityId;
-            this.renderRightPanel();
-          },
+          onSelectEntity: (entityId) => this.setSelectedEntityIds([entityId]),
           onEnterEditMode: () => {
             if (this.previewRuntime.isSimRunning()) this.previewRuntime.setSimRunning(false);
           },
@@ -554,11 +617,7 @@ export class EcsWorkbenchView {
             this.filterQuery = q;
           },
           onInstantiatePrefab: (prefabId) => this.instantiatePrefabOntoViewport(prefabId),
-          onSelectEntity: (entityId) => {
-            this.selectedEntityId = entityId;
-            this.selectedPrefabId = null;
-            this.renderAllPanels();
-          },
+          onSelectEntity: (entityId) => this.setSelectedEntityIds([entityId]),
         },
       );
     } else if (this.leftTab === 'prefabs') {
@@ -623,9 +682,7 @@ export class EcsWorkbenchView {
       linkSourceEntity: true,
     });
     if (res.ok && res.createdPrefabId) {
-      this.selectedEntityId = ent.id;
-      this.selectedPrefabId = null;
-      this.renderAllPanels();
+      this.setSelectedEntityIds([ent.id]);
     }
   }
 
@@ -641,9 +698,7 @@ export class EcsWorkbenchView {
     const y = Math.round(84 + ((count * 34) % Math.max(48, maxY - 84)));
     const res = this.session.dispatch({ type: 'instantiate_prefab', prefabId, x, y });
     if (res.ok && res.createdEntityId) {
-      this.selectedEntityId = res.createdEntityId;
-      this.selectedPrefabId = null;
-      this.renderAllPanels();
+      this.setSelectedEntityIds([res.createdEntityId]);
     }
   }
 
@@ -657,11 +712,7 @@ export class EcsWorkbenchView {
         this.renderAllPanels();
       },
       onInstantiatePrefab: (prefabId) => this.instantiatePrefabOntoViewport(prefabId),
-      onSelectInstance: (entityId) => {
-        this.selectedEntityId = entityId;
-        this.selectedPrefabId = null;
-        this.renderAllPanels();
-      },
+      onSelectInstance: (entityId) => this.setSelectedEntityIds([entityId]),
       onMutateLiveMaterial: (prefabId, patch) =>
         this.liveMutator.mutatePrefabMaterial(this.session.getProject(), prefabId, patch),
       onMutateLiveLight: (prefabId, patch) =>
@@ -705,7 +756,15 @@ export class EcsWorkbenchView {
       return;
     }
 
-    this.dom.rightTitleEl.textContent = 'ECS 元件檢查器與沙盒腳本';
+    this.dom.rightTitleEl.textContent =
+      this.selectedEntityIds.length > 1 ? '多選批次操作與元件檢查器' : 'ECS 元件檢查器與沙盒腳本';
+    if (this.selectedEntityIds.length > 1) {
+      this.dom.rightContentEl.appendChild(
+        buildMultiSelectInspectorSection(proj, this.session, this.selectedEntityIds, (ids) =>
+          this.setSelectedEntityIds(ids),
+        ),
+      );
+    }
     const ent = proj.entities.find((e) => e.id === this.selectedEntityId);
     const sceneSections = this.buildSceneSections(proj);
     if (!ent) {
@@ -829,12 +888,9 @@ export class EcsWorkbenchView {
                   },
                 });
                 if (res.ok) {
-                  this.selectedEntityId = res.createdEntityId ?? entityId;
-                  this.selectedPrefabId = null;
                   this.modelAtelierModal?.close();
-                  this.previewRuntime.markDirty();
+                  this.setSelectedEntityIds([res.createdEntityId ?? entityId]);
                   this.previewRuntime.renderPreviewNow();
-                  this.renderRightPanel();
                   this.dom.statusLeftEl.textContent = `已於場景生成 3D 模型實體「${modelName}」`;
                 }
               },

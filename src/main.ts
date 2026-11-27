@@ -199,6 +199,7 @@ export function createApp(): AppHandle | null {
   window.__PIXEL_ATELIER_AGENT__ = createAgentBridge(runner, host.ai, {
     onLoadCartridge: (rawJson, opts) => host.loadCartridge(rawJson, opts),
     ecsSession,
+    workbenchApi: () => ecsWorkbench?.getAgentWorkbenchApi() ?? null,
     onCapturePreviewPng: () => {
       try {
         const c = platformMode === 'studio' && ecsWorkbench ? ecsWorkbench.getPreviewCanvas() : captureCanvasRef;

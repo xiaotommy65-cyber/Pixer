@@ -5,22 +5,23 @@ import {
   CASTLE_TILE_IDS,
   CASTLE_TILE_REGISTRY,
   createEmptyRoom,
-  type EcsMapLayerName,
   type EcsMapPortalDef,
   type EcsMapRoomDef,
   type EcsTileDef,
 } from '../core/ecs/EcsTilemapTypes.ts';
-import {
-  ECS_VOXEL_SHAPES,
-  MAX_VOXEL_STORIES,
-  type EcsVoxelShape,
-} from '../core/ecs/EcsVoxelVolume.ts';
 import {
   projectWorld3DToScreen,
   type ComputedCamera3D,
   type ScreenPoint3D,
 } from '../core/math/Perspective3DMath.ts';
 import { collectProjectSpriteOptions, createWorkbenchSliderRow } from './EcsWorkbenchCatalog.ts';
+import {
+  buildVoxelSliceControls,
+  buildWorkstation2ToolsBlock,
+  MAP_LAYER_BUTTONS,
+  MAP_TOOL_BUTTONS,
+  rotateVoxelShape,
+} from './EcsMapDesignerPanelTools.ts';
 import type {
   MapDesignerState,
   MapEditLayer,
@@ -29,6 +30,7 @@ import type {
   MapToolMode,
 } from './EcsMapDesignerPanelTypes.ts';
 
+export { rotateVoxelShape };
 export type {
   MapDesignerState,
   MapEditLayer,
@@ -63,21 +65,6 @@ export interface MapOverlayContext {
   fovMask?: Uint8Array | null;
   showEditingAffordances?: boolean;
 }
-
-const TOOL_BUTTONS: readonly { id: MapToolMode; label: string; title: string }[] = [
-  { id: 'brush', label: '筆刷', title: '拖曳繪製瓦片 (B)' },
-  { id: 'rect', label: '矩形', title: '拖曳框選填滿區域 (R)' },
-  { id: 'fill', label: '油漆桶', title: '連通區域填色 (G)' },
-  { id: 'erase', label: '橡皮擦', title: '清除目前圖層瓦片 (E)' },
-  { id: 'eyedropper', label: '吸管', title: '吸取游標下瓦片 (I)' },
-  { id: 'pan', label: '平移', title: '拖曳平移地圖鏡頭 (Space / 右鍵)' },
-];
-
-const LAYER_BUTTONS: readonly { id: EcsMapLayerName; label: string }[] = [
-  { id: 'ground', label: '地板' },
-  { id: 'wall', label: '城牆立面' },
-  { id: 'decor', label: '裝飾' },
-];
 
 export function createDefaultMapDesignerState(): MapDesignerState {
   return {
@@ -246,75 +233,11 @@ export function renderMapDesignerPane(
 
   roomSec.append(roomHead, roomSelect, roomMeta);
 
-  if (proj.projection?.mode === 'hd2d_3d') {
-    const storyH = activeRoom.storyHeight ?? activeRoom.wallExtrudeH ?? 24;
-    const zSliceWrap = document.createElement('div');
-    zSliceWrap.className = 'p7-slider-group';
-
-    const zHead = document.createElement('div');
-    zHead.className = 'p7-section-head';
-    const zLabel = document.createElement('span');
-    zLabel.className = 'p7-mono';
-    zLabel.textContent = `3D 樓層切片 Z = L${state.activeZLevel} (+${state.activeZLevel * storyH}px)`;
-    const clearZBtn = document.createElement('button');
-    clearZBtn.type = 'button';
-    clearZBtn.className = 'p7-btn p7-btn-xs';
-    clearZBtn.textContent = '清除此層';
-    clearZBtn.addEventListener('click', () => {
-      cb.onEnterEditMode();
-      session.dispatch({ type: 'clear_room_voxels', roomId: activeRoom.id, zLevel: state.activeZLevel });
-    });
-    zHead.append(zLabel, clearZBtn);
-
-    const zSlider = document.createElement('input');
-    zSlider.type = 'range';
-    zSlider.min = '0';
-    zSlider.max = String(MAX_VOXEL_STORIES - 1);
-    zSlider.step = '1';
-    zSlider.value = String(state.activeZLevel);
-    zSlider.className = 'p7-range';
-    zSlider.dataset.testid = 'z-slice-slider';
-    zSlider.setAttribute('aria-label', '3D 體素樓層切片 Z');
-    zSlider.addEventListener('input', () => {
-      state.activeZLevel = Math.max(0, Math.min(MAX_VOXEL_STORIES - 1, Math.round(Number(zSlider.value) || 0)));
-      zLabel.textContent = `3D 樓層切片 Z = L${state.activeZLevel} (+${state.activeZLevel * storyH}px)`;
-      cb.onStateChange();
-    });
-
-    const shapeSelect = document.createElement('select');
-    shapeSelect.className = 'p7-select p7-select-full p7-mono';
-    shapeSelect.dataset.testid = 'voxel-shape-select';
-    shapeSelect.setAttribute('aria-label', '3D 體素形狀');
-    const shapeLabels: Readonly<Record<EcsVoxelShape, string>> = {
-      cube: '方塊 cube',
-      half_slab: '半磚 half_slab',
-      slope_n: '斜坡北 slope_n',
-      slope_e: '斜坡東 slope_e',
-      slope_s: '斜坡南 slope_s',
-      slope_w: '斜坡西 slope_w',
-      stair_n: '階梯北 stair_n',
-      stair_e: '階梯東 stair_e',
-      stair_s: '階梯南 stair_s',
-      stair_w: '階梯西 stair_w',
-      arch: '拱門 arch',
-    };
-    for (const sh of ECS_VOXEL_SHAPES) {
-      const o = document.createElement('option');
-      o.value = sh;
-      o.textContent = shapeLabels[sh];
-      shapeSelect.appendChild(o);
-    }
-    shapeSelect.value = state.voxelShape;
-    shapeSelect.addEventListener('change', () => {
-      state.voxelShape = shapeSelect.value as EcsVoxelShape;
-      cb.onStateChange();
-    });
-
-    zSliceWrap.append(zHead, zSlider, shapeSelect);
-    roomSec.appendChild(zSliceWrap);
+  if (proj.projection?.mode === 'hd2d_3d' || state.editLayer === 'voxel3d') {
+    roomSec.appendChild(buildVoxelSliceControls(activeRoom, session, state, cb));
   }
 
-  // 2. Active Map Layer & Drawing Tools
+  // 2. Active Map Layer, Drawing Tools & Workstation 2.0 Spatial Controls
   const toolSec = document.createElement('div');
   toolSec.className = 'p7-section';
   const toolHead = document.createElement('div');
@@ -335,17 +258,23 @@ export function renderMapDesignerPane(
 
   const layerSeg = document.createElement('div');
   layerSeg.className = 'p7-segmented p7-segmented-full';
-  for (const lb of LAYER_BUTTONS) {
+  for (const lb of MAP_LAYER_BUTTONS) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = state.layer === lb.id ? 'p7-seg-btn is-active' : 'p7-seg-btn';
+    btn.className = state.editLayer === lb.id ? 'p7-seg-btn is-active' : 'p7-seg-btn';
     btn.textContent = lb.label;
+    btn.dataset.testid = `map-layer-${lb.id}`;
     btn.addEventListener('click', () => {
-      state.layer = lb.id;
-      const firstCustomForLayer = allMergedTiles.find((t) => t.layer === lb.id && customTileIdSet.has(t.id));
-      const firstForLayer = firstCustomForLayer ?? allMergedTiles.find((t) => t.layer === lb.id);
-      if (firstForLayer) {
-        state.selectedTileId = firstForLayer.id;
+      if (lb.id === 'voxel3d') {
+        state.editLayer = 'voxel3d';
+      } else {
+        state.layer = lb.id;
+        state.editLayer = lb.id;
+        const firstCustomForLayer = allMergedTiles.find((t) => t.layer === lb.id && customTileIdSet.has(t.id));
+        const firstForLayer = firstCustomForLayer ?? allMergedTiles.find((t) => t.layer === lb.id);
+        if (firstForLayer) {
+          state.selectedTileId = firstForLayer.id;
+        }
       }
       if (state.tool === 'stamp') {
         state.tool = 'brush';
@@ -359,12 +288,13 @@ export function renderMapDesignerPane(
 
   const toolGrid = document.createElement('div');
   toolGrid.className = 'p7-map-tools';
-  for (const tb of TOOL_BUTTONS) {
+  for (const tb of MAP_TOOL_BUTTONS) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = state.tool === tb.id ? 'p7-btn p7-btn-xs p7-btn-accent' : 'p7-btn p7-btn-xs';
     btn.textContent = tb.label;
     btn.title = tb.title;
+    btn.dataset.testid = `map-tool-${tb.id}`;
     btn.addEventListener('click', () => {
       state.tool = tb.id;
       if (tb.id !== 'stamp') state.selectedStampPrefabId = null;
@@ -373,7 +303,7 @@ export function renderMapDesignerPane(
     });
     toolGrid.appendChild(btn);
   }
-  toolSec.append(toolHead, layerSeg, toolGrid);
+  toolSec.append(toolHead, layerSeg, toolGrid, buildWorkstation2ToolsBlock(proj, state, cb));
 
   // 3. 32x32 Pixel Tile Palette (filtered by layer, custom project tiles sorted first)
   const palSec = document.createElement('div');
@@ -383,11 +313,13 @@ export function renderMapDesignerPane(
   const palTitle = document.createElement('h3');
   palTitle.className = 'p7-section-title';
   palTitle.textContent =
-    state.layer === 'ground'
-      ? '32px 地板瓦片盤'
-      : state.layer === 'wall'
-        ? '32px 立體城牆與閘門盤'
-        : '32px 裝飾圖層盤';
+    state.editLayer === 'voxel3d'
+      ? '32px 3D 體素材質盤'
+      : state.layer === 'ground'
+        ? '32px 地板瓦片盤'
+        : state.layer === 'wall'
+          ? '32px 立體城牆與閘門盤'
+          : '32px 裝飾圖層盤';
   palHead.appendChild(palTitle);
 
   if (cb.onOpenSpriteAtelierForTile) {
@@ -403,7 +335,7 @@ export function renderMapDesignerPane(
   const tileGrid = document.createElement('div');
   tileGrid.className = 'p7-tile-grid';
   const tilesForLayer = allMergedTiles
-    .filter((t) => t.layer === state.layer)
+    .filter((t) => (state.editLayer === 'voxel3d' ? t.layer !== 'decor' : t.layer === state.layer))
     .sort((a, b) => Number(customTileIdSet.has(b.id)) - Number(customTileIdSet.has(a.id)));
 
   for (const tdef of tilesForLayer) {
@@ -430,7 +362,13 @@ export function renderMapDesignerPane(
     card.addEventListener('click', () => {
       state.selectedTileId = tdef.id;
       state.selectedStampPrefabId = null;
-      if (state.tool === 'erase' || state.tool === 'stamp' || state.tool === 'pan' || state.tool === 'eyedropper') {
+      if (
+        state.tool === 'erase' ||
+        state.tool === 'stamp' ||
+        state.tool === 'pan' ||
+        state.tool === 'eyedropper' ||
+        state.tool === 'select'
+      ) {
         state.tool = 'brush';
       }
       cb.onEnterEditMode();
@@ -442,7 +380,7 @@ export function renderMapDesignerPane(
 
   // 3b. Selected Tile PBR Material & Top/Side Texture Inspector
   const selectedTile = mergedTiles.get(state.selectedTileId);
-  if (state.tool !== 'stamp' && selectedTile && selectedTile.layer === state.layer) {
+  if (state.tool !== 'stamp' && selectedTile && (state.editLayer === 'voxel3d' || selectedTile.layer === state.layer)) {
     const pbrCard = document.createElement('div');
     pbrCard.className = 'p7-rule-card';
     pbrCard.setAttribute('data-testid', 'tile-pbr-inspector');
