@@ -20,6 +20,20 @@ import {
   type EcsScriptDef,
 } from './EcsProjectSchema.ts';
 import {
+  executeAlignEntities,
+  executeDuplicateEntities,
+  executeTransformEntities,
+  failOutcome,
+  mergeOverridesIntoTarget,
+  okOutcome,
+  type AlignEntitiesInput,
+  type DuplicateEntitiesInput,
+  type EcsAlignEntitiesMode,
+  type EcsCommandHandlerOutcome,
+  type EcsCommandResult,
+  type TransformEntitiesInput,
+} from './EcsStudioBatchHandlers.ts';
+import {
   createEmptyRoom,
   fillRoomBox3D,
   fillRoomRect,
@@ -36,6 +50,16 @@ import {
   type EcsVoxelCellDef,
   type EcsVoxelShape,
 } from './EcsTilemapTypes.ts';
+
+export {
+  mergeOverridesIntoTarget,
+  type AlignEntitiesInput,
+  type DuplicateEntitiesInput,
+  type EcsAlignEntitiesMode,
+  type EcsCommandHandlerOutcome,
+  type EcsCommandResult,
+  type TransformEntitiesInput,
+};
 
 export const ECS_ATTACHABLE_COMPONENTS = [
   'body2d',
@@ -63,40 +87,6 @@ export interface EcsAsciiLegendEntry {
   prefabId?: string;
   entityName?: string;
   entityIdPrefix?: string;
-}
-
-export interface EcsCommandResult {
-  ok: boolean;
-  revision: number;
-  summary: string;
-  errors: string[];
-  createdEntityId?: string;
-  createdPrefabId?: string;
-  createdSpriteId?: string;
-  createdEntityIds?: string[];
-  createdPrefabIds?: string[];
-  createdSpriteIds?: string[];
-}
-
-export interface EcsCommandHandlerOutcome {
-  ok: boolean;
-  summary: string;
-  errors: string[];
-  skipValidationAndCommit?: boolean;
-  createdEntityId?: string;
-  createdPrefabId?: string;
-  createdSpriteId?: string;
-}
-
-function okOutcome(
-  summary: string,
-  extra?: Partial<Pick<EcsCommandHandlerOutcome, 'skipValidationAndCommit' | 'createdEntityId' | 'createdPrefabId' | 'createdSpriteId'>>,
-): EcsCommandHandlerOutcome {
-  return { ok: true, summary, errors: [], ...extra };
-}
-
-function failOutcome(summary: string, error: string): EcsCommandHandlerOutcome {
-  return { ok: false, summary, errors: [error] };
 }
 
 function findEntityOrFail(
@@ -132,55 +122,6 @@ const DEFAULT_HD2D_PROJECTION: EcsProjectionConfig = {
   inactiveDimAlpha: 0.16,
   allowDimensionShift: false,
 };
-
-export function mergeOverridesIntoTarget(
-  target: Record<string, unknown>,
-  patch: EcsComponentOverrides,
-  isSparse: boolean,
-): void {
-  const objectKeys = [
-    'transform',
-    'body2d',
-    'sprite',
-    'health',
-    'light',
-    'collider',
-    'pathFollower',
-    'rhythmLane',
-    'characterMotor2d',
-    'grappleAnchor',
-    'triggerZone',
-    'verletChain',
-    'spatial3d',
-    'mesh3d',
-  ] as const;
-
-  for (const key of objectKeys) {
-    const patchVal = patch[key];
-    if (!patchVal) continue;
-    const prevVal = target[key] as Record<string, unknown> | undefined;
-    if (isSparse) {
-      target[key] = { ...(prevVal ?? {}), ...patchVal };
-    } else {
-      let defaults: Record<string, unknown> = {};
-      if (key === 'transform') defaults = { x: 0, y: 0 };
-      else if (key === 'sprite') defaults = { sprite: 'solid' };
-      else if (key === 'health') defaults = { hp: 3, team: 1 };
-      else if (key === 'light') defaults = { radius: 48, color: '#ffd447' };
-      else if (key === 'collider') defaults = { radius: 12 };
-      else if (key === 'pathFollower') defaults = { pathId: '', speed: 48 };
-      else if (key === 'rhythmLane') defaults = { lane: 0, judgeX: 112 };
-      else if (key === 'mesh3d') defaults = { modelId: '' };
-      target[key] = { ...defaults, ...(prevVal ?? {}), ...patchVal };
-    }
-  }
-
-  if (patch.animatorId !== undefined) target.animatorId = patch.animatorId;
-  if (patch.lifetime !== undefined) target.lifetime = patch.lifetime;
-  if (patch.vars !== undefined) target.vars = [...patch.vars];
-  if (patch.scripts !== undefined) target.scripts = [...patch.scripts];
-  if (patch.tag !== undefined) target.tag = patch.tag;
-}
 
 export function handleSetViewport(
   next: EcsProjectV2,
@@ -905,4 +846,25 @@ export function handleSetCamera3DPose(
   return okOutcome(
     `更新 3D 相機姿態 (${next.projection.cameraProjection3d ?? 'perspective'} · yaw ${Math.round(next.projection.yawDeg ?? 0)}° · pitch ${Math.round(next.projection.pitchDeg ?? 42)}°)`,
   );
+}
+
+export function handleDuplicateEntities(
+  next: EcsProjectV2,
+  cmd: DuplicateEntitiesInput,
+): EcsCommandHandlerOutcome {
+  return executeDuplicateEntities(next, cmd);
+}
+
+export function handleTransformEntities(
+  next: EcsProjectV2,
+  cmd: TransformEntitiesInput,
+): EcsCommandHandlerOutcome {
+  return executeTransformEntities(next, cmd);
+}
+
+export function handleAlignEntities(
+  next: EcsProjectV2,
+  cmd: AlignEntitiesInput,
+): EcsCommandHandlerOutcome {
+  return executeAlignEntities(next, cmd);
 }

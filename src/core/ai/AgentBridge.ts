@@ -19,11 +19,13 @@ import {
   type EcsCommandResult,
   type EcsCustomSpriteSummary,
   type EcsHistoryItem,
+  type EcsModel3DSummary,
   type EcsPlaytestReport,
   type EcsPrefabSummary,
   type EcsStudioCommand,
 } from '../ecs/EcsStudioSession.ts';
 import { CASTLE_TILE_REGISTRY, type EcsTileDef } from '../ecs/EcsTilemapTypes.ts';
+import { ECS_VOXEL_SHAPES, type EcsVoxelShape } from '../ecs/EcsVoxelVolume.ts';
 import {
   getCartridgeJson,
   listCartridgeIds,
@@ -51,31 +53,102 @@ import {
 } from '../types/WorldTypes.ts';
 import { HybridAiDirector, type TacticalAdviceResult } from './AiProvider.ts';
 import {
+  critiqueCutsceneAesthetics,
+  type EcsCutsceneAestheticReport,
+} from './EcsCinematicOracle.ts';
+import {
   runScriptedPlaytest,
   type EcsKeypointPlaytestPlan,
   type EcsScriptedPlaytestReport,
 } from './EcsPlaytestVerifier.ts';
 import {
   analyzeActionReachability,
+  analyzeWorldMap3DReachability,
   analyzeWorldMapReachability,
   observeSceneSemantics,
   renderRoomAscii,
+  renderRoomSliceAscii,
   type EcsReachabilityReport,
   type EcsRoomAsciiReport,
+  type EcsRoomSliceAsciiReport,
   type EcsSemanticSceneReport,
+  type EcsWorldMap3DReachabilityReport,
   type EcsWorldMapReachabilityReport,
   type ReachabilityOptions,
 } from './EcsSpatialOracle.ts';
 import { serializeCartridgeObservation, type UnifiedGameObservation } from './ObservationSerializer.ts';
 import {
+  queryEntitiesInBox,
+  type EcsEntityBoxMatch,
+  type EcsEntityBoxQuery,
+} from './PixerMcpProtocol.ts';
+import {
+  buildAssetPackInstallCommands,
+  buildBuiltinStarterPack,
   buildInteropStudioCommands,
   detectJsonInteropFormat,
+  exportProjectAsAssetPack,
   parseLdtkProject,
   parseTiledMap,
+  validateAssetPackManifest,
+  type BuiltinStarterPackGenre,
   type DecodedPngImage,
+  type PixerAssetPackGenre,
+  type PixerAssetPackManifest,
 } from '../interop/index.ts';
 
+export type { EcsEntityBoxMatch, EcsEntityBoxQuery };
+
 export type PixerPlatformMode = 'studio' | 'arcade';
+export type WorkbenchSliceCutawayMode = 'all' | 'ghost_above' | 'solo_floor';
+export type WorkbenchGizmoMode = 'move' | 'rotate' | 'scale';
+export type WorkbenchEditLayer = 'ground' | 'wall' | 'decor' | 'voxel3d';
+export type WorkbenchToolId = 'select' | 'brush' | 'rect' | 'fill' | 'erase' | 'eyedropper' | 'stamp' | 'pan';
+export type WorkbenchCameraViewChoice =
+  | 'perspective'
+  | 'ortho_top'
+  | 'ortho_front'
+  | 'ortho_side'
+  | 'ortho_iso'
+  | 'quad';
+
+export interface PixelAtelierWorkbenchState {
+  activeRoomId: string;
+  selectedEntityIds: string[];
+  activeTool: WorkbenchToolId;
+  gizmoMode: WorkbenchGizmoMode;
+  editLayer: WorkbenchEditLayer;
+  activeZLevel: number;
+  sliceCutawayMode: WorkbenchSliceCutawayMode;
+  snapStep: number;
+  extrudeStories: number;
+  cameraX: number;
+  cameraY: number;
+  editorZoom: number;
+  simRunning: boolean;
+  viewMode: WorkbenchCameraViewChoice;
+  quadView: boolean;
+}
+
+export interface PixelAtelierWorkbenchAgentApi {
+  isMounted(): boolean;
+  getState(): PixelAtelierWorkbenchState | null;
+  setSelection(entityIds: string[]): string[];
+  focusSelection(): boolean;
+  focusEntity(entityId: string): boolean;
+  setActiveRoom(roomId: string): boolean;
+  setActiveZLevel(zLevel: number): number;
+  setSliceCutaway(mode: WorkbenchSliceCutawayMode): WorkbenchSliceCutawayMode;
+  setTool(tool: WorkbenchToolId): WorkbenchToolId;
+  setGizmoMode(mode: WorkbenchGizmoMode): WorkbenchGizmoMode;
+  setLayer(layer: WorkbenchEditLayer): WorkbenchEditLayer;
+  setSnapStep(stepPx: number): number;
+  setEditorCamera(x: number, y: number, zoom?: number): boolean;
+  resetEditorCamera(): boolean;
+  setViewMode(view: WorkbenchCameraViewChoice): boolean;
+  setSimRunning(running: boolean): boolean;
+  captureViewportPng(): string | null;
+}
 
 export interface PixelAtelierStudioAgentApi {
   dispatch(cmd: StudioCommand): StudioCommandResult;
@@ -105,17 +178,24 @@ export interface PixelAtelierEcsAgentApi {
   listAttachableComponents(): readonly EcsAttachableComponent[];
   listPrefabs(): EcsPrefabSummary[];
   listCustomSprites(): EcsCustomSpriteSummary[];
+  listModels3D(): EcsModel3DSummary[];
   describeGrammar(): {
     commands: readonly EcsCommandGrammarEntry[];
     attachableComponents: readonly EcsAttachableComponent[];
     proceduralSpritePatterns: readonly EcsProceduralSpritePattern[];
+    voxelShapes: readonly EcsVoxelShape[];
     customSprites: readonly EcsCustomSpriteSummary[];
+    models3d: readonly EcsModel3DSummary[];
     tiles: readonly EcsTileDef[];
   };
   getRoomAscii(roomId?: string): EcsRoomAsciiReport | null;
+  getRoomSliceAscii(roomId?: string, zLevel?: number): EcsRoomSliceAsciiReport | null;
   analyzeWorldMap(): EcsWorldMapReachabilityReport | null;
+  analyzeWorldMap3D(): EcsWorldMap3DReachabilityReport | null;
   observeSemantics(): EcsSemanticSceneReport | null;
+  queryEntitiesInBox(filter?: EcsEntityBoxQuery): EcsEntityBoxMatch[];
   analyzeReachability(opts?: ReachabilityOptions): EcsReachabilityReport | null;
+  critiqueCutscene(cutsceneId: string): EcsCutsceneAestheticReport | null;
   playtest(frames?: number): EcsPlaytestReport | null;
   runScriptedPlaytest(plan: EcsKeypointPlaytestPlan): EcsScriptedPlaytestReport | null;
   getEventGraph(scriptId: string): EcsEventGraphIR | null;
@@ -127,6 +207,17 @@ export interface PixelAtelierEcsAgentApi {
     replaceWorldMap?: boolean;
     wallExtrudeH?: number;
   }): EcsCommandResult & { reachability?: EcsWorldMapReachabilityReport; warnings?: string[] };
+  installAssetPack(
+    input: BuiltinStarterPackGenre | PixerAssetPackManifest,
+    opts?: { applyAtmosphere?: boolean },
+  ): EcsCommandResult & { packId?: string; sprites?: number; tileDefs?: number; prefabs?: number };
+  exportAssetPack(meta?: {
+    id?: string;
+    name?: string;
+    genre?: PixerAssetPackGenre;
+    author?: string;
+    description?: string;
+  }): PixerAssetPackManifest | null;
   mountToConsole(): { ok: boolean; id?: CartridgeId };
 }
 
@@ -142,6 +233,7 @@ export interface AgentBridgeOptions {
   onLoadCartridge?: (rawJson: unknown, opts?: LoadCartridgeOptions) => LoadCartridgeResult;
   studioSession?: StudioSession;
   ecsSession?: EcsStudioSession;
+  workbenchApi?: () => PixelAtelierWorkbenchAgentApi | null;
   onCapturePreviewPng?: () => string | null;
   onGetPlatformMode?: () => PixerPlatformMode;
   onSetPlatformMode?: (mode: PixerPlatformMode) => void;
@@ -156,6 +248,7 @@ export interface PixelAtelierAgentApi {
   readonly studio: PixelAtelierStudioAgentApi;
   readonly ecs: PixelAtelierEcsAgentApi;
   readonly platform: PixelAtelierPlatformApi;
+  readonly workbench: PixelAtelierWorkbenchAgentApi;
   listCartridges(): CartridgeId[];
   getActiveCartridge(): CartridgeId;
   switchCartridge(id: CartridgeId): void;
@@ -289,6 +382,7 @@ export function createAgentBridge(
     listAttachableComponents: () => ECS_ATTACHABLE_COMPONENTS,
     listPrefabs: () => ecsSession?.listPrefabs() ?? [],
     listCustomSprites: () => ecsSession?.listCustomSprites() ?? [],
+    listModels3D: () => ecsSession?.listModels3D() ?? [],
     describeGrammar: () => {
       const proj = ecsSession?.getProject();
       const merged = new Map(CASTLE_TILE_REGISTRY.map((t) => [t.id, t]));
@@ -299,14 +393,22 @@ export function createAgentBridge(
         commands: ECS_COMMAND_CATALOG,
         attachableComponents: ECS_ATTACHABLE_COMPONENTS,
         proceduralSpritePatterns: ECS_PROCEDURAL_SPRITE_PATTERNS,
+        voxelShapes: ECS_VOXEL_SHAPES,
         customSprites: ecsSession?.listCustomSprites() ?? [],
+        models3d: ecsSession?.listModels3D() ?? [],
         tiles: Array.from(merged.values()),
       };
     },
     getRoomAscii: (roomId) => (ecsSession ? renderRoomAscii(ecsSession.getProject(), roomId) : null),
+    getRoomSliceAscii: (roomId, zLevel) =>
+      ecsSession ? renderRoomSliceAscii(ecsSession.getProject(), roomId, zLevel) : null,
     analyzeWorldMap: () => (ecsSession ? analyzeWorldMapReachability(ecsSession.getProject()) : null),
+    analyzeWorldMap3D: () => (ecsSession ? analyzeWorldMap3DReachability(ecsSession.getProject()) : null),
     observeSemantics: () => (ecsSession ? observeSceneSemantics(ecsSession.getProject()) : null),
+    queryEntitiesInBox: (filter) => (ecsSession ? queryEntitiesInBox(ecsSession.getProject(), filter) : []),
     analyzeReachability: (opts) => (ecsSession ? analyzeActionReachability(ecsSession.getProject(), opts) : null),
+    critiqueCutscene: (cutsceneId) =>
+      ecsSession ? critiqueCutsceneAesthetics(ecsSession.getProject(), cutsceneId) : null,
     playtest: (frames) => ecsSession?.runHeadlessPlaytest(frames) ?? null,
     runScriptedPlaytest: (plan) => (ecsSession ? runScriptedPlaytest(ecsSession.getProject(), plan) : null),
     getEventGraph: (scriptId) => {
@@ -373,6 +475,58 @@ export function createAgentBridge(
         };
       }
     },
+    installAssetPack: (input, opts) => {
+      if (!ecsSession) {
+        return { ok: false, revision: 0, summary: 'ECS Session 未初始化', errors: ['No EcsStudioSession bound'] };
+      }
+      let pack: PixerAssetPackManifest;
+      if (typeof input === 'string') {
+        if (input !== 'horror' && input !== 'visual_novel' && input !== 'dungeon') {
+          return {
+            ok: false,
+            revision: ecsSession.getRevision(),
+            summary: '未知內建資產包類型',
+            errors: [`Unknown builtin starter pack genre: ${String(input)}`],
+          };
+        }
+        pack = buildBuiltinStarterPack(input);
+      } else {
+        const valid = validateAssetPackManifest(input);
+        if (!valid.ok) {
+          return {
+            ok: false,
+            revision: ecsSession.getRevision(),
+            summary: '資產包驗證失敗',
+            errors: valid.errors,
+          };
+        }
+        pack = valid.pack;
+      }
+      const cmds = buildAssetPackInstallCommands(pack, ecsSession.getProject(), {
+        applyAtmosphere: opts?.applyAtmosphere === true,
+      });
+      const res = ecsSession.dispatchBatch(cmds, `安裝資產包：${pack.name}`);
+      if (res.ok) {
+        bridgeOpts.onSyncProjectSprites?.(ecsSession.getProject());
+        return {
+          ...res,
+          packId: pack.id,
+          sprites: pack.sprites.length,
+          tileDefs: pack.tileDefs?.length ?? 0,
+          prefabs: pack.prefabs ? Object.keys(pack.prefabs).length : 0,
+        };
+      }
+      return res;
+    },
+    exportAssetPack: (meta) => {
+      if (!ecsSession) return null;
+      return exportProjectAsAssetPack(ecsSession.getProject(), {
+        id: meta?.id,
+        name: meta?.name,
+        genre: meta?.genre,
+        description: meta?.description ?? (meta?.author ? `Author: ${meta.author}` : undefined),
+      });
+    },
     mountToConsole: () => {
       if (!ecsSession) return { ok: false };
       const proj = ecsSession.getProject();
@@ -405,11 +559,35 @@ export function createAgentBridge(
     getAtlasStats: () => (bridgeOpts.onGetAtlasStats ? bridgeOpts.onGetAtlasStats() : null),
   };
 
+  const getWorkbench = (): PixelAtelierWorkbenchAgentApi | null =>
+    bridgeOpts.workbenchApi ? bridgeOpts.workbenchApi() : null;
+
+  const workbenchApi: PixelAtelierWorkbenchAgentApi = {
+    isMounted: () => getWorkbench()?.isMounted() ?? false,
+    getState: () => getWorkbench()?.getState() ?? null,
+    setSelection: (entityIds) => getWorkbench()?.setSelection(entityIds) ?? [],
+    focusSelection: () => getWorkbench()?.focusSelection() ?? false,
+    focusEntity: (entityId) => getWorkbench()?.focusEntity(entityId) ?? false,
+    setActiveRoom: (roomId) => getWorkbench()?.setActiveRoom(roomId) ?? false,
+    setActiveZLevel: (zLevel) => getWorkbench()?.setActiveZLevel(zLevel) ?? 0,
+    setSliceCutaway: (mode) => getWorkbench()?.setSliceCutaway(mode) ?? 'all',
+    setTool: (tool) => getWorkbench()?.setTool(tool) ?? 'select',
+    setGizmoMode: (mode) => getWorkbench()?.setGizmoMode(mode) ?? 'move',
+    setLayer: (layer) => getWorkbench()?.setLayer(layer) ?? 'ground',
+    setSnapStep: (stepPx) => getWorkbench()?.setSnapStep(stepPx) ?? 0,
+    setEditorCamera: (x, y, zoom) => getWorkbench()?.setEditorCamera(x, y, zoom) ?? false,
+    resetEditorCamera: () => getWorkbench()?.resetEditorCamera() ?? false,
+    setViewMode: (view) => getWorkbench()?.setViewMode(view) ?? false,
+    setSimRunning: (running) => getWorkbench()?.setSimRunning(running) ?? false,
+    captureViewportPng: () => getWorkbench()?.captureViewportPng() ?? null,
+  };
+
   return {
     backendMode: 'static-client-no-server',
     studio: studioApi,
     ecs: ecsApi,
     platform: platformApi,
+    workbench: workbenchApi,
     listCartridges: () => listCartridgeIds(),
     getActiveCartridge: () => runner.getCartridgeId(),
     switchCartridge: (id) => runner.switchCartridge(id),
