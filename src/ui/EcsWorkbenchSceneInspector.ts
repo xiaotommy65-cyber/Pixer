@@ -218,6 +218,32 @@ export function buildSceneAndHistorySections(
   const commitProj = (patch: Partial<NonNullable<EcsProjectV2['projection']>>) => {
     session.dispatch({ type: 'set_projection', patch });
   };
+  const poseResetRow = document.createElement('div');
+  poseResetRow.className = 'p7-prefab-actions';
+  poseResetRow.dataset.testid = 'camera-pose-reset-row';
+  const makePoseResetBtn = (
+    label: string,
+    testId: string,
+    pose: { yawDeg?: number; pitchDeg?: number; camCenterZ?: number },
+  ): HTMLButtonElement => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'p7-btn p7-btn-xs';
+    btn.dataset.testid = testId;
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      runtime.patchLiveProjection(pose);
+      onPreviewDirty();
+      session.dispatch({ type: 'set_camera_3d_pose', ...pose });
+    });
+    return btn;
+  };
+  poseResetRow.append(
+    makePoseResetBtn('Yaw 0°', 'cam-reset-yaw', { yawDeg: 0 }),
+    makePoseResetBtn(`Pitch ${DEFAULT_HD2D_3D_PITCH_DEG}°`, 'cam-reset-pitch', { pitchDeg: DEFAULT_HD2D_3D_PITCH_DEG }),
+    makePoseResetBtn('Z 0px', 'cam-reset-z', { camCenterZ: 0 }),
+  );
+
   const projSliders = document.createElement('div');
   projSliders.className = 'p7-slider-group';
   projSliders.append(
@@ -260,6 +286,7 @@ export function buildSceneAndHistorySections(
       },
       (v) => commitProj({ camCenterZ: v }),
     ),
+    poseResetRow,
     createWorkbenchSliderRow(
       '方向光陰影強度',
       0,

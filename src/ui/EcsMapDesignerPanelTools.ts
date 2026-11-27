@@ -42,7 +42,7 @@ export const MAP_TOOL_BUTTONS: readonly { id: MapToolMode; label: string; title:
 
 export const MAP_LAYER_BUTTONS: readonly { id: MapEditLayer; label: string }[] = [
   { id: 'ground', label: '地板' },
-  { id: 'wall', label: '城牆立面' },
+  { id: 'wall', label: '城牆' },
   { id: 'decor', label: '裝飾' },
   { id: 'voxel3d', label: '3D 體素' },
 ];
@@ -107,6 +107,8 @@ export function buildVoxelSliceControls(
 
   const zHead = document.createElement('div');
   zHead.className = 'p7-section-head';
+  zHead.style.flexWrap = 'wrap';
+  zHead.style.rowGap = '4px';
   const zLabel = document.createElement('span');
   zLabel.className = 'p7-mono';
   zLabel.textContent = `3D 樓層切片 Z = L${state.activeZLevel} (+${state.activeZLevel * storyH}px)`;
@@ -155,6 +157,25 @@ export function buildVoxelSliceControls(
   return zSliceWrap;
 }
 
+function createWrappingSegmented(): HTMLDivElement {
+  const seg = document.createElement('div');
+  seg.className = 'p7-segmented p7-segmented-full';
+  seg.style.flexWrap = 'wrap';
+  return seg;
+}
+
+function makeSegButton(label: string, active: boolean, testId: string, onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = active ? 'p7-seg-btn is-active' : 'p7-seg-btn';
+  btn.style.flex = '1 1 auto';
+  btn.style.minWidth = '0';
+  btn.textContent = label;
+  btn.dataset.testid = testId;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
 /**
  * Builds compact Workstation 2.0 controls: Gizmo Mode, Grid Snap, 3D Slice Cutaway, and
  * Multi-Story Voxel Quick Tools (Rotate Q + Rect Extrude Stories 1..8).
@@ -169,54 +190,39 @@ export function buildWorkstation2ToolsBlock(
   wrap.dataset.testid = 'workstation2-tools';
 
   // 1. Gizmo Mode (移動 / 旋轉 / 縮放)
-  const gizmoSeg = document.createElement('div');
-  gizmoSeg.className = 'p7-segmented p7-segmented-full';
+  const gizmoSeg = createWrappingSegmented();
   for (const gm of GIZMO_BUTTONS) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = state.gizmoMode === gm.id ? 'p7-seg-btn is-active' : 'p7-seg-btn';
-    btn.textContent = gm.label;
-    btn.dataset.testid = `gizmo-mode-${gm.id}`;
-    btn.addEventListener('click', () => {
-      state.gizmoMode = gm.id;
-      cb.onEnterEditMode();
-      cb.onStateChange();
-    });
-    gizmoSeg.appendChild(btn);
+    gizmoSeg.appendChild(
+      makeSegButton(gm.label, state.gizmoMode === gm.id, `gizmo-mode-${gm.id}`, () => {
+        state.gizmoMode = gm.id;
+        cb.onEnterEditMode();
+        cb.onStateChange();
+      }),
+    );
   }
   wrap.append(createControlLabel('Gizmo 模式'), gizmoSeg);
 
   // 2. Grid Snap (關閉 / 8px / 16px / 32px)
-  const snapSeg = document.createElement('div');
-  snapSeg.className = 'p7-segmented p7-segmented-full';
+  const snapSeg = createWrappingSegmented();
   for (const opt of SNAP_OPTIONS) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = state.snapStep === opt.step ? 'p7-seg-btn is-active' : 'p7-seg-btn';
-    btn.textContent = opt.label;
-    btn.dataset.testid = `snap-step-${opt.step}`;
-    btn.addEventListener('click', () => {
-      state.snapStep = opt.step;
-      cb.onStateChange();
-    });
-    snapSeg.appendChild(btn);
+    snapSeg.appendChild(
+      makeSegButton(opt.label, state.snapStep === opt.step, `snap-step-${opt.step}`, () => {
+        state.snapStep = opt.step;
+        cb.onStateChange();
+      }),
+    );
   }
   wrap.append(createControlLabel('磁吸對齊'), snapSeg);
 
   // 3. 3D Floor Slice Cutaway (全部顯示 / 上層虛化 / 僅當前樓層)
-  const cutawaySeg = document.createElement('div');
-  cutawaySeg.className = 'p7-segmented p7-segmented-full';
+  const cutawaySeg = createWrappingSegmented();
   for (const cm of SLICE_CUTAWAY_BUTTONS) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = state.sliceCutawayMode === cm.id ? 'p7-seg-btn is-active' : 'p7-seg-btn';
-    btn.textContent = cm.label;
-    btn.dataset.testid = `slice-cutaway-${cm.id}`;
-    btn.addEventListener('click', () => {
-      state.sliceCutawayMode = cm.id;
-      cb.onStateChange();
-    });
-    cutawaySeg.appendChild(btn);
+    cutawaySeg.appendChild(
+      makeSegButton(cm.label, state.sliceCutawayMode === cm.id, `slice-cutaway-${cm.id}`, () => {
+        state.sliceCutawayMode = cm.id;
+        cb.onStateChange();
+      }),
+    );
   }
   wrap.append(createControlLabel('3D 樓層剖面檢視'), cutawaySeg);
 
@@ -224,6 +230,8 @@ export function buildWorkstation2ToolsBlock(
   if (proj.projection?.mode === 'hd2d_3d' || state.editLayer === 'voxel3d') {
     const voxelRow = document.createElement('div');
     voxelRow.className = 'p7-section-head';
+    voxelRow.style.flexWrap = 'wrap';
+    voxelRow.style.gap = '6px';
     voxelRow.dataset.testid = 'voxel-quick-tools';
 
     const rotBtn = document.createElement('button');
@@ -240,6 +248,8 @@ export function buildWorkstation2ToolsBlock(
 
     const stepper = document.createElement('div');
     stepper.className = 'p7-toolbar-group';
+    stepper.style.flexWrap = 'wrap';
+    stepper.style.gap = '4px';
 
     const stepLbl = document.createElement('span');
     stepLbl.className = 'p7-meta-line';
@@ -259,7 +269,7 @@ export function buildWorkstation2ToolsBlock(
 
     const valEl = document.createElement('span');
     valEl.className = 'p7-mono p7-slider-val';
-    valEl.textContent = `${state.extrudeStories} 層`;
+    valEl.textContent = `${state.extrudeStories}層`;
     valEl.dataset.testid = 'voxel-extrude-val';
 
     const incBtn = document.createElement('button');
