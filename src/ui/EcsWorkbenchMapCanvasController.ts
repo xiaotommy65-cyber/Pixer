@@ -14,6 +14,7 @@ import {
   type ComputedCamera3D,
   type ScreenPoint3D,
 } from '../core/math/Perspective3DMath.ts';
+import type { WorkbenchCameraViewChoice } from '../core/ai/AgentBridge.ts';
 import { renderMapOverlay, type MapDesignerState } from './EcsMapDesignerPanel.ts';
 import type { EcsWorkbenchLiveMutator } from './EcsWorkbenchLiveMutator.ts';
 
@@ -25,6 +26,10 @@ export interface MapCanvasControllerDeps {
   mapState: MapDesignerState;
   liveMutator?: EcsWorkbenchLiveMutator;
   getSelectedEntityId?: () => string | null;
+  getSelectedEntityIds?: () => readonly string[];
+  onSelectionChange?: (entityIds: string[]) => void;
+  onToggleQuadSingleView?: (view: WorkbenchCameraViewChoice) => void;
+  onSliceCutawaySync?: () => void;
   isEditingActive: () => boolean;
   onToolStateMutated: () => void;
   onEntityStamped: (entityId: string) => void;

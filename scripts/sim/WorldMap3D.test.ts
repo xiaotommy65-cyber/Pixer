@@ -437,13 +437,13 @@ test('SceneTrue3DPass renders MeshRenderer3D models, Voxels3D, quadView proxies,
   assert.equal(hasRectInFrame(f90, rectSide), true, 'yaw=90 should switch camera_4way billboard to side sprite');
 });
 
-test('All 6 new 3D EcsStudioCommands, Undo/Redo, 48/48 catalog parity & MCP 3D tools work end-to-end', () => {
+test('All 6 new 3D EcsStudioCommands, Undo/Redo, 51/51 catalog parity & MCP 3D tools work end-to-end', () => {
   const sessionSrc = readFileSync(resolve(process.cwd(), 'src/core/ecs/EcsStudioSession.ts'), 'utf8');
   const cmdBlock = sessionSrc.match(/export\s+type\s+EcsStudioCommand\s*=([\s\S]*?);\s*\r?\n\s*export\s+const\s+ECS_COMMAND_CATALOG/);
   assert.ok(cmdBlock);
   const declaredTypes = [...cmdBlock[1].matchAll(/type:\s*'([a-z0-9_]+)'/g)].map((m) => m[1]);
-  assert.equal(declaredTypes.length, 48, `Expected 48 EcsStudioCommand types, got ${declaredTypes.length}`);
-  assert.equal(ECS_COMMAND_CATALOG.length, 48, `Expected 48 ECS_COMMAND_CATALOG entries, got ${ECS_COMMAND_CATALOG.length}`);
+  assert.equal(declaredTypes.length, 51, `Expected 51 EcsStudioCommand types, got ${declaredTypes.length}`);
+  assert.equal(ECS_COMMAND_CATALOG.length, 51, `Expected 51 ECS_COMMAND_CATALOG entries, got ${ECS_COMMAND_CATALOG.length}`);
 
   const mcp = new PixerMcpSession(makeVoxelRoomProject());
 

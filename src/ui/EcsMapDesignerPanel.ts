@@ -21,20 +21,21 @@ import {
   type ScreenPoint3D,
 } from '../core/math/Perspective3DMath.ts';
 import { collectProjectSpriteOptions, createWorkbenchSliderRow } from './EcsWorkbenchCatalog.ts';
+import type {
+  MapDesignerState,
+  MapEditLayer,
+  MapGizmoMode,
+  MapSliceCutawayMode,
+  MapToolMode,
+} from './EcsMapDesignerPanelTypes.ts';
 
-export type MapToolMode = 'brush' | 'rect' | 'fill' | 'erase' | 'eyedropper' | 'stamp' | 'pan';
-
-export interface MapDesignerState {
-  tool: MapToolMode;
-  layer: EcsMapLayerName;
-  selectedTileId: number;
-  selectedStampPrefabId: string | null;
-  activeZLevel: number;
-  voxelShape: EcsVoxelShape;
-  showGrid: boolean;
-  showPortals: boolean;
-  showFovPreview: boolean;
-}
+export type {
+  MapDesignerState,
+  MapEditLayer,
+  MapGizmoMode,
+  MapSliceCutawayMode,
+  MapToolMode,
+};
 
 export interface MapDesignerPanelCallbacks {
   onStateChange: () => void;
@@ -82,6 +83,12 @@ export function createDefaultMapDesignerState(): MapDesignerState {
   return {
     tool: 'brush',
     layer: 'ground',
+    editLayer: 'ground',
+    gizmoMode: 'move',
+    snapStep: 16,
+    sliceCutawayMode: 'all',
+    extrudeStories: 1,
+    spacePanHeld: false,
     selectedTileId: CASTLE_TILE_IDS.CARPET_V,
     selectedStampPrefabId: null,
     activeZLevel: 0,
