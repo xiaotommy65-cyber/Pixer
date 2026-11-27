@@ -1,7 +1,13 @@
 import './styles/atelier.css';
 import './styles/switch.css';
+import './styles/switch-joycon.css';
+import './styles/switch-overlays.css';
 import './styles/lobby.css';
+import './styles/lobby-drawers.css';
+import './styles/lobby-desk.css';
 import './styles/studio7.css';
+import './styles/studio7-panels.css';
+import './styles/studio7-spatial3d.css';
 
 import {
   applyPerformanceProfileAttr,
