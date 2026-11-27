@@ -1,4 +1,4 @@
-# Pixer — 工程交接書（Engineering Handoff · Wave 7A Workstation 2.0 & Agent Co-Editing Complete）
+# Pixer — 工程交接書（Engineering Handoff · Wave 7B Workstation 2.0 Complete）
 
 > **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit -- --strict`**（~1s 唯讀體檢），即可零盲點掌握全倉狀態。
 
@@ -6,8 +6,16 @@
 
 ## 1. 目前 Git 分支與交付進度
 
-- **`main` 基線**：PR #1 → #16（`0f0db25`，Wave 1–6 Complete：Phase 0–7、Pixel Forge、多管線烘焙、真 Z-Up 3D 空間引擎、多層高塔探索／自動剖面，以及全倉 17 支 `ARCH-GOD-FILE` 清零 `warn=0`）。
-- **最新推進分支：`feat/workstation-2-wave7a`**（基於 `main@0f0db25`，以兩階段 Swarm 並行完成 **Workstation 2.0 Wave 7A ＋ Human/Agent 協作編輯**，通過全門檻與實機瀏覽器驗收後合入 `main`）：
+- **`main` 基線**：PR #1 → #17（`7e462b4`，Wave 1–7A Complete：Phase 0–7、Pixel Forge、真 Z-Up 3D 空間引擎、多層高塔探索、17 支 `ARCH-GOD-FILE` 清零 `warn=0`，以及 Workstation 2.0 Wave 7A 核心操控與 `AgentBridge.workbench` 協作編輯）。
+- **最新推進分支：`feat/workstation-2-wave7b`**（基於 `main@7e462b4`，以 3 軌 Swarm 並行完成 **Workstation 2.0 Wave 7B 版面拋光、彈窗 Portal 修復與 Wave 7A 實測 P0–P2 全修正**，通過全門檻與實機瀏覽器驗收後合入 `main`）：
+  - **彈窗堆疊層級根治、浮動視口條、可調寬收合側欄與快捷指令**：
+    - 新增 [`EcsWorkbenchPreferences.ts`](../src/ui/EcsWorkbenchPreferences.ts)（安全 `localStorage` 持久化左右欄寬、收合狀態、吸附步進、樓層剖面模式）、[`EcsWorkbenchViewportHud.ts`](../src/ui/EcsWorkbenchViewportHud.ts)（畫布內浮動快捷條：工具／圖層／Gizmo／磁吸／Z 樓層與剖面／即時縮放 `%`／`⌘K`／`?`）與 [`EcsWorkbenchOverlays.ts`](../src/ui/EcsWorkbenchOverlays.ts)（`?` 快捷鍵速查表 ＋ `Ctrl+K` 模糊搜尋房間／實體／Prefab／專案／常用指令面板）。
+    - 於 [`EcsWorkbenchView.ts`](../src/ui/EcsWorkbenchView.ts)、[`EcsWorkbenchShellBuilder.ts`](../src/ui/EcsWorkbenchShellBuilder.ts) 與 [`studio7.css`](../src/styles/studio7.css) / [`studio7-panels.css`](../src/styles/studio7-panels.css) / [`studio7-spatial3d.css`](../src/styles/studio7-spatial3d.css)：建立 `document.body` `.p7-modal-portal`（`z-index: 280`）徹底解決 `.p7-topbar`（`z-index: 120`）遮擋 `ModelAtelier`／`ExternalImport`／`CloudPublish` 標題列問題；補上拖曳調寬 `.p7-pane-resizer` 與 `Tab`／按鈕收合側欄；全面修正 `1280×800` 頂部工具列與左側標頭／按鈕水平裁切；於 `Ctrl+Z` 撤銷選中實體時自動回退至有效實體；於 [`EcsWorkbenchPreviewRuntime.ts`](../src/ui/EcsWorkbenchPreviewRuntime.ts) 記憶並還原進出試玩 (`P`) 的 `savedEditZoom`。
+  - **檢查器 P0 數值對齊與操作防護**：
+    - 於 [`EcsWorkbenchEntityInspector.ts`](../src/ui/EcsWorkbenchEntityInspector.ts) 補上 `縮放 X/Y (scaleX/scaleY)`、`Mesh3D 縮放 (SX/SY/SZ)` 與 `Spatial3D 水平旋轉 Yaw (°)` ＋ `0°` 歸零鈕；於 [`EcsWorkbenchSceneInspector.ts`](../src/ui/EcsWorkbenchSceneInspector.ts) 新增 `Yaw 0°` / `Pitch 42°` / `Z 0px` 一鍵歸零鈕；於 [`EcsMapDesignerPanelTools.ts`](../src/ui/EcsMapDesignerPanelTools.ts) 全面換行避免 `220px` 側欄裁切 `+` 按鈕；於 [`EcsWorkbenchMapCanvasController.ts`](../src/ui/EcsWorkbenchMapCanvasController.ts) 加上輸入框失焦防誤繪守衛。
+  - **跨工坊滑鼠手勢對齊**：
+    - 升級 [`ModelAtelierViewport.ts`](../src/ui/ModelAtelierViewport.ts)（右鍵／`Alt+左鍵` 環繞、中鍵／`Space+左鍵` 平移、滾輪縮放、四視圖雙擊切單視圖、`getCameraState()`）與 [`EventGraphEditorView.ts`](../src/ui/EventGraphEditorView.ts)（右鍵／中鍵／`Space+左鍵` 平移、滾輪縮放 `0.5x–1.8x`、雙擊／`0`/`Home` 重置）。
+- **最近主線里程碑：`feat/workstation-2-wave7a`（PR #17，`7e462b4`）**：
   - **人機共用交易指令 & MCP / `AgentBridge` 全對齊（`51/51` `ECS_COMMAND_CATALOG`）**：
     - 於 [`EcsStudioSession.ts`](../src/core/ecs/EcsStudioSession.ts)、[`EcsStudioCommandHandlers.ts`](../src/core/ecs/EcsStudioCommandHandlers.ts) 與新葉模組 [`EcsStudioBatchHandlers.ts`](../src/core/ecs/EcsStudioBatchHandlers.ts) 新增 3 組單步原子 Undo 批次指令：`duplicate_entities`（多實體複製含偏移）、`transform_entities`（群組移動/Yaw 旋轉/縮放＋格線/樓層吸附）與 `align_entities`（X/Y/Z 對齊、水平/垂直等距、以及依 `RoomVoxelVolume.sampleSupportZAt` 精準貼齊多層樓面 `snap_floor`）。
     - 於 [`PixerMcpProtocol.ts`](../src/core/ai/PixerMcpProtocol.ts) 新增 `query_entities_in_box` 空間過濾工具；於 [`AgentBridge.ts`](../src/core/ai/AgentBridge.ts) 補齊 Wave 5/7 `ecs.*` 方法（`getRoomSliceAscii`、`analyzeWorldMap3D`、`listModels3D`、`critiqueCutscene`、`installAssetPack`、`exportAssetPack`、`queryEntitiesInBox`），並新增 17 方法的即時協作介面 **`window.__PIXEL_ATELIER_AGENT__.workbench`**（由 [`EcsWorkbenchAgentAdapter.ts`](../src/ui/EcsWorkbenchAgentAdapter.ts) 與 [`src/main.ts`](../src/main.ts) 接通，支援讀寫多選、房間/Z 樓層/剖面/四視圖/工具/Gizmo 控制、聚焦鏡頭與即時 GPU 視口 PNG 擷取）。
@@ -70,10 +78,10 @@
 - **驗證門檻與最新基線**：
   - `bun run audit -- --strict`：**PASS**（exit 0，**`critical=0`, `warn=0`**，`godFilesCount=26`、`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=6`，**`ecsCommandTypes=51/51`**，`agentsLines=43/120`）
   - `bun run lint`（`tsc --noEmit`）：**0 errors**
-  - `bun run sim`：**`[SIM ALL PASSED]`**（`EcsCartridgeRuntime=0.89ms / heapDelta=-13.0KB`、`ChunkedRuntime=2.55ms / heapDelta=-3.9KB`、`PA-14 extrudedWalls=100, shadows=18`）
-  - `npm run test`：**97 pass / 0 fail**
-  - `bun run build && bun run clean`：**PASS**（254 modules，`852ms`，**0 chunk warnings**：`cartridges 460.95 kB`、`model-atelier 256.05 kB`、`ecs-workbench 246.36 kB`、`index 226.13 kB`、`external-import 115.45 kB`、`sprite-atelier 72.94 kB`、`core-ecs-interop 68.47 kB`、`cartridges-hd2d 53.15 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`、`cloud-publish 14.82 kB`；`dist/` 已清理）
-  - **本機瀏覽器實機驗收（`1280×800`）**：`http://localhost:3000/` 實測 Map Designer 4 圖層（`3D 體素` + `上層虛化`）、Gizmo 三模式與吸附控制、滾輪縮放、四視圖分割與雙擊 `TOP [XY]` 標籤切換單視圖、`階層` `Shift+Click` 多選＋右側「已多選 2 個實體」批次對齊／`複製群組 (Ctrl+D)`（`18 → 20` 實體）／`復原`（`20 → 18`），全程 **0 console / network errors**。
+  - `bun run sim`：**`[SIM ALL PASSED]`**（`EcsCartridgeRuntime=0.92ms / heapDelta=-4.0KB`、`ChunkedRuntime=2.48ms / heapDelta=-3.8KB`、`PA-14 extrudedWalls=100, shadows=18`）
+  - `npm run test`：**98 pass / 0 fail**
+  - `bun run build && bun run clean`：**PASS**（257 modules，`1.11s`，**0 chunk warnings**：`cartridges 460.95 kB`、`ecs-workbench 271.49 kB`、`model-atelier 257.92 kB`、`index 226.13 kB`、`external-import 115.45 kB`、`sprite-atelier 72.94 kB`、`core-ecs-interop 68.47 kB`、`cartridges-hd2d 53.15 kB`、`event-graph 34.13 kB`、`legacy-v1-sim 24.38 kB`、`cloud-publish 14.82 kB`；`dist/` 已清理）
+  - **本機瀏覽器實機驗收（`1280×800`）**：`http://localhost:3000/` 實測兩列自動換行工具列（無水平捲軸）、左側標頭零裁切、`拉高層數 +`（`1→2 層`）、浮動視口條（`viewport-hud`）、`3D 建模` 彈窗完全位於 `.p7-topbar` 上方且右鍵環繞＋滾輪縮放流暢、`?` 快捷鍵表、`Ctrl+K` 模糊指令面板、`Tab`／按鈕收合側欄（`483px → 1015px`）、實體檢查器 `scaleX/Y` / `Yaw 0°` / `3D 縮放`、按 `P` 進出試玩精準還原 `125%` 編輯縮放、以及 `腳本事件圖` 滾輪縮放（`100%→121%`）與平移，全程 **0 console / network errors**。
 - **不可動搖鐵則**：
   1. 任何開工與收尾先跑 `bun run audit -- --strict`；新修結構問題必補規則與端到端持久性測試。
   2. 不得將測試檔放回 `src/`，不得在純核心使用 DOM 或遊戲專屬硬編碼，不得產生 `package-lock.json`，不得直推 `main`。
@@ -83,8 +91,7 @@
 
 ## 3. 下一階段推進路線
 
-1. **Wave 7B｜Workstation 2.0 版面、彈窗層級修正、指令面板與跨工坊手勢對齊**：
-   - 將全螢幕彈窗（`ModelAtelierModalView`、`ExternalImportModalView`、`CloudPublishModalView`）脫離 `.p7-workbench`（`z-index: 95`）堆疊上下文，消除 `.p7-topbar`（`z-index: 120`）遮擋標題列問題；
-   - 新增視口浮動快捷條（Floating Viewport HUD）、可收合 (`Tab`) 與可拖曳調寬之左右面板（`localStorage` 持久化欄寬／吸附／剖面模式）、`?` 快捷鍵速查與 `Ctrl+K` 指令跳轉面板，並對齊 `ModelAtelierViewport` 與 `EventGraphEditorView` 滑鼠導覽手勢。
-2. **Phase 8｜正式環境雲端佈建 / BYOK AI 生圖接橋**：
+1. **Phase 8｜正式環境雲端佈建 / BYOK AI 生圖接橋**：
    - 依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase PostgreSQL migration、Cloudflare R2 (`pixer-assets`) 與 `workers/api`，設定 `VITE_CLOUD_API_BASE` / `VITE_CDN_BASE_URL` 並實測工作站「雲端發佈」與 `?play=<slug>` 遠端載入／SRAM 同步，或選配接橋外部生圖 API 至 Pixel Forge。
+2. **選配微拋光**：
+   - 為 `<main>` 底部狀態列改為 `text-overflow: ellipsis` 避免極窄螢幕底緣捲軸，以及讓浮動視口條支援一鍵最小化收合。
