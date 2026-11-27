@@ -36,7 +36,18 @@ import {
 import { renderHierarchyPane, renderPrefabsPane } from './EcsWorkbenchHierarchyPanels.ts';
 import { EcsWorkbenchLiveMutator } from './EcsWorkbenchLiveMutator.ts';
 import { EcsWorkbenchMapCanvasController } from './EcsWorkbenchMapCanvasController.ts';
+import { EcsWorkbenchOverlays } from './EcsWorkbenchOverlays.ts';
 import { renderPrefabInspectorPanel } from './EcsWorkbenchPrefabInspector.ts';
+import {
+  LEFT_PANE_DEFAULT_W,
+  RIGHT_PANE_DEFAULT_W,
+  applyWorkbenchPaneLayout,
+  clampWorkbenchPaneWidth,
+  loadWorkbenchPreferences,
+  saveWorkbenchPreferences,
+  type WorkbenchPreferences,
+  type WorkbenchSnapStep,
+} from './EcsWorkbenchPreferences.ts';
 import { EcsWorkbenchPreviewRuntime } from './EcsWorkbenchPreviewRuntime.ts';
 import { buildDiagReportBox, buildSceneAndHistorySections } from './EcsWorkbenchSceneInspector.ts';
 import {
@@ -45,6 +56,7 @@ import {
   type WorkbenchCenterMode,
   type WorkbenchLeftTab,
 } from './EcsWorkbenchShellBuilder.ts';
+import { EcsWorkbenchViewportHud } from './EcsWorkbenchViewportHud.ts';
 import { EcsWorldRulesInspectorPanel } from './EcsWorldRulesInspectorPanel.ts';
 import type { CloudPublishModalView } from './CloudPublishModalView.ts';
 import type { EventGraphEditorView } from './EventGraphEditorView.ts';
@@ -78,10 +90,12 @@ export class EcsWorkbenchView {
   private readonly previewRuntime: EcsWorkbenchPreviewRuntime;
   private readonly liveMutator: EcsWorkbenchLiveMutator;
   private readonly mapCanvasCtrl: EcsWorkbenchMapCanvasController;
+  private readonly modalPortalEl: HTMLDivElement;
+  private readonly viewportHud: EcsWorkbenchViewportHud;
+  private readonly workbenchOverlays: EcsWorkbenchOverlays;
   private readonly eventGraphSlotEl: HTMLDivElement;
   private eventGraphView: EventGraphEditorView | null = null;
   private eventGraphLoadPromise: Promise<EventGraphEditorView | null> | null = null;
-  private readonly externalImportSlotEl: HTMLDivElement;
   private externalImportModal: ExternalImportModalView | null = null;
   private externalImportLoadPromise: Promise<ExternalImportModalView> | null = null;
   private cloudPublishModal: CloudPublishModalView | null = null;
@@ -90,6 +104,7 @@ export class EcsWorkbenchView {
   private modelAtelierLoadPromise: Promise<ModelAtelierModalView | null> | null = null;
   private readonly worldRulesPanel: EcsWorldRulesInspectorPanel;
   private readonly agentWorkbenchApi: PixelAtelierWorkbenchAgentApi;
+  private prefs: WorkbenchPreferences;
 
   private leftTab: WorkbenchLeftTab = 'map';
   private centerMode: WorkbenchCenterMode = 'viewport';
@@ -130,10 +145,17 @@ export class EcsWorkbenchView {
     const initialSimRunning = !initialProj.worldMap;
     this.runtime = new EcsCartridgeRuntime(initialProj);
 
+    this.prefs = loadWorkbenchPreferences();
+    this.mapState.snapStep = this.prefs.snapStep;
+    this.mapState.sliceCutawayMode = this.prefs.sliceCutawayMode;
+    this.modalPortalEl = document.createElement('div');
+    this.modalPortalEl.className = 'p7-modal-portal';
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(this.modalPortalEl);
+    }
+
     this.eventGraphSlotEl = document.createElement('div');
     this.eventGraphSlotEl.className = 'p7-eg-root panel-hidden';
-    this.externalImportSlotEl = document.createElement('div');
-    this.externalImportSlotEl.hidden = true;
     this.worldRulesPanel = new EcsWorldRulesInspectorPanel({
       onFocusRoom: (roomId) => this.previewRuntime.switchActiveRoom(roomId),
       getSpriteOptions: (proj) => collectProjectSpriteOptions(proj),
@@ -145,14 +167,9 @@ export class EcsWorkbenchView {
       initialLeftTab: this.leftTab,
       initialPlayPauseLabel: initialProj.worldMap ? '開始試玩' : '暫停模擬',
       eventGraphEl: this.eventGraphSlotEl,
-      externalImportModalEl: this.externalImportSlotEl,
       signal,
-      onOpenExternalImport: () => {
-        void this.openExternalImportModal();
-      },
-      onOpenModelAtelier: () => {
-        void this.openModelAtelierModal();
-      },
+      onOpenExternalImport: () => { void this.openExternalImportModal(); },
+      onOpenModelAtelier: () => { void this.openModelAtelierModal(); },
       onOpenClassicWorkshop: () => this.callbacks.onOpenClassicWorkshop(),
       onSelectBuiltinProject: (project) => {
         this.lastDiagReport = null;
@@ -160,9 +177,7 @@ export class EcsWorkbenchView {
         this.session.dispatch({ type: 'load_project', project });
       },
       onSelectLeftTab: (tab) => this.setLeftTab(tab),
-      onSelectViewportPreset: (preset) => {
-        this.session.dispatch({ type: 'set_viewport', preset });
-      },
+      onSelectViewportPreset: (preset) => { this.session.dispatch({ type: 'set_viewport', preset }); },
       onTogglePlayPause: () => this.previewRuntime.setSimRunning(!this.previewRuntime.isSimRunning()),
       onStepFrame: () => this.previewRuntime.stepSingleFrame(),
       onResetRuntime: () => this.previewRuntime.resetRuntime(),
@@ -173,9 +188,15 @@ export class EcsWorkbenchView {
         this.lastDiagReport = runWorkbenchSpatialDiagnostics(this.session);
         this.renderRightPanel();
       },
-      onOpenCloudPublish: () => {
-        void this.openCloudPublishModal();
-      },
+      onOpenCloudPublish: () => { void this.openCloudPublishModal(); },
+      onOpenCommandPalette: () => this.workbenchOverlays.openCommandPalette(),
+      onOpenShortcuts: () => this.workbenchOverlays.openShortcuts(),
+      onToggleLeftPane: () => this.togglePaneCollapsed('left'),
+      onToggleRightPane: () => this.togglePaneCollapsed('right'),
+      getPaneWidth: (side) => (side === 'left' ? this.prefs.leftWidth : this.prefs.rightWidth),
+      onResizePane: (side, widthPx, commit) => this.resizePane(side, widthPx, commit),
+      onResetPaneWidth: (side) =>
+        this.resizePane(side, side === 'left' ? LEFT_PANE_DEFAULT_W : RIGHT_PANE_DEFAULT_W, true),
       onSelectCenterMode: (mode) => this.setCenterMode(mode),
       onSwitchRoom: (roomId) => this.previewRuntime.switchActiveRoom(roomId),
       onHitActionA: () => {
@@ -197,9 +218,7 @@ export class EcsWorkbenchView {
         this.previewRuntime.pulseShift(2);
       },
       onLaunchArcade: () => this.callbacks.onLaunchInArcade(this.session.getProject()),
-      onSelectProjection: (mode) => {
-        this.session.dispatch({ type: 'set_projection', patch: { mode } });
-      },
+      onSelectProjection: (mode) => { this.session.dispatch({ type: 'set_projection', patch: { mode } }); },
       onSelectDimensionMask: (mask) => {
         this.runtime.setActiveDimensionMask(mask);
         this.session.dispatch({ type: 'set_projection', patch: { activeDimensionMask: mask } });
@@ -220,6 +239,7 @@ export class EcsWorkbenchView {
       },
     });
     this.element = this.dom.rootEl;
+    this.applyPaneLayout();
 
     // Dedicated preview GPU engine bound to shared TextureAtlas (lazy-initialized on first show)
     this.previewGpu = new GpuEngine(
@@ -249,18 +269,26 @@ export class EcsWorkbenchView {
         isVisible: () => this.visible,
         isModalOpen: () =>
           Boolean(
-            this.externalImportModal?.isOpen() ||
+            this.workbenchOverlays?.isOpen() ||
+              this.externalImportModal?.isOpen() ||
               this.cloudPublishModal?.isOpen() ||
               this.modelAtelierModal?.isOpen(),
           ),
         getCenterMode: () => this.centerMode,
         setCenterMode: (mode) => this.setCenterMode(mode),
-        onToolShortcutMutated: () => this.renderLeftPanel(),
+        onToolShortcutMutated: () => {
+          this.viewportHud?.sync();
+          this.renderLeftPanel();
+        },
         onRequestFullPanelRender: () => this.renderAllPanels(),
         onDiagReportReady: (report) => {
           this.lastDiagReport = report;
           this.renderRightPanel();
         },
+        onOpenCommandPalette: () => this.workbenchOverlays?.openCommandPalette(),
+        onOpenShortcuts: () => this.workbenchOverlays?.openShortcuts(),
+        onToggleSidePanes: () => this.toggleBothSidePanes(),
+        onViewportHudSync: () => this.viewportHud?.sync(),
       },
       initialSimRunning,
     );
@@ -297,12 +325,70 @@ export class EcsWorkbenchView {
         this.previewRuntime.renderPreviewNow();
       },
       isEditingActive: () => this.previewRuntime.isMapEditingActive(),
-      onToolStateMutated: () => this.renderLeftPanel(),
+      onToolStateMutated: () => {
+        this.viewportHud.sync();
+        this.renderLeftPanel();
+      },
       onEntityStamped: (entityId) => this.setSelectedEntityIds([entityId]),
       onPreviewDirty: () => {
         this.previewRuntime.markDirty();
       },
     });
+
+    this.viewportHud = new EcsWorkbenchViewportHud({
+      mapState: this.mapState,
+      isVisible: () => this.previewRuntime.isMapEditingActive(),
+      getZoom: () => this.runtime.getWorldMapController().getEditorZoom(),
+      onToolOrLayerChanged: () => {
+        this.mapCanvasCtrl.syncInteractivity();
+        this.renderLeftPanel();
+        this.previewRuntime.markDirty();
+        this.previewRuntime.renderPreviewNow();
+      },
+      onSnapChanged: (snapStep) => {
+        this.prefs = saveWorkbenchPreferences({ snapStep });
+        this.renderLeftPanel();
+        this.mapCanvasCtrl.renderOverlay();
+      },
+      onSliceChanged: (cutawayMode) => {
+        if (cutawayMode) this.prefs = saveWorkbenchPreferences({ sliceCutawayMode: cutawayMode });
+        this.previewRuntime.syncEditorSliceCutaway();
+        this.renderLeftPanel();
+        this.previewRuntime.renderPreviewNow();
+      },
+      onResetCamera: () => this.previewRuntime.resetEditorCamera(),
+      onOpenCommandPalette: () => this.workbenchOverlays.openCommandPalette(),
+      onOpenShortcuts: () => this.workbenchOverlays.openShortcuts(),
+    });
+    this.dom.canvasFrameEl.appendChild(this.viewportHud.element);
+
+    this.workbenchOverlays = new EcsWorkbenchOverlays({
+      getProject: () => this.session.getProject(),
+      getActiveRoomId: () => this.runtime.getActiveRoomId(),
+      isSimRunning: () => this.previewRuntime.isSimRunning(),
+      onSwitchRoom: (roomId) => this.previewRuntime.switchActiveRoom(roomId),
+      onSelectAndFocusEntity: (entityId, roomId) => {
+        if (roomId && this.session.getProject().worldMap && this.runtime.getActiveRoomId() !== roomId) {
+          this.previewRuntime.switchActiveRoom(roomId);
+        }
+        this.setSelectedEntityIds([entityId]);
+        this.previewRuntime.focusEntities([entityId]);
+      },
+      onSelectPrefab: (prefabId) => { this.selectedPrefabId = prefabId; this.setLeftTab('prefabs'); this.renderAllPanels(); },
+      onLoadBuiltinProject: (project) => {
+        this.lastDiagReport = null;
+        this.selectedPrefabId = null;
+        this.session.dispatch({ type: 'load_project', project });
+      },
+      onToggleQuadView: () => this.previewRuntime.selectCamera3DView('quad'),
+      onOpenModelAtelier: () => { void this.openModelAtelierModal(); },
+      onOpenClassicWorkshop: () => this.callbacks.onOpenClassicWorkshop(),
+      onTogglePlayPause: () => this.previewRuntime.setSimRunning(!this.previewRuntime.isSimRunning()),
+      onToggleSidePanes: () => this.toggleBothSidePanes(),
+      onResetCamera: () => this.previewRuntime.resetEditorCamera(),
+      onRunDiagnostics: () => { this.lastDiagReport = runWorkbenchSpatialDiagnostics(this.session); this.renderRightPanel(); },
+    });
+    this.modalPortalEl.appendChild(this.workbenchOverlays.element);
 
     this.agentWorkbenchApi = createWorkbenchAgentApi({
       session: this.session,
@@ -324,6 +410,7 @@ export class EcsWorkbenchView {
       this.lastLoadedProjectId = proj.meta.id;
       this.syncProjectCustomSprites(proj);
       this.runtime.reloadProject(proj, sameProject);
+      let emptySelectionNotice: string | null = null;
       if (!sameProject) {
         this.setLeftTab(proj.worldMap ? 'map' : 'hierarchy');
         const customGround = proj.worldMap?.tileDefs?.find((t) => t.layer === 'ground');
@@ -339,18 +426,54 @@ export class EcsWorkbenchView {
       } else if (this.selectedEntityIds.length > 0) {
         const validSet = new Set(proj.entities.map((e) => e.id));
         this.selectedEntityIds = this.selectedEntityIds.filter((id) => validSet.has(id));
+        if (this.selectedEntityIds.length === 0) {
+          const activeRoomId = this.runtime.getActiveRoomId();
+          const roomEntities = proj.worldMap && activeRoomId
+            ? proj.entities.filter((e) => !e.roomId || e.roomId === activeRoomId)
+            : proj.entities;
+          const fallback =
+            roomEntities.find((e) => e.components?.tag === 'player' || e.components?.tag === 'hero' || e.id.includes('hero')) ??
+            roomEntities[0] ?? proj.entities[0] ?? null;
+          if (fallback) this.selectedEntityIds = [fallback.id];
+          else emptySelectionNotice = '原選取實體已復原移除，目前場景無可選取實體';
+        }
       }
       this.selectedEntityId = this.selectedEntityIds[this.selectedEntityIds.length - 1] ?? null;
       this.previewRuntime.syncSimStateForProjectLoad(proj, sameProject);
-      if (this.selectedPrefabId && !proj.prefabs[this.selectedPrefabId]) {
-        this.selectedPrefabId = null;
-      }
+      if (this.selectedPrefabId && !proj.prefabs[this.selectedPrefabId]) this.selectedPrefabId = null;
       this.previewRuntime.markDirty();
       this.previewRuntime.renderPreviewNow();
       this.renderAllPanels();
+      if (emptySelectionNotice) this.dom.statusLeftEl.textContent = emptySelectionNotice;
     });
 
     this.renderAllPanels();
+  }
+
+  private applyPaneLayout(): void {
+    applyWorkbenchPaneLayout(this.dom.rootEl, this.dom.toggleLeftPaneBtn, this.dom.toggleRightPaneBtn, this.prefs);
+  }
+
+  private resizePane(side: 'left' | 'right', rawWidth: number, commit: boolean): void {
+    const clamped = clampWorkbenchPaneWidth(side, rawWidth);
+    const patch = side === 'left'
+      ? { leftWidth: clamped, leftCollapsed: false }
+      : { rightWidth: clamped, rightCollapsed: false };
+    this.prefs = commit ? saveWorkbenchPreferences(patch) : { ...this.prefs, ...patch };
+    this.applyPaneLayout();
+  }
+
+  private togglePaneCollapsed(side: 'left' | 'right'): void {
+    this.prefs = saveWorkbenchPreferences(
+      side === 'left' ? { leftCollapsed: !this.prefs.leftCollapsed } : { rightCollapsed: !this.prefs.rightCollapsed },
+    );
+    this.applyPaneLayout();
+  }
+
+  private toggleBothSidePanes(): void {
+    const nextCollapsed = !(this.prefs.leftCollapsed && this.prefs.rightCollapsed);
+    this.prefs = saveWorkbenchPreferences({ leftCollapsed: nextCollapsed, rightCollapsed: nextCollapsed });
+    this.applyPaneLayout();
   }
 
   public getAgentWorkbenchApi(): PixelAtelierWorkbenchAgentApi {
@@ -481,6 +604,7 @@ export class EcsWorkbenchView {
     this.dom.centerTabGraphBtn.classList.toggle('is-active', mode === 'event_graph');
     this.dom.viewportStageEl.classList.toggle('panel-hidden', mode !== 'viewport');
     this.eventGraphSlotEl.classList.toggle('panel-hidden', mode !== 'event_graph');
+    this.viewportHud.sync();
     if (mode === 'viewport') {
       this.previewRuntime.markDirty();
     } else if (mode === 'event_graph') {
@@ -553,6 +677,7 @@ export class EcsWorkbenchView {
     this.dom.undoBtn.disabled = !this.session.canUndo();
     this.dom.redoBtn.disabled = !this.session.canRedo();
     this.mapCanvasCtrl.syncInteractivity();
+    this.viewportHud.sync();
     this.eventGraphView?.syncProject(proj);
     this.renderLeftPanel();
     this.renderRightPanel();
@@ -572,8 +697,18 @@ export class EcsWorkbenchView {
         this.mapState,
         {
           onStateChange: () => {
+            if (
+              this.mapState.snapStep !== this.prefs.snapStep ||
+              this.mapState.sliceCutawayMode !== this.prefs.sliceCutawayMode
+            ) {
+              this.prefs = saveWorkbenchPreferences({
+                snapStep: this.mapState.snapStep as WorkbenchSnapStep,
+                sliceCutawayMode: this.mapState.sliceCutawayMode,
+              });
+            }
             this.previewRuntime.syncEditorSliceCutaway();
             this.mapCanvasCtrl.syncInteractivity();
+            this.viewportHud.sync();
             this.renderLeftPanel();
             this.previewRuntime.markDirty();
             this.previewRuntime.renderPreviewNow();
@@ -804,25 +939,19 @@ export class EcsWorkbenchView {
             const modal = new ExternalImportModalView({
               onCommit: (result, options) => this.handleExternalImportCommit(result, options),
               getProject: () => this.session.getProject(),
-              onCommitCommands: (cmds, summary, focusHint) =>
-                this.handleAtomicAssetCommands(cmds, summary, focusHint),
+              onCommitCommands: (cmds, summary, focusHint) => this.handleAtomicAssetCommands(cmds, summary, focusHint),
             });
-            if (this.destroyed) {
-              modal.destroy();
-            } else {
+            if (this.destroyed) { modal.destroy(); } else {
               this.externalImportModal = modal;
-              this.element.appendChild(modal.element);
+              this.modalPortalEl.appendChild(modal.element);
             }
             return modal;
           })
-          .finally(() => {
-            this.externalImportLoadPromise = null;
-          });
+          .finally(() => { this.externalImportLoadPromise = null; });
       }
       await this.externalImportLoadPromise;
     }
-    if (this.destroyed || !this.externalImportModal) return;
-    this.externalImportModal.open();
+    if (!this.destroyed && this.externalImportModal) this.externalImportModal.open();
   }
 
   public async openCloudPublishModal(): Promise<void> {
@@ -832,22 +961,16 @@ export class EcsWorkbenchView {
         this.cloudPublishLoadPromise = import('./CloudPublishModalView.ts')
           .then(({ CloudPublishModalView }) => {
             const modal = new CloudPublishModalView();
-            if (this.destroyed) {
-              modal.destroy();
-              return null;
-            }
+            if (this.destroyed) { modal.destroy(); return null; }
             this.cloudPublishModal = modal;
-            this.element.appendChild(modal.element);
+            this.modalPortalEl.appendChild(modal.element);
             return modal;
           })
-          .finally(() => {
-            this.cloudPublishLoadPromise = null;
-          });
+          .finally(() => { this.cloudPublishLoadPromise = null; });
       }
       await this.cloudPublishLoadPromise;
     }
-    if (this.destroyed || !this.cloudPublishModal) return;
-    this.cloudPublishModal.open(this.session.getProject());
+    if (!this.destroyed && this.cloudPublishModal) this.cloudPublishModal.open(this.session.getProject());
   }
 
   public async openModelAtelierModal(initialModelId?: string): Promise<void> {
@@ -868,9 +991,7 @@ export class EcsWorkbenchView {
                   this.dom.statusLeftEl.textContent = `已儲存 3D 模型「${model.name}」（修訂 #${res.revision}）`;
                 }
               },
-              onDeleteModel3D: (modelId) => {
-                this.session.dispatch({ type: 'remove_model_3d', modelId });
-              },
+              onDeleteModel3D: (modelId) => { this.session.dispatch({ type: 'remove_model_3d', modelId }); },
               onSpawnModelEntity: (modelId) => {
                 const proj = this.session.getProject();
                 const roomId = this.runtime.getActiveRoomId() ?? proj.worldMap?.startRoomId;
@@ -902,22 +1023,22 @@ export class EcsWorkbenchView {
                 }
               },
             });
-            if (this.destroyed) {
-              modal.destroy();
-              return null;
-            }
+            if (this.destroyed) { modal.destroy(); return null; }
             this.modelAtelierModal = modal;
-            this.element.appendChild(modal.element);
+            this.modalPortalEl.appendChild(modal.element);
             return modal;
           })
-          .finally(() => {
-            this.modelAtelierLoadPromise = null;
-          });
+          .finally(() => { this.modelAtelierLoadPromise = null; });
       }
       await this.modelAtelierLoadPromise;
     }
-    if (this.destroyed || !this.modelAtelierModal) return;
-    this.modelAtelierModal.open(initialModelId);
+    if (!this.destroyed && this.modelAtelierModal) this.modelAtelierModal.open(initialModelId);
+  }
+
+  private syncCommittedAtlas(updatedProj: EcsProjectV2): void {
+    this.syncedCustomSpriteIds = syncProjectCustomSpritesToAtlas(this.atlas, updatedProj, this.syncedCustomSpriteIds);
+    if (this.previewGpuInitialized) this.previewGpu.syncAtlasIfDirty();
+    this.callbacks.onAtlasMutated();
   }
 
   private handleAtomicAssetCommands(
@@ -931,20 +1052,8 @@ export class EcsWorkbenchView {
       this.dom.statusLeftEl.textContent = `${summary} 失敗：${batchRes.errors.join('; ') || batchRes.summary}`;
       return;
     }
-
-    const updatedProj = this.session.getProject();
-    this.syncedCustomSpriteIds = syncProjectCustomSpritesToAtlas(
-      this.atlas,
-      updatedProj,
-      this.syncedCustomSpriteIds,
-    );
-    if (this.previewGpuInitialized) {
-      this.previewGpu.syncAtlasIfDirty();
-    }
-    this.callbacks.onAtlasMutated();
-    if (focusHint?.leftTab) {
-      this.setLeftTab(focusHint.leftTab);
-    }
+    this.syncCommittedAtlas(this.session.getProject());
+    if (focusHint?.leftTab) this.setLeftTab(focusHint.leftTab);
     this.previewRuntime.markDirty();
     this.previewRuntime.renderPreviewNow();
     this.renderAllPanels();
@@ -959,17 +1068,8 @@ export class EcsWorkbenchView {
       this.dom.statusLeftEl.textContent = `外部匯入失敗：${batchRes.errors.join('; ') || batchRes.summary}`;
       return;
     }
-
     const updatedProj = this.session.getProject();
-    this.syncedCustomSpriteIds = syncProjectCustomSpritesToAtlas(
-      this.atlas,
-      updatedProj,
-      this.syncedCustomSpriteIds,
-    );
-    if (this.previewGpuInitialized) {
-      this.previewGpu.syncAtlasIfDirty();
-    }
-    this.callbacks.onAtlasMutated();
+    this.syncCommittedAtlas(updatedProj);
 
     if (result.rooms.length > 0) {
       this.setLeftTab('map');
@@ -981,9 +1081,7 @@ export class EcsWorkbenchView {
         lines: [
           result.summary,
           `可達房間：${reach.reachableRoomIds.length} / ${updatedProj.worldMap?.rooms.length ?? 0}`,
-          ...(reach.softLockRisks.length > 0
-            ? reach.softLockRisks.slice(0, 3)
-            : ['BFS 連通性與鑰匙依賴驗證全數通過']),
+          ...(reach.softLockRisks.length > 0 ? reach.softLockRisks.slice(0, 3) : ['BFS 連通性與鑰匙依賴驗證全數通過']),
         ],
       };
       this.dom.statusLeftEl.textContent =
@@ -1001,25 +1099,16 @@ export class EcsWorkbenchView {
     this.destroyed = true;
     this.unsubSession();
     this.ac.abort();
+    this.viewportHud.destroy();
+    this.workbenchOverlays.destroy();
     this.mapCanvasCtrl.destroy();
     this.worldRulesPanel.destroy();
-    if (this.externalImportModal) {
-      this.externalImportModal.destroy();
-      this.externalImportModal = null;
-    }
-    if (this.cloudPublishModal) {
-      this.cloudPublishModal.destroy();
-      this.cloudPublishModal = null;
-    }
-    if (this.modelAtelierModal) {
-      this.modelAtelierModal.destroy();
-      this.modelAtelierModal = null;
-    }
-    if (this.eventGraphView) {
-      this.eventGraphView.destroy();
-      this.eventGraphView = null;
-    }
+    if (this.externalImportModal) { this.externalImportModal.destroy(); this.externalImportModal = null; }
+    if (this.cloudPublishModal) { this.cloudPublishModal.destroy(); this.cloudPublishModal = null; }
+    if (this.modelAtelierModal) { this.modelAtelierModal.destroy(); this.modelAtelierModal = null; }
+    if (this.eventGraphView) { this.eventGraphView.destroy(); this.eventGraphView = null; }
     this.previewGpu.dispose();
+    this.modalPortalEl.remove();
     this.element.remove();
   }
 }
