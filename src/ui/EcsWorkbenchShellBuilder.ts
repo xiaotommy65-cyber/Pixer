@@ -9,6 +9,8 @@ export type WorkbenchCamera3DViewChoice = Camera3DProjectionMode | 'quad';
 
 export interface EcsWorkbenchShellRefs {
   rootEl: HTMLElement;
+  leftPaneEl: HTMLElement;
+  rightPaneEl: HTMLElement;
   projectSelectEl: HTMLSelectElement;
   roomQuickSelectEl: HTMLSelectElement;
   leftContentEl: HTMLElement;
@@ -26,6 +28,10 @@ export interface EcsWorkbenchShellRefs {
   shiftRealmBtn: HTMLButtonElement;
   undoBtn: HTMLButtonElement;
   redoBtn: HTMLButtonElement;
+  toggleLeftPaneBtn: HTMLButtonElement;
+  toggleRightPaneBtn: HTMLButtonElement;
+  leftResizerEl: HTMLDivElement;
+  rightResizerEl: HTMLDivElement;
   leftTabMapBtn: HTMLButtonElement;
   leftTabRulesBtn: HTMLButtonElement;
   leftTabHierarchyBtn: HTMLButtonElement;
@@ -34,6 +40,7 @@ export interface EcsWorkbenchShellRefs {
   centerTabViewportBtn: HTMLButtonElement;
   centerTabGraphBtn: HTMLButtonElement;
   viewportStageEl: HTMLDivElement;
+  canvasFrameEl: HTMLDivElement;
   spatial3dBarEl: HTMLDivElement;
   spatial3dViewBtns: Partial<Record<WorkbenchCamera3DViewChoice, HTMLButtonElement>>;
   toggleAxisGizmoBtn: HTMLButtonElement;
@@ -48,7 +55,6 @@ export interface EcsWorkbenchShellCallbacks {
   initialLeftTab: WorkbenchLeftTab;
   initialPlayPauseLabel: string;
   eventGraphEl: HTMLElement;
-  externalImportModalEl: HTMLElement;
   signal: AbortSignal;
   onOpenExternalImport: () => void;
   onOpenModelAtelier: () => void;
@@ -64,6 +70,13 @@ export interface EcsWorkbenchShellCallbacks {
   onRedo: () => void;
   onRunDiagnostics: () => void;
   onOpenCloudPublish: () => void;
+  onOpenCommandPalette: () => void;
+  onOpenShortcuts: () => void;
+  onToggleLeftPane: () => void;
+  onToggleRightPane: () => void;
+  getPaneWidth: (side: 'left' | 'right') => number;
+  onResizePane: (side: 'left' | 'right', widthPx: number, commit: boolean) => void;
+  onResetPaneWidth: (side: 'left' | 'right') => void;
   onSelectCenterMode: (mode: WorkbenchCenterMode) => void;
   onSwitchRoom: (roomId: string) => void;
   onHitActionA: () => void;
@@ -182,6 +195,14 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   const leftGroup = document.createElement('div');
   leftGroup.className = 'p7-toolbar-group';
 
+  const toggleLeftPaneBtn = document.createElement('button');
+  toggleLeftPaneBtn.type = 'button';
+  toggleLeftPaneBtn.className = 'p7-btn p7-btn-icon';
+  toggleLeftPaneBtn.dataset.testid = 'toggle-left-pane';
+  toggleLeftPaneBtn.textContent = '◀';
+  toggleLeftPaneBtn.title = '收合 / 展開左側欄 (Tab)';
+  toggleLeftPaneBtn.addEventListener('click', cb.onToggleLeftPane, { signal });
+
   const viewportSelectEl = document.createElement('select');
   viewportSelectEl.className = 'p7-select p7-mono';
   viewportSelectEl.setAttribute('aria-label', '邏輯視口解析度');
@@ -222,7 +243,7 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   overlayBtn.textContent = '路徑覆疊';
   overlayBtn.addEventListener('click', cb.onToggleDebugOverlay, { signal });
 
-  leftGroup.append(viewportSelectEl, playPauseBtn, stepBtn, resetBtn, overlayBtn);
+  leftGroup.append(toggleLeftPaneBtn, viewportSelectEl, playPauseBtn, stepBtn, resetBtn, overlayBtn);
 
   const rightGroup = document.createElement('div');
   rightGroup.className = 'p7-toolbar-group';
@@ -254,6 +275,30 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   cloudPublishBtn.title = '發布專案至雲端 (?play=<slug>) 或匯出專案 JSON';
   cloudPublishBtn.addEventListener('click', cb.onOpenCloudPublish, { signal });
 
+  const cmdPaletteBtn = document.createElement('button');
+  cmdPaletteBtn.type = 'button';
+  cmdPaletteBtn.className = 'p7-btn p7-mono';
+  cmdPaletteBtn.dataset.testid = 'open-command-palette';
+  cmdPaletteBtn.textContent = '指令 ⌘K';
+  cmdPaletteBtn.title = '快速指令與跳轉面板 (Ctrl/Cmd+K)';
+  cmdPaletteBtn.addEventListener('click', cb.onOpenCommandPalette, { signal });
+
+  const shortcutsBtn = document.createElement('button');
+  shortcutsBtn.type = 'button';
+  shortcutsBtn.className = 'p7-btn p7-mono';
+  shortcutsBtn.dataset.testid = 'open-shortcuts';
+  shortcutsBtn.textContent = '快捷鍵 ?';
+  shortcutsBtn.title = 'Workstation 2.0 快捷鍵總覽 (?)';
+  shortcutsBtn.addEventListener('click', cb.onOpenShortcuts, { signal });
+
+  const toggleRightPaneBtn = document.createElement('button');
+  toggleRightPaneBtn.type = 'button';
+  toggleRightPaneBtn.className = 'p7-btn p7-btn-icon';
+  toggleRightPaneBtn.dataset.testid = 'toggle-right-pane';
+  toggleRightPaneBtn.textContent = '▶';
+  toggleRightPaneBtn.title = '收合 / 展開右側欄 (Tab)';
+  toggleRightPaneBtn.addEventListener('click', cb.onToggleRightPane, { signal });
+
   const centerModeSeg = document.createElement('div');
   centerModeSeg.className = 'p7-segmented';
   const centerTabViewportBtn = document.createElement('button');
@@ -269,7 +314,16 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   centerTabGraphBtn.addEventListener('click', () => cb.onSelectCenterMode('event_graph'), { signal });
   centerModeSeg.append(centerTabViewportBtn, centerTabGraphBtn);
 
-  rightGroup.append(centerModeSeg, undoBtn, redoBtn, diagBtn, cloudPublishBtn);
+  rightGroup.append(
+    centerModeSeg,
+    undoBtn,
+    redoBtn,
+    diagBtn,
+    cloudPublishBtn,
+    cmdPaletteBtn,
+    shortcutsBtn,
+    toggleRightPaneBtn,
+  );
   toolbar.append(leftGroup, rightGroup);
 
   const viewportStageEl = document.createElement('div');
@@ -430,7 +484,59 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   const statusRightEl = document.createElement('span');
   statusStrip.append(statusLeftEl, statusRightEl);
 
-  centerPane.append(toolbar, viewportStageEl, cb.eventGraphEl, statusStrip);
+  const makeResizer = (side: 'left' | 'right'): HTMLDivElement => {
+    const el = document.createElement('div');
+    el.className = `p7-pane-resizer is-${side}`;
+    el.dataset.testid = `${side}-pane-resizer`;
+    el.setAttribute('role', 'separator');
+    el.setAttribute('aria-orientation', 'vertical');
+    el.title = side === 'left' ? '拖曳調整左側欄寬度（雙擊重設）' : '拖曳調整右側欄寬度（雙擊重設）';
+    let dragging = false;
+    let startX = 0;
+    let startW = 0;
+    let lastW = 0;
+    el.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        dragging = true;
+        startX = e.clientX;
+        startW = cb.getPaneWidth(side);
+        lastW = startW;
+        el.classList.add('is-dragging');
+        if (typeof el.setPointerCapture === 'function') el.setPointerCapture(e.pointerId);
+      },
+      { signal },
+    );
+    el.addEventListener(
+      'pointermove',
+      (e) => {
+        if (!dragging) return;
+        const dx = e.clientX - startX;
+        lastW = side === 'left' ? startW + dx : startW - dx;
+        cb.onResizePane(side, lastW, false);
+      },
+      { signal },
+    );
+    const finish = (e: PointerEvent): void => {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove('is-dragging');
+      if (typeof el.releasePointerCapture === 'function' && el.hasPointerCapture?.(e.pointerId)) {
+        el.releasePointerCapture(e.pointerId);
+      }
+      cb.onResizePane(side, lastW, true);
+    };
+    el.addEventListener('pointerup', finish, { signal });
+    el.addEventListener('pointercancel', finish, { signal });
+    el.addEventListener('dblclick', () => cb.onResetPaneWidth(side), { signal });
+    return el;
+  };
+  const leftResizerEl = makeResizer('left');
+  const rightResizerEl = makeResizer('right');
+
+  centerPane.append(leftResizerEl, rightResizerEl, toolbar, viewportStageEl, cb.eventGraphEl, statusStrip);
 
   // ================= RIGHT PANE =================
   const rightPane = document.createElement('aside');
@@ -447,10 +553,12 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
   rightContentEl.className = 'p7-pane-scroll';
   rightPane.append(rightHead, rightContentEl);
 
-  rootEl.append(leftPane, centerPane, rightPane, cb.externalImportModalEl);
+  rootEl.append(leftPane, centerPane, rightPane);
 
   return {
     rootEl,
+    leftPaneEl: leftPane,
+    rightPaneEl: rightPane,
     projectSelectEl,
     roomQuickSelectEl,
     leftContentEl,
@@ -468,6 +576,10 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
     shiftRealmBtn,
     undoBtn,
     redoBtn,
+    toggleLeftPaneBtn,
+    toggleRightPaneBtn,
+    leftResizerEl,
+    rightResizerEl,
     leftTabMapBtn,
     leftTabRulesBtn,
     leftTabHierarchyBtn,
@@ -476,6 +588,7 @@ export function buildEcsWorkbenchShell(cb: EcsWorkbenchShellCallbacks): EcsWorkb
     centerTabViewportBtn,
     centerTabGraphBtn,
     viewportStageEl,
+    canvasFrameEl: canvasFrame,
     spatial3dBarEl,
     spatial3dViewBtns,
     toggleAxisGizmoBtn,

@@ -38,6 +38,10 @@ export interface PreviewRuntimeDeps {
   onToolShortcutMutated: () => void;
   onRequestFullPanelRender: () => void;
   onDiagReportReady: (report: WorkbenchDiagReport) => void;
+  onOpenCommandPalette?: () => void;
+  onOpenShortcuts?: () => void;
+  onToggleSidePanes?: () => void;
+  onViewportHudSync?: () => void;
 }
 
 /**
@@ -51,6 +55,7 @@ export class EcsWorkbenchPreviewRuntime {
   private readonly heldKeys = { left: false, right: false, up: false, down: false, dash: false };
 
   private simRunning: boolean;
+  private savedEditZoom = 1;
   private debugOverlay = false;
   private previewDirty = true;
   private lastRenderedScore = 0;
@@ -132,10 +137,12 @@ export class EcsWorkbenchPreviewRuntime {
   }
 
   public resetEditorCamera(): void {
+    this.savedEditZoom = 1;
     this.deps.runtime.clearEditorCamera();
     this.syncEditorSliceCutaway();
     this.previewDirty = true;
     this.renderPreviewNow();
+    this.deps.onViewportHudSync?.();
   }
 
   public isSimRunning(): boolean {
@@ -177,12 +184,15 @@ export class EcsWorkbenchPreviewRuntime {
 
   public setSimRunning(running: boolean): void {
     this.simRunning = running;
+    const wmCtrl = this.deps.runtime.getWorldMapController();
     if (running) {
+      this.savedEditZoom = wmCtrl.getEditorZoom();
       this.deps.mapState.spacePanHeld = false;
       this.deps.runtime.clearEditorCamera();
       this.deps.getMapCanvasCtrl().clearPendingStroke();
     } else if (this.deps.session.getProject().worldMap) {
-      this.deps.runtime.getWorldMapController().director.reset(false);
+      wmCtrl.director.reset(false);
+      wmCtrl.setEditorZoom(this.savedEditZoom);
     }
     this.syncEditorSliceCutaway();
     this.deps.dom.playPauseBtn.textContent = this.getPlayPauseLabel();
@@ -190,6 +200,7 @@ export class EcsWorkbenchPreviewRuntime {
     this.previewDirty = true;
     this.renderPreviewNow();
     this.updateStatusStrip();
+    this.deps.onViewportHudSync?.();
   }
 
   public stepSingleFrame(): void {
@@ -219,6 +230,7 @@ export class EcsWorkbenchPreviewRuntime {
 
   public syncSimStateForProjectLoad(proj: EcsProjectV2, sameProject: boolean): void {
     if (!sameProject) {
+      this.savedEditZoom = 1;
       this.deps.runtime.clearEditorCamera();
       this.simRunning = !proj.worldMap;
     }
@@ -326,6 +338,7 @@ export class EcsWorkbenchPreviewRuntime {
     const mapCtrl = this.deps.getMapCanvasCtrl();
     if (!this.deps.previewGpu.hasBackend()) {
       mapCtrl.renderOverlay();
+      this.deps.onViewportHudSync?.();
       return;
     }
     this.previewDirty = false;
@@ -333,6 +346,7 @@ export class EcsWorkbenchPreviewRuntime {
     this.lastRenderedScore = snap.score;
     this.previewBridge.render(this.deps.previewGpu, snap, null);
     mapCtrl.renderOverlay();
+    this.deps.onViewportHudSync?.();
   }
 
   public updateStatusStrip(): void {
@@ -442,11 +456,29 @@ export class EcsWorkbenchPreviewRuntime {
     window.addEventListener(
       'keydown',
       (e) => {
-        if (!this.deps.isVisible() || this.deps.isModalOpen()) {
+        if (!this.deps.isVisible()) return;
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === 'KeyK') {
+          e.preventDefault();
+          this.deps.onOpenCommandPalette?.();
+          return;
+        }
+        if (this.deps.isModalOpen()) {
           return;
         }
         const tag = (e.target as HTMLElement | null)?.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          if ((e.code === 'Slash' && e.shiftKey) || e.key === '?') {
+            e.preventDefault();
+            this.deps.onOpenShortcuts?.();
+            return;
+          }
+          if (e.code === 'Tab') {
+            e.preventDefault();
+            this.deps.onToggleSidePanes?.();
+            return;
+          }
+        }
         const proj = this.deps.session.getProject();
         const isWorldMap = Boolean(proj.worldMap);
         const hasMotor =

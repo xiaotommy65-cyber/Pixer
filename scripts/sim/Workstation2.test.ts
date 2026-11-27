@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import { createAgentBridge } from '../../src/core/ai/AgentBridge.ts';
 import { PixerMcpSession } from '../../src/core/ai/PixerMcpProtocol.ts';
@@ -13,6 +15,13 @@ import { OBSIDIAN_CITADEL_PROJECT } from '../../src/game/obsidianCitadel/Obsidia
 import { createDefaultMapDesignerState } from '../../src/ui/EcsMapDesignerPanel.ts';
 import { rotateVoxelShape } from '../../src/ui/EcsMapDesignerPanelTools.ts';
 import { createWorkbenchAgentApi } from '../../src/ui/EcsWorkbenchAgentAdapter.ts';
+import {
+  clampWorkbenchPaneWidth,
+  DEFAULT_WORKBENCH_PREFERENCES,
+  loadWorkbenchPreferences,
+  normalizeWorkbenchPreferences,
+  saveWorkbenchPreferences,
+} from '../../src/ui/EcsWorkbenchPreferences.ts';
 import {
   collectEntitiesInMarquee,
   collectRoomEntityPoses,
@@ -329,4 +338,62 @@ test('Pure viewport helpers: yaw-aware pan, grid snapping, quad-view quadrant/he
   assert.equal(rotateVoxelShape('slope_e', 1), 'slope_s');
   assert.equal(rotateVoxelShape('cube', 1), 'cube');
   assert.equal(rotateVoxelShape('arch', 1), 'arch');
+});
+
+test('Wave 7B preferences normalization, modal portal stacking, Scale/Yaw inspector & cross-atelier gesture contracts', () => {
+  // 1. Safe clamping & invalid fallback in EcsWorkbenchPreferences
+  const norm = normalizeWorkbenchPreferences({
+    leftWidth: 999,
+    rightWidth: 50,
+    leftCollapsed: true,
+    rightCollapsed: false,
+    snapStep: 12 as unknown as 16,
+    sliceCutawayMode: 'bogus' as unknown as 'all',
+  });
+  assert.equal(norm.leftWidth, 380);
+  assert.equal(norm.rightWidth, 220);
+  assert.equal(norm.leftCollapsed, true);
+  assert.equal(norm.snapStep, DEFAULT_WORKBENCH_PREFERENCES.snapStep);
+  assert.equal(norm.sliceCutawayMode, DEFAULT_WORKBENCH_PREFERENCES.sliceCutawayMode);
+  assert.equal(clampWorkbenchPaneWidth('left', 100), 196);
+  assert.equal(clampWorkbenchPaneWidth('right', 600), 420);
+
+  // Headless Node safety (no throw when localStorage unavailable)
+  const loaded = loadWorkbenchPreferences();
+  assert.equal(loaded.leftWidth, DEFAULT_WORKBENCH_PREFERENCES.leftWidth);
+  const saved = saveWorkbenchPreferences({ snapStep: 8, sliceCutawayMode: 'ghost_above' });
+  assert.equal(saved.snapStep, 8);
+  assert.equal(saved.sliceCutawayMode, 'ghost_above');
+
+  // 2. Source contracts for Wave 7B P0-P2 fixes & cross-atelier gestures
+  const wbViewSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsWorkbenchView.ts'), 'utf8');
+  assert.ok(
+    wbViewSrc.includes('p7-modal-portal') && wbViewSrc.includes('document.body.appendChild(this.modalPortalEl)'),
+    'EcsWorkbenchView must mount full-screen modals in a document.body portal above .p7-topbar',
+  );
+  assert.ok(wbViewSrc.includes('this.modalPortalEl.remove()'), 'EcsWorkbenchView.destroy() must clean up modalPortalEl');
+
+  const inspectorSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsWorkbenchEntityInspector.ts'), 'utf8');
+  assert.ok(
+    inspectorSrc.includes('scaleX') && inspectorSrc.includes('mutateMesh3DScale') && inspectorSrc.includes('yaw'),
+    'Entity inspector must expose Scale X/Y, Mesh3D Scale, and Spatial3D Yaw parity for Gizmo editing',
+  );
+
+  const previewSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsWorkbenchPreviewRuntime.ts'), 'utf8');
+  assert.ok(previewSrc.includes('savedEditZoom'), 'Play/Edit toggle must preserve and restore savedEditZoom');
+
+  const canvasSrc = readFileSync(resolve(process.cwd(), 'src/ui/EcsWorkbenchMapCanvasController.ts'), 'utf8');
+  assert.ok(canvasSrc.includes('activeEl.blur()'), 'Canvas pointerdown must blur active input instead of painting stray tile');
+
+  const modelVpSrc = readFileSync(resolve(process.cwd(), 'src/ui/ModelAtelierViewport.ts'), 'utf8');
+  assert.ok(
+    modelVpSrc.includes('contextmenu') && modelVpSrc.includes('getCameraState'),
+    'ModelAtelierViewport must support Right-drag orbit without contextmenu & expose getCameraState()',
+  );
+
+  const graphSrc = readFileSync(resolve(process.cwd(), 'src/ui/EventGraphEditorView.ts'), 'utf8');
+  assert.ok(
+    graphSrc.includes('contextmenu') && graphSrc.includes('wheel'),
+    'EventGraphEditorView must align contextmenu/pan/wheel zoom navigation',
+  );
 });

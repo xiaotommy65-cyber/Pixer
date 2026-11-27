@@ -135,11 +135,35 @@
   bottom: 0;
   z-index: 95;
   display: grid;
-  grid-template-columns: 244px minmax(0, 1fr) 288px;
+  grid-template-columns: var(--p7-left-w, 244px) minmax(0, 1fr) var(--p7-right-w, 288px);
   background: var(--p7-bg);
   color: var(--p7-text);
   font-family: var(--p7-font-sans);
   overflow: hidden;
+}
+
+.p7-workbench.is-left-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr) var(--p7-right-w, 288px);
+}
+
+.p7-workbench.is-right-collapsed {
+  grid-template-columns: var(--p7-left-w, 244px) minmax(0, 1fr) 0px;
+}
+
+.p7-workbench.is-left-collapsed.is-right-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr) 0px;
+}
+
+.p7-workbench.is-left-collapsed .p7-pane-left,
+.p7-workbench.is-right-collapsed .p7-pane-right {
+  visibility: hidden;
+  pointer-events: none;
+  border: none;
+}
+
+.p7-workbench.is-left-collapsed .p7-pane-resizer.is-left,
+.p7-workbench.is-right-collapsed .p7-pane-resizer.is-right {
+  display: none;
 }
 
 .p7-workbench.panel-hidden {
@@ -185,7 +209,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.p7-pane-head-row .p7-toolbar-group {
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .p7-pane-title {
@@ -430,6 +460,7 @@
 
 /* Center Focal Anchor: Live GPU Viewport */
 .p7-center {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -437,23 +468,55 @@
   background: var(--p7-bg);
 }
 
+.p7-pane-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 16;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.p7-pane-resizer.is-left {
+  left: -3px;
+}
+
+.p7-pane-resizer.is-right {
+  right: -3px;
+}
+
+.p7-pane-resizer:hover,
+.p7-pane-resizer.is-dragging {
+  background: rgba(245, 158, 11, 0.52);
+}
+
 .p7-viewport-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px 8px;
+  row-gap: 4px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--p7-border);
   background: var(--p7-surface);
-  flex-wrap: nowrap;
-  overflow-x: auto;
+  flex-wrap: wrap;
+  overflow-x: visible;
 }
 
 .p7-toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.p7-btn-icon {
+  min-width: 24px;
+  padding: 4px 6px;
+  text-align: center;
 }
 
 .p7-viewport-toolbar .p7-btn,
@@ -527,10 +590,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  flex-wrap: nowrap;
+  gap: 6px 8px;
+  flex-wrap: wrap;
   max-width: 100%;
-  overflow-x: auto;
+  overflow-x: visible;
 }
 
 .p7-play-bar .p7-btn,
@@ -559,6 +622,94 @@
 }
 
 .p7-btn.panel-hidden,
-.p7-select.panel-hidden {
+.p7-select.panel-hidden,
+.p7-vp-hud.panel-hidden {
   display: none;
+}
+
+/* Floating Viewport HUD (Top-Left of .p7-canvas-frame) */
+.p7-vp-hud {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.p7-vp-hud-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.38);
+}
+
+.p7-vp-hud-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  color: #cbd5e1;
+  font-family: var(--p7-font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 110ms ease, color 110ms ease, border-color 110ms ease;
+}
+
+.p7-vp-hud-btn:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.78);
+  color: #f8fafc;
+}
+
+.p7-vp-hud-btn.is-active {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(245, 158, 11, 0.65);
+  color: #fde68a;
+}
+
+.p7-vp-hud-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.p7-vp-hud-val {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fde68a;
+  padding: 0 4px;
+  user-select: none;
+}
+
+/* Body-Level Modal Portal (Renders cleanly ABOVE .p7-topbar z-index: 120) */
+.p7-modal-portal {
+  position: fixed;
+  inset: 0;
+  z-index: 280;
+  pointer-events: none;
+}
+
+.p7-modal-portal > * {
+  pointer-events: auto;
+}
+
+.p7-modal-portal > .p7-overlays-host {
+  pointer-events: none;
+}
+
+.p7-modal-portal > .p7-overlays-host > * {
+  pointer-events: auto;
 }

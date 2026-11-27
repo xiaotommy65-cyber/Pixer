@@ -289,7 +289,14 @@ export function buildEntityInspectorSections(
   const grid = document.createElement('div');
   grid.className = 'p7-prop-grid';
   const tr = resolved.transform;
-  const addNumField = (label: string, val: number, onCommit: (n: number) => void) => {
+  const clampScale = (n: number) => Math.round(Math.max(0.1, Math.min(8, n)) * 1000) / 1000;
+  const formatScale = (n: number) => String(Math.round(n * 100) / 100);
+  const addNumField = (
+    label: string,
+    val: number,
+    onCommit: (n: number) => void,
+    opts?: { step?: string; min?: string; max?: string; float?: boolean; testId?: string; onLive?: (n: number) => void },
+  ) => {
     const wrap = document.createElement('div');
     wrap.className = 'p7-field';
     const lbl = document.createElement('label');
@@ -297,10 +304,23 @@ export function buildEntityInspectorSections(
     const inp = document.createElement('input');
     inp.type = 'number';
     inp.className = 'p7-input p7-mono';
-    inp.value = String(Math.round(val));
+    if (opts?.step) inp.step = opts.step;
+    if (opts?.min) inp.min = opts.min;
+    if (opts?.max) inp.max = opts.max;
+    if (opts?.testId) inp.dataset.testid = opts.testId;
+    inp.value = opts?.float ? formatScale(val) : String(Math.round(val));
+    if (opts?.onLive) {
+      const onLive = opts.onLive;
+      inp.addEventListener('input', () => {
+        const parsed = Number(inp.value);
+        if (Number.isFinite(parsed)) onLive(parsed);
+      });
+    }
     inp.addEventListener('change', () => {
       const parsed = Number(inp.value);
-      if (Number.isFinite(parsed)) onCommit(parsed);
+      if (!Number.isFinite(parsed)) return;
+      if (opts?.float) inp.value = formatScale(clampScale(parsed));
+      onCommit(parsed);
     });
     wrap.append(lbl, inp);
     grid.appendChild(wrap);
@@ -312,7 +332,60 @@ export function buildEntityInspectorSections(
   addNumField('Y 座標', tr.y, (y) => commitTransform({ y }));
   addNumField('寬度 W', tr.w ?? 16, (w) => commitTransform({ w }));
   addNumField('高度 H', tr.h ?? 16, (h) => commitTransform({ h }));
+  addNumField('縮放 X (scaleX)', tr.scaleX ?? 1, (n) => commitTransform({ scaleX: clampScale(n) }), {
+    step: '0.05', min: '0.1', max: '8', float: true, testId: 'entity-scale-x',
+    onLive: (n) => cb.liveMutator?.mutateTransform(ent.id, { scaleX: clampScale(n) }),
+  });
+  addNumField('縮放 Y (scaleY)', tr.scaleY ?? 1, (n) => commitTransform({ scaleY: clampScale(n) }), {
+    step: '0.05', min: '0.1', max: '8', float: true, testId: 'entity-scale-y',
+    onLive: (n) => cb.liveMutator?.mutateTransform(ent.id, { scaleY: clampScale(n) }),
+  });
   trSec.append(grid);
+
+  if (resolved.mesh3d) {
+    const m3 = resolved.mesh3d;
+    const meshWrap = document.createElement('div');
+    meshWrap.className = 'p7-field';
+    const meshLbl = document.createElement('label');
+    meshLbl.textContent = '3D 縮放 (SX / SY / SZ)';
+    const meshGrid = document.createElement('div');
+    meshGrid.className = 'p7-model-atelier-vec3';
+    meshGrid.dataset.testid = 'entity-mesh3d-scale';
+    for (const [key, label, testId, val] of [
+      ['scaleX', 'SX', 'entity-mesh-scale-x', m3.scaleX ?? 1],
+      ['scaleY', 'SY', 'entity-mesh-scale-y', m3.scaleY ?? 1],
+      ['scaleZ', 'SZ', 'entity-mesh-scale-z', m3.scaleZ ?? 1],
+    ] as const) {
+      const cell = document.createElement('div');
+      cell.className = 'p7-field';
+      const axLbl = document.createElement('label');
+      axLbl.textContent = label;
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.className = 'p7-input p7-mono';
+      inp.step = '0.05';
+      inp.min = '0.1';
+      inp.max = '8';
+      inp.value = formatScale(val);
+      inp.dataset.testid = testId;
+      inp.setAttribute('aria-label', `3D 縮放 ${label}`);
+      inp.addEventListener('input', () => {
+        const parsed = Number(inp.value);
+        if (Number.isFinite(parsed)) cb.liveMutator?.mutateMesh3DScale(ent.id, { [key]: clampScale(parsed) });
+      });
+      inp.addEventListener('change', () => {
+        const parsed = Number(inp.value);
+        if (!Number.isFinite(parsed)) return;
+        const clamped = clampScale(parsed);
+        inp.value = formatScale(clamped);
+        session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { mesh3d: { [key]: clamped } } });
+      });
+      cell.append(axLbl, inp);
+      meshGrid.appendChild(cell);
+    }
+    meshWrap.append(meshLbl, meshGrid);
+    trSec.appendChild(meshWrap);
+  }
 
   // Section 2: Dynamic ECS Component Attach / Detach Manager
   const compSec = document.createElement('div');
@@ -547,6 +620,50 @@ export function buildEntityInspectorSections(
     const commitSpatial = (partial: Partial<typeof sp>) => {
       session.dispatch({ type: 'patch_entity', entityId: ent.id, patch: { spatial3d: partial } });
     };
+    const normYaw = (deg: number) => {
+      const w = ((deg % 360) + 360) % 360;
+      return w === 360 ? 0 : Math.round(w * 100) / 100;
+    };
+    const yawField = document.createElement('div');
+    yawField.className = 'p7-field';
+    const yawLbl = document.createElement('label');
+    yawLbl.textContent = '水平旋轉 Yaw (°)';
+    const yawRow = document.createElement('div');
+    yawRow.style.display = 'flex';
+    yawRow.style.alignItems = 'center';
+    yawRow.style.gap = '6px';
+    const yawInp = document.createElement('input');
+    yawInp.type = 'number';
+    yawInp.className = 'p7-input p7-mono';
+    yawInp.step = '1';
+    yawInp.min = '-360';
+    yawInp.max = '360';
+    yawInp.value = String(normYaw(sp.yaw ?? 0));
+    yawInp.style.flex = '1';
+    yawInp.style.minWidth = '0';
+    yawInp.dataset.testid = 'entity-spatial-yaw';
+    yawInp.setAttribute('aria-label', '水平旋轉 Yaw (°)');
+    yawInp.addEventListener('input', () => {
+      const parsed = Number(yawInp.value);
+      if (Number.isFinite(parsed)) cb.liveMutator?.mutateSpatial3D(ent.id, { yaw: parsed });
+    });
+    yawInp.addEventListener('change', () => {
+      const parsed = Number(yawInp.value);
+      if (!Number.isFinite(parsed)) return;
+      const yaw = normYaw(parsed);
+      yawInp.value = String(yaw);
+      commitSpatial({ yaw });
+    });
+    const yawResetBtn = makeBtn('0°', 'p7-btn p7-btn-xs', () => {
+      yawInp.value = '0';
+      cb.liveMutator?.mutateSpatial3D(ent.id, { yaw: 0 });
+      commitSpatial({ yaw: 0 });
+    });
+    yawResetBtn.dataset.testid = 'entity-spatial-yaw-reset';
+    yawResetBtn.title = '歸零水平旋轉 Yaw 為 0°';
+    yawRow.append(yawInp, yawResetBtn);
+    yawField.append(yawLbl, yawRow);
+
     spSec.append(
       makeSelectField(
         '所屬維度位面 (Dimension Mask)',
@@ -563,6 +680,7 @@ export function buildEntityInspectorSections(
           commitSpatial({ dimensionMask: mask });
         },
       ),
+      yawField,
       makeSliderGroup([
         ['海拔高度 Z', 0, 120, 2, sp.z ?? 0, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateSpatial3D(ent.id, { z: v }), (v) => commitSpatial({ z: v })],
         ['垂直厚度 Height', 4, 64, 2, sp.height ?? 16, (v) => `${Math.round(v)}px`, (v) => cb.liveMutator.mutateSpatial3D(ent.id, { height: v }), (v) => commitSpatial({ height: v })],

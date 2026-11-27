@@ -534,8 +534,8 @@
 }
 
 @media (max-width: 1080px) {
-  .p7-workbench {
-    grid-template-columns: 220px minmax(0, 1fr) 260px;
+  .p7-workbench:not(.is-left-collapsed):not(.is-right-collapsed) {
+    grid-template-columns: var(--p7-left-w, 220px) minmax(0, 1fr) var(--p7-right-w, 260px);
   }
 }
 

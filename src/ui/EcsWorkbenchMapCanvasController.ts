@@ -585,6 +585,19 @@ export class EcsWorkbenchMapCanvasController {
 
     canvas.addEventListener('pointerdown', (e) => {
       if (!this.deps.isEditingActive()) return;
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (
+        activeEl &&
+        (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT') &&
+        e.button === 0 &&
+        mapState.tool !== 'select' &&
+        mapState.tool !== 'pan' &&
+        !mapState.spacePanHeld &&
+        !e.altKey
+      ) {
+        activeEl.blur();
+        return;
+      }
       const proj = session.getProject();
       const wm = proj.worldMap;
       const room = wm && runtime.getActiveRoomId() ? wm.rooms.find((r) => r.id === runtime.getActiveRoomId()) : null;

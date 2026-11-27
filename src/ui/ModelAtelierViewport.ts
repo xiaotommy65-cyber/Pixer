@@ -47,8 +47,11 @@ export class ModelAtelierViewport {
   private previewYawDeg = DEFAULT_YAW_DEG;
   private previewPitchDeg = DEFAULT_PITCH_DEG;
   private previewZoom = DEFAULT_ZOOM;
+  private panX = 0;
+  private panY = 0;
 
-  private dragging = false;
+  private dragMode: 'none' | 'orbit' | 'pan' = 'none';
+  private spaceHeld = false;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private lastStatusText = '';
@@ -95,67 +98,113 @@ export class ModelAtelierViewport {
     this.statusLineEl.textContent = '模型就緒';
 
     this.element.append(viewBar, this.canvasHostEl, this.statusLineEl);
+    this.bindWindowEvents();
     this.syncViewBarActive();
+  }
+
+  private bindWindowEvents(): void {
+    const { signal } = this;
+    const isEditable = (t: EventTarget | null): boolean =>
+      t instanceof HTMLElement &&
+      (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+
+    window.addEventListener('keydown', (e) => {
+      if (!this.isModalVisible() || isEditable(e.target)) return;
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        this.spaceHeld = true;
+        this.canvas.style.cursor = 'grab';
+      } else if (
+        (e.code === 'Home' || e.code === 'Digit0' || e.code === 'Numpad0') &&
+        !e.ctrlKey && !e.metaKey && !e.altKey
+      ) {
+        e.preventDefault();
+        this.resetCameraView();
+      }
+    }, { signal });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'Space' || e.key === ' ') {
+        this.spaceHeld = false;
+        if (this.dragMode !== 'pan') this.canvas.style.cursor = '';
+      }
+    }, { signal });
+
+    window.addEventListener('blur', () => {
+      this.spaceHeld = false;
+      this.dragMode = 'none';
+      this.canvas.style.cursor = '';
+    }, { signal });
   }
 
   private bindCanvasEvents(target: HTMLCanvasElement): void {
     const { signal } = this;
+    target.addEventListener('contextmenu', (e) => e.preventDefault(), { signal });
 
-    target.addEventListener(
-      'pointerdown',
-      (e) => {
-        this.dragging = true;
-        this.lastPointerX = e.clientX;
-        this.lastPointerY = e.clientY;
-        try {
-          target.setPointerCapture(e.pointerId);
-        } catch {
-          // Ignore synthetic pointer events in tests
-        }
-      },
-      { signal },
-    );
+    target.addEventListener('pointerdown', (e) => {
+      if (e.button === 1 || (e.button === 0 && this.spaceHeld)) {
+        e.preventDefault();
+        this.dragMode = 'pan';
+        target.style.cursor = 'grabbing';
+      } else if (e.button === 2 || e.button === 0) {
+        if (e.button === 2) e.preventDefault();
+        this.dragMode = 'orbit';
+      } else {
+        return;
+      }
+      this.lastPointerX = e.clientX;
+      this.lastPointerY = e.clientY;
+      try { target.setPointerCapture(e.pointerId); } catch { /* ignore synthetic pointer events */ }
+    }, { signal });
 
-    target.addEventListener(
-      'pointermove',
-      (e) => {
-        if (!this.dragging) return;
-        const dx = e.clientX - this.lastPointerX;
-        const dy = e.clientY - this.lastPointerY;
-        this.lastPointerX = e.clientX;
-        this.lastPointerY = e.clientY;
+    target.addEventListener('pointermove', (e) => {
+      if (this.dragMode === 'none') return;
+      const dx = e.clientX - this.lastPointerX;
+      const dy = e.clientY - this.lastPointerY;
+      this.lastPointerX = e.clientX;
+      this.lastPointerY = e.clientY;
 
-        if (
-          this.viewMode === 'ortho_top' ||
-          this.viewMode === 'ortho_front' ||
-          this.viewMode === 'ortho_side' ||
-          this.viewMode === 'ortho_iso'
-        ) {
-          this.viewMode = 'perspective';
-          this.syncViewBarActive();
-        }
+      if (this.dragMode === 'pan') {
+        const invScale = 1 / Math.max(0.6, this.previewZoom);
+        const rad = this.previewYawDeg * (Math.PI / 180);
+        const cosY = Math.cos(rad);
+        const sinY = Math.sin(rad);
+        this.panX = Math.max(-256, Math.min(256, this.panX - (dx * cosY - dy * sinY) * invScale));
+        this.panY = Math.max(-256, Math.min(256, this.panY - (dx * sinY + dy * cosY) * invScale));
+        return;
+      }
 
-        this.previewYawDeg = (this.previewYawDeg + dx * 0.65) % 360;
-        this.previewPitchDeg = Math.max(-85, Math.min(85, this.previewPitchDeg + dy * 0.55));
-      },
-      { signal },
-    );
+      if (this.viewMode !== 'perspective' && this.viewMode !== 'quad') {
+        this.viewMode = 'perspective';
+        this.syncViewBarActive();
+      }
+      this.previewYawDeg = (this.previewYawDeg + dx * 0.65) % 360;
+      this.previewPitchDeg = Math.max(-85, Math.min(85, this.previewPitchDeg + dy * 0.55));
+    }, { signal });
 
     const stopDrag = (): void => {
-      this.dragging = false;
+      this.dragMode = 'none';
+      target.style.cursor = this.spaceHeld ? 'grab' : '';
     };
     target.addEventListener('pointerup', stopDrag, { signal });
     target.addEventListener('pointercancel', stopDrag, { signal });
 
-    target.addEventListener(
-      'wheel',
-      (e) => {
-        e.preventDefault();
-        const factor = e.deltaY < 0 ? 1.1 : 0.9;
-        this.previewZoom = Math.max(0.8, Math.min(20, this.previewZoom * factor));
-      },
-      { signal, passive: false },
-    );
+    target.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      this.previewZoom = Math.max(0.6, Math.min(16, this.previewZoom * factor));
+    }, { signal, passive: false });
+
+    target.addEventListener('dblclick', (e) => {
+      if (this.viewMode !== 'quad') return;
+      const rect = target.getBoundingClientRect();
+      const relX = rect.width > 0 ? (e.clientX - rect.left) / rect.width : e.clientX / CANVAS_W;
+      const relY = rect.height > 0 ? (e.clientY - rect.top) / rect.height : e.clientY / CANVAS_H;
+      const nextMode: ModelViewMode = relY < 0.5
+        ? (relX < 0.5 ? 'perspective' : 'ortho_top')
+        : (relX < 0.5 ? 'ortho_front' : 'ortho_side');
+      this.setViewMode(nextMode);
+    }, { signal });
   }
 
   public ensurePreviewGpuInit(): void {
@@ -206,7 +255,9 @@ export class ModelAtelierViewport {
       cancelAnimationFrame(this.rafId);
       this.rafId = 0;
     }
-    this.dragging = false;
+    this.dragMode = 'none';
+    this.spaceHeld = false;
+    this.canvas.style.cursor = '';
   }
 
   public destroy(): void {
@@ -248,8 +299,8 @@ export class ModelAtelierViewport {
     const centerZ = this.computeModelCenterZ(model);
 
     gpu.setCamera3D(
-      0,
-      0,
+      this.panX,
+      this.panY,
       this.previewZoom,
       this.previewPitchDeg,
       38,
@@ -301,11 +352,20 @@ export class ModelAtelierViewport {
     this.syncViewBarActive();
   }
 
+  public getCameraState(): { viewMode: ModelViewMode; yawDeg: number; pitchDeg: number; zoom: number; panX: number; panY: number } {
+    return {
+      viewMode: this.viewMode, yawDeg: this.previewYawDeg, pitchDeg: this.previewPitchDeg,
+      zoom: this.previewZoom, panX: this.panX, panY: this.panY,
+    };
+  }
+
   private resetCameraView(): void {
     this.viewMode = 'perspective';
     this.previewYawDeg = DEFAULT_YAW_DEG;
     this.previewPitchDeg = DEFAULT_PITCH_DEG;
     this.previewZoom = DEFAULT_ZOOM;
+    this.panX = 0;
+    this.panY = 0;
     this.syncViewBarActive();
   }
 
