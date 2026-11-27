@@ -84,9 +84,10 @@ export class EcsWorldMapController {
     shadowSoftness: 0.36,
   };
 
-  // Camera state (world top-left in logical pixels)
+  // Camera state (world top-left in logical pixels + smooth Z focus height)
   public cameraX = 0;
   public cameraY = 0;
+  public cameraZ = 0;
   private editorCamOverride = false;
   private editorCamX = 0;
   private editorCamY = 0;
@@ -190,6 +191,10 @@ export class EcsWorldMapController {
 
   public getActiveRoomId(): string {
     return this.activeRoomId;
+  }
+
+  public getStoryHeight(): number {
+    return this.activeRoom ? (this.activeRoom.storyHeight ?? this.activeRoom.wallExtrudeH ?? 24) : 24;
   }
 
   /**
@@ -351,6 +356,7 @@ export class EcsWorldMapController {
       this.cachedAmbientLightCount = 0;
       this.cameraX = 0;
       this.cameraY = 0;
+      this.cameraZ = 0;
       return;
     }
     const desiredId =
@@ -364,6 +370,7 @@ export class EcsWorldMapController {
     this.clearedEntityIds.clear();
     this.aiTimers.clear();
     this.director.reset(true);
+    this.cameraZ = 0;
     this.heroHpCarry = -1;
     this.heroMaxHpCarry = 10;
     this.facingX = 0;
@@ -490,6 +497,7 @@ export class EcsWorldMapController {
     const c = core.components;
     let heroFoundX = spawnX ?? room.cols * wm.tileSize * 0.5;
     let heroFoundY = spawnY ?? (room.rows - 3) * wm.tileSize;
+    let heroFoundZ = 0;
 
     for (let i = 0; i < this.project.entities.length; i++) {
       const init = this.project.entities[i];
@@ -522,6 +530,8 @@ export class EcsWorldMapController {
         }
         heroFoundX = tr.x + tr.w * 0.5;
         heroFoundY = tr.y + tr.h * 0.5;
+        const heroSp = core.getComponent(h, c.Spatial3D);
+        heroFoundZ = heroSp ? heroSp.z : 0;
         if (hp) {
           if (this.heroHpCarry > 0) {
             hp.hp = Math.min(hp.maxHp, this.heroHpCarry);
@@ -549,6 +559,7 @@ export class EcsWorldMapController {
 
     if (!this.editorCamOverride) {
       this.snapCameraTo(heroFoundX, heroFoundY, vpW, vpH);
+      this.cameraZ = heroFoundZ;
     } else {
       this.clampCamera(vpW, vpH, 1.0);
     }
@@ -752,6 +763,7 @@ export class EcsWorldMapController {
           }
           light.x = c * ts + ts * 0.5;
           light.y = wy + ts * 1.1;
+          light.z = 16;
           light.radius = def.ambientLight.radius;
           light.color = def.ambientLight.color;
           light.intensity = def.ambientLight.intensity;
@@ -823,6 +835,21 @@ export class EcsWorldMapController {
             slot.emissive = def?.emissive;
             slot.alpha = 1;
             this.outVoxels3d[vCount++] = slot;
+
+            if (z > 0 && def?.ambientLight && this.cachedAmbientLightCount < 22) {
+              let light = this.cachedAmbientLights[this.cachedAmbientLightCount];
+              if (!light) {
+                light = { x: 0, y: 0, z: 16, radius: 24, color: '#ffffff', intensity: 0.5 };
+                this.cachedAmbientLights[this.cachedAmbientLightCount] = light;
+              }
+              light.x = c * ts + ts * 0.5;
+              light.y = r * ts + ts * 0.5;
+              light.z = z * storyH + 16;
+              light.radius = def.ambientLight.radius;
+              light.color = def.ambientLight.color;
+              light.intensity = def.ambientLight.intensity;
+              this.cachedAmbientLightCount++;
+            }
           }
         }
       }
@@ -1021,6 +1048,7 @@ export class EcsWorldMapController {
     const sLB = this.voxelVolume.sampleSupportZ(left, bot, sp.z, sp.stepHeight);
     const nextSupport = Math.max(sC, sLT, sRT, sRB, sLB);
     const ceilingZ = this.voxelVolume.sampleCeilingZ(footCx, footCy, sp.z, 9999);
+    sp.groundZ = nextSupport;
     sp.ceilingZ = ceilingZ;
     sp.prevZ = sp.z;
     if (sp.gravityZ > 0) {
@@ -1147,6 +1175,11 @@ export class EcsWorldMapController {
             this.cameraX = this.director.cameraX;
             this.cameraY = this.director.cameraY;
             this.clampCamera(vpW, vpH, this.director.cameraZoom);
+            const hSpCut = core.getComponent(heroHandle, c.Spatial3D);
+            const targetZ = hSpCut ? hSpCut.z : 0;
+            const zRate = 1 - Math.exp(-Math.max(0, directorDt) * 8.5);
+            this.cameraZ += (targetZ - this.cameraZ) * zRate;
+            if (Math.abs(targetZ - this.cameraZ) < 0.05) this.cameraZ = targetZ;
           }
         } else {
           // 1. 8-Directional Movement + Dash
@@ -1266,6 +1299,9 @@ export class EcsWorldMapController {
             this.cameraX = this.director.cameraX;
             this.cameraY = this.director.cameraY;
             this.clampCamera(vpW, vpH, this.director.cameraZoom);
+            const zRate = 1 - Math.exp(-Math.max(0, directorDt) * 8.5);
+            this.cameraZ += (heroZ - this.cameraZ) * zRate;
+            if (Math.abs(heroZ - this.cameraZ) < 0.05) this.cameraZ = heroZ;
           }
 
           // 7. Room Portal Traversal
@@ -1829,6 +1865,7 @@ export class EcsWorldMapController {
       const l = acquireLight(idx);
       l.x = src.x;
       l.y = src.y;
+      l.z = src.z;
       l.radius = src.radius;
       l.color = src.color;
       l.intensity = src.intensity;

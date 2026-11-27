@@ -1,6 +1,6 @@
 import { emitModel3DToGpu } from '../ecs/EcsModel3D.ts';
 import type { GpuEngine } from '../gpu/GpuEngine.ts';
-import type { CardinalFacing3D } from '../gpu/GpuMesh3DBatch.ts';
+import { FACE_CULL_TOP, type CardinalFacing3D } from '../gpu/GpuMesh3DBatch.ts';
 import {
   computeCamera3D,
   createComputedCamera3D,
@@ -124,6 +124,9 @@ export class SceneTrue3DPass {
     const ambDim = 1 - Math.min(0.42, (snap.ambientDarkness ?? 0) * 0.58);
     const cullHalfW = (viewW / Math.max(0.25, zoom)) * 1.25 + 160;
     const cullHalfH = (viewH / Math.max(0.25, zoom)) * 1.65 + 220;
+    const cutawayActive = Boolean(hd2d.cutawayActive) && !hd2d.quadView && hd2d.cutawayPlaneZ !== undefined;
+    const cutawayPlaneZ = hd2d.cutawayPlaneZ ?? 99999;
+    const cutawayAlpha = Math.max(0, Math.min(1, hd2d.cutawayAlpha ?? hd2d.roofCutawayAlpha ?? 0.18));
 
     // 1. Dynamic 3D point lights in world space (shared by Mesh3D, 3D walls, floors, and billboards)
     for (let i = 0; i < snap.lights.length; i++) {
@@ -136,8 +139,13 @@ export class SceneTrue3DPass {
       }
       const falloff = l.falloffPower ?? 2.0;
       const lz = l.z ?? 24;
+      const lightFloorZ = Math.max(0, lz - 24);
+      const lightCutaway = cutawayActive && lightFloorZ >= cutawayPlaneZ - 0.5;
       gpu.pushDynamicLight3D(l.x, l.y, lz, l.radius, l.color, l.intensity * 1.12, falloff);
-      gpu.drawLight3D(l.x, l.y, 0.45, l.radius, l.color, l.intensity * 0.34, falloff);
+      if (!lightCutaway || cutawayAlpha > 0.01) {
+        const glowScale = lightCutaway ? cutawayAlpha : 1;
+        gpu.drawLight3D(l.x, l.y, Math.max(0.45, lightFloorZ + 0.45), l.radius, l.color, l.intensity * 0.34 * glowScale, falloff);
+      }
     }
 
     if (hd2d.showOrthoGrid3d) {
@@ -240,7 +248,7 @@ export class SceneTrue3DPass {
       }
     }
 
-    // 2b. Multi-Story 3D Voxels (Cubes, Half-Slabs, Arches, Ramps & Stairs)
+    // 2b. Multi-Story 3D Voxels (Cubes, Half-Slabs, Arches, Ramps & Stairs) with Interior Roof Cutaway
     if (snap.voxels3d && snap.voxels3d.length > 0) {
       for (let i = 0; i < snap.voxels3d.length; i++) {
         const v = snap.voxels3d[i];
@@ -249,11 +257,18 @@ export class SceneTrue3DPass {
         if (Math.abs(vcx - camCenterX) > cullHalfW || Math.abs(vcy - camCenterY) > cullHalfH) {
           continue;
         }
+        const isCutUpper = cutawayActive && v.z >= cutawayPlaneZ - 0.5;
+        if (isCutUpper && cutawayAlpha <= 0.01) {
+          continue;
+        }
         const sideId = v.sideSprite && v.sideSprite !== 'solid' ? v.sideSprite : v.sprite;
         const rough = v.roughness ?? 0.62;
         const met = v.metallic ?? 0.08;
         const em = v.emissive ?? 0;
-        const vAlpha = v.alpha ?? 1;
+        const vAlpha = (v.alpha ?? 1) * (isCutUpper ? cutawayAlpha : 1);
+        const isCutBoundaryBelow =
+          cutawayActive && v.z < cutawayPlaneZ - 0.5 && v.z + v.h >= cutawayPlaneZ - 0.5;
+        const effCullMask = isCutBoundaryBelow ? (v.cullMask & ~FACE_CULL_TOP) : v.cullMask;
 
         if (v.shape === 'cube') {
           gpu.drawCuboid3D(
@@ -266,7 +281,7 @@ export class SceneTrue3DPass {
             v.w,
             v.d,
             v.h,
-            v.cullMask,
+            effCullMask,
             v.tint,
             vAlpha,
             defaultPaletteRow,
@@ -285,7 +300,7 @@ export class SceneTrue3DPass {
             v.w,
             v.d,
             v.h * 0.5,
-            v.cullMask,
+            effCullMask,
             v.tint,
             vAlpha,
             defaultPaletteRow,
@@ -329,16 +344,23 @@ export class SceneTrue3DPass {
         continue;
       }
       const footZ = e.elevationZ ?? 0;
+      const isEntCutUpper = cutawayActive && footZ >= cutawayPlaneZ - 0.5;
+      if (isEntCutUpper && cutawayAlpha <= 0.01) {
+        continue;
+      }
+      const entAlphaScale = isEntCutUpper ? cutawayAlpha : 1;
       const drawW = e.w * (e.scaleX ?? 1);
       const drawH = e.h * (e.scaleY ?? 1);
 
-      if (e.castShadow !== false && !e.additive) {
-        const zFactor = 1 / (1 + Math.max(0, footZ) * 0.04);
+      if (e.castShadow !== false && !e.additive && !isEntCutUpper) {
+        const supportZ = e.groundZ ?? 0;
+        const heightAboveGround = Math.max(0, footZ - supportZ);
+        const zFactor = 1 / (1 + heightAboveGround * 0.04);
         const r = (e.shadowRadius ?? e.w * 0.44) * zFactor;
         gpu.drawGroundShadow3D(
           footX,
           footY + (e.shadowOffsetY ?? 0) - 2,
-          0.25,
+          supportZ + 0.25,
           Math.max(8, r * 2.25),
           Math.max(5, r * 1.15),
           '#0c0816',
@@ -364,6 +386,7 @@ export class SceneTrue3DPass {
           e.modelAnimTime ?? frameTimeSec,
           e.tint,
           e.flash ?? 0,
+          (e.alpha ?? 1) * entAlphaScale,
         );
         continue;
       }
@@ -432,7 +455,7 @@ export class SceneTrue3DPass {
               effectiveTilt,
               ly.flipX,
               e.tint ?? ly.tint,
-              (e.alpha ?? 1) * ly.alpha,
+              (e.alpha ?? 1) * ly.alpha * entAlphaScale,
               e.flash ?? 0,
               ly.additive,
               ly.paletteRow,
@@ -458,7 +481,7 @@ export class SceneTrue3DPass {
         e.additive ? (projection === 'ortho_front' || projection === 'ortho_side' ? 0 : 34) : effectiveTilt,
         e.flipX ?? false,
         e.tint,
-        e.alpha ?? 1,
+        (e.alpha ?? 1) * entAlphaScale,
         e.flash ?? 0,
         e.additive ?? false,
         e.paletteRow ?? defaultPaletteRow,

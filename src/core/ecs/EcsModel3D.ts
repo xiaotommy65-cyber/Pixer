@@ -495,7 +495,9 @@ export function emitModel3DToGpu(
   animTimeSec = 0,
   tint?: string,
   flash = 0,
+  alphaScale = 1,
 ): void {
+  if (!(alphaScale > 0.001)) return;
   writeTransformMatrix(SCRATCH_ROOT_MAT, 0, worldX, worldY, worldZ, 0, 0, yawDeg, scaleX, scaleY, scaleZ, 0, 0, 0);
 
   const partCount = Math.min(MAX_MODEL_PARTS, model.parts.length);
@@ -554,7 +556,8 @@ export function emitModel3DToGpu(
       const m23 = SCRATCH_PART_MATS[mOff + 14];
 
       const effTint = tint ?? part.tint;
-      const alpha = part.alpha ?? 1;
+      const alpha = (part.alpha ?? 1) * alphaScale;
+      if (!(alpha > 0.001)) continue;
       const paletteRow = part.paletteRow ?? -1;
       const roughness = part.roughness ?? 0.58;
       const metallic = part.metallic ?? 0.08;
@@ -669,19 +672,22 @@ export function emitModel3DToGpu(
 
   if (model.rawMesh) {
     const raw = model.rawMesh;
-    const rect = raw.spriteId ? gpu.atlas.getRect(raw.spriteId) : null;
-    SCRATCH_MESH_OPTS.atlasRect = rect;
-    SCRATCH_MESH_OPTS.tint = tint ?? raw.tint;
-    SCRATCH_MESH_OPTS.alpha = raw.alpha ?? 1;
-    SCRATCH_MESH_OPTS.paletteRow = raw.paletteRow ?? -1;
-    SCRATCH_MESH_OPTS.roughness = raw.roughness ?? 0.58;
-    SCRATCH_MESH_OPTS.metallic = raw.metallic ?? 0.08;
-    SCRATCH_MESH_OPTS.emissive = raw.emissive ?? 0;
-    SCRATCH_MESH_OPTS.flash = flash;
-    SCRATCH_MESH_OPTS.ao = 1.0;
-    SCRATCH_MESH_OPTS.mode = rect ? 0 : 1;
-    SCRATCH_MESH_OPTS.modelMatrix = SCRATCH_ROOT_MAT;
+    const rawAlpha = (raw.alpha ?? 1) * alphaScale;
+    if (rawAlpha > 0.001) {
+      const rect = raw.spriteId ? gpu.atlas.getRect(raw.spriteId) : null;
+      SCRATCH_MESH_OPTS.atlasRect = rect;
+      SCRATCH_MESH_OPTS.tint = tint ?? raw.tint;
+      SCRATCH_MESH_OPTS.alpha = rawAlpha;
+      SCRATCH_MESH_OPTS.paletteRow = raw.paletteRow ?? -1;
+      SCRATCH_MESH_OPTS.roughness = raw.roughness ?? 0.58;
+      SCRATCH_MESH_OPTS.metallic = raw.metallic ?? 0.08;
+      SCRATCH_MESH_OPTS.emissive = raw.emissive ?? 0;
+      SCRATCH_MESH_OPTS.flash = flash;
+      SCRATCH_MESH_OPTS.ao = 1.0;
+      SCRATCH_MESH_OPTS.mode = rect ? 0 : 1;
+      SCRATCH_MESH_OPTS.modelMatrix = SCRATCH_ROOT_MAT;
 
-    gpu.pushMesh3DIndexed(raw.positions, raw.normals, raw.uvs ?? null, raw.indices, SCRATCH_MESH_OPTS);
+      gpu.pushMesh3DIndexed(raw.positions, raw.normals, raw.uvs ?? null, raw.indices, SCRATCH_MESH_OPTS);
+    }
   }
 }

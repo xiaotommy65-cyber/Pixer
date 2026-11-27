@@ -1,13 +1,19 @@
-# Pixer — 工程交接書（Engineering Handoff · Wave 1–5 Spatial 3D Complete）
+# Pixer — 工程交接書（Engineering Handoff · Wave 1–5.5 Spatial 3D & Multi-Story Tower Complete）
 
-> **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit`**（~0.7s 唯讀體檢），即可零盲點掌握全倉狀態。
+> **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit -- --strict`**（~0.8s 唯讀體檢），即可零盲點掌握全倉狀態。
 
 ---
 
 ## 1. 目前 Git 分支與交付進度
 
-- **`main` 基線**：PR #1 → #12（`12269ae`，Phase 0 → Phase 5 Complete + `.agents/` 本機工作流整備）。
-- **目前推進分支：`feat/swarm-p0-p1-hardening`**（已合入 `origin/main@49b069c` 並通過全門檻與實機 GPU 驗收；請推送後開 PR 合入 `main`）：
+- **`main` 基線**：PR #1 → #14（`3802295`，Wave 1–5 Spatial 3D Complete，含 Phase 0–7、Universal Pixel Forge、多管線烘焙、真 Z-Up 3D 空間引擎、`ModelAtelierModalView` 與 `.glb`/`.bbmodel` 匯入）。
+- **最新推進分支：`feat/multi-story-tower-cutaway`**（基於 `main@3802295`，已完成全門檻驗證並透過 PR 合入 `main`）：
+  - **Wave 5.5｜多層立體建築與高塔探索體驗（Multi-Story Building & Explorable Tower）**：
+    - **自動相機 Z 高度跟隨（Auto Camera Z Follow）**：於 [`EcsProjectSchema.ts`](../src/core/ecs/EcsProjectSchema.ts) 與 [`SceneTypes.ts`](../src/core/types/SceneTypes.ts) 擴充 `autoFollowHeroZ`；於 [`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts) 新增平滑指數阻尼 `cameraZ` 追蹤（切房即時鎖定至主角 `Spatial3D.z`），並由 [`EcsSnapshotProjector.ts`](../src/core/ecs/EcsSnapshotProjector.ts) 寫入 `hd2dDepth.camCenterZ`（尊重 `autoFollowHeroZ === false`、`quadView` 及 `editorCamOverride`）。
+    - **室內屋頂／上層自動剖面（Interior Roof / Upper-Floor Cutaway）**：於 [`EcsVoxelVolume.ts`](../src/core/ecs/EcsVoxelVolume.ts) 新增零分配 `hasUpperVoxelAtFootprint()` / `hasAnyVoxelAtOrAboveStory()`，搭配 `roofCutawayMode`（`'auto' | 'always' | 'off'`）與 `roofCutawayAlpha`（預設 `0.18`）；於 [`SceneTrue3DPass.ts`](../src/core/runtime/SceneTrue3DPass.ts) 將剖面上方體素、3D 模型（[`EcsModel3D.ts`](../src/core/ecs/EcsModel3D.ts) `alphaScale`）、Billboard 與樓層光源光暈自動隱藏或送入硬體半透明 `meshAlpha`（`depthWrite: false`），同時對緊貼 `cutawayPlaneZ` 下方的邊界牆體解除 `FACE_CULL_TOP` 封頂，並將高層角色接觸陰影精準投影至 `groundZ + 0.25`。
+    - **Z 樓層印章貼齊與真實 3D 樓層光源**：擴充 [`EcsStudioSession.ts`](../src/core/ecs/EcsStudioSession.ts) `instantiate_prefab` 支援選配 `z`（寫入 `overrides.spatial3d.z`）與 `set_camera_3d_pose` 剖面欄位（維持 `48/48` 指令目錄對齊）；[`EcsWorkbenchMapCanvasController.ts`](../src/ui/EcsWorkbenchMapCanvasController.ts) 與 [`EcsMapDesignerPanel.ts`](../src/ui/EcsMapDesignerPanel.ts) 統一 `storyH = room.storyHeight ?? room.wallExtrudeH ?? 24`，印章工具自動貼齊 `activeZLevel * storyH`；[`EcsWorkbenchSceneInspector.ts`](../src/ui/EcsWorkbenchSceneInspector.ts) 新增「跟隨主角 Z」與「上層剖面（自動/恆開/關閉）」控制鈕；修正 [`EcsSnapshotProjector.ts`](../src/core/ecs/EcsSnapshotProjector.ts) `hd2d_3d` 點光源 Y 軸重複扣減與 [`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts) 環境體素光源 Z 高度快取，並將地板光暈投影至各樓層地板高度。
+    - **旗艦示範三層守望塔（PA-14 Dogfooding）**：於 [`ObsidianCitadelProject.ts`](../src/game/obsidianCitadel/ObsidianCitadelProject.ts) `courtyard`（`storyHeight: 28`）東南側建置可完整登頂的 L0→L1→L2 哥德守望塔（雙拱門封閉地窖自動觸發剖面、L 型轉角階梯、頂樓雕塑級 3D `models3d.citadel_beacon` 含 4 零件動畫與 24-index 八面體 `rawMesh`、L0/L2 雙層獨立火把），並補齊 [`WorldMap3D.test.ts`](../scripts/sim/WorldMap3D.test.ts) 與 [`DualPerspective3D.test.ts`](../scripts/sim/DualPerspective3D.test.ts) 端到端測試。
+- **歷史里程碑（已合入 `main@3802295`）**：
   - **唯讀審計底座與主計畫（`83d3cd7`）**：新增 [`scripts/pixer-audit.ts`](../scripts/pixer-audit.ts) 與 [`scripts/audit/`](../scripts/audit)（狀態/數學/Shader/Zero-GC/死 CSS/指令目錄 100% 唯讀掃描），並建立 [`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 四大史詩藍圖與防停滯四鐵律。
   - **Wave 1｜P0–P1 引擎加固（`21e43a4`、`940b84b`、`864f1b5`、`1e42791`）**：
     - **核心數學與 Zero-Box**：`NoiseMath` 32-bit Murmur3 混洗與 `fbm2D` 正交旋轉；`ColorMath` 嚴格 hex 驗證、超色域防塌陷與單態 `writeVec3`；`SpringDynamics` 60Hz 歸一化 Verlet 阻尼與等長 IK 防護；`Visibility2D` 單位化 DDA 角落法線與對角穿縫保護；`SpatialHash` 半開區間 `ceil - 1`。
@@ -44,11 +50,11 @@
 
 - **本機環境**：Windows 已安裝並寫入 User PATH：`Node v26.13.0`、`Bun 1.4.5`、`Git 2.56.1`、`uv`/`uvx`，PowerShell `CurrentUser` `RemoteSigned` + `Unblock-File` 已生效；Swarm `workspace: "share"` 獨立工作樹可直接運作。
 - **驗證門檻與最新基線**：
-  - `bun run audit -- --strict`：**PASS**（exit 0，`critical=0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=6`，`ecsCommandTypes=48/48`）
+  - `bun run audit -- --strict`：**PASS**（exit 0，`critical=0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=6`，`ecsCommandTypes=48/48`，`agentsLines=43/120`）
   - `bun run lint`（`tsc --noEmit`）：**0 errors**
-  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.33ms / 0KB`）
-  - `npm run test`：**89 pass / 0 fail**
-  - `bun run build && bun run clean`：**PASS**（222 modules，`355ms`，**0 chunk warnings**：`cartridges 458.46 kB`、`cartridges-hd2d 47.71 kB`、`model-atelier 260.60 kB`、`index 226.08 kB`、`ecs-workbench 202.71 kB`、`external-import 115.41 kB`、`sprite-atelier 73.07 kB`、`event-graph 32.95 kB`、`cloud-publish 14.82 kB`、`legacy-v1-sim 24.38 kB`；`dist/` 已清理）
+  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.35ms`、`EcsCartridgeRuntime=0.76ms`、`PA-14 extrudedWalls=100, shadows=18`）
+  - `npm run test`：**93 pass / 0 fail**
+  - `bun run build && bun run clean`：**PASS**（222 modules，`949ms`，**0 chunk warnings**：`cartridges 460.56 kB`、`model-atelier 260.60 kB`、`index 226.08 kB`、`ecs-workbench 204.04 kB`、`external-import 115.41 kB`、`sprite-atelier 73.07 kB`、`core-ecs-interop 57.92 kB`、`cartridges-hd2d 52.15 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`、`cloud-publish 14.82 kB`；`dist/` 已清理）
   - **本機瀏覽器實機驗收**：`http://localhost:3001/` WebGL2 實測「四視圖分割 + XYZ 軸 Gizmo + 正交格線」與「`ModelAtelierModalView` 載入範例 `.bbmodel`（`Knight_Relic_Chest`）3D 即時預覽 + 儲存」，全程 **0 console / page / shader errors**。
 - **不可動搖鐵則**：
   1. 任何開工與收尾先跑 `bun run audit -- --strict`；新修結構問題必補規則與端到端持久性測試。
@@ -57,9 +63,9 @@
 
 ---
 
-## 3. 下一階段推進路線（PR 合入與正式環境雲端佈建）
+## 3. 下一階段推進路線
 
-1. **推送並合入 PR（`feat/swarm-p0-p1-hardening` → `main`）**：
-   - 推送分支至 GitHub 開 PR，確認 Actions CI（Bun `1.4.5`）全綠後合入 `main`。
-2. **正式環境雲端佈建 / BYOK AI 生圖接橋**：
+1. **技術債瘦身（`ARCH-GOD-FILE` 模組拆分 & 舊分支整理）**：
+   - 依 `bun run audit` 清單優先拆分超大模組（`EcsSpatialOracle.ts`、`WebGpuBackend.ts`、`EcsWorldMapController.ts`、`EcsStudioSession.ts`、`switch.css` / `lobby.css` / `studio7.css`）並清理已合入之過時本機／遠端分支。
+2. **Phase 8｜正式環境雲端佈建 / BYOK AI 生圖接橋**：
    - 依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase PostgreSQL migration、Cloudflare R2 (`pixer-assets`) 與 `workers/api`，設定 `VITE_CLOUD_API_BASE` / `VITE_CDN_BASE_URL` 並實測工作站「雲端發佈」與 `?play=<slug>` 遠端載入／SRAM 同步，或選配接橋外部生圖 API 至 Pixel Forge。

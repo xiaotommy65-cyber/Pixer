@@ -128,6 +128,7 @@ export type EcsStudioCommand =
       name?: string;
       x?: number;
       y?: number;
+      z?: number;
       roomId?: string;
       overrides?: EcsComponentOverrides;
     }
@@ -222,6 +223,9 @@ export type EcsStudioCommand =
       rollDeg?: number;
       fovDeg?: number;
       camCenterZ?: number;
+      autoFollowHeroZ?: boolean;
+      roofCutawayMode?: 'auto' | 'always' | 'off';
+      roofCutawayAlpha?: number;
       cameraProjection3d?: Camera3DProjectionMode;
       quadView?: boolean;
       shadowMapEnabled?: boolean;
@@ -252,7 +256,7 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'update_prefab', category: 'prefab', fields: 'prefabId, name?, category?, patch?, attachComponent?, detachComponent?', note: 'Update a Prefab blueprint name, category, or components in-place.' },
   { type: 'delete_prefab', category: 'prefab', fields: 'prefabId, mode?: "unlink"|"remove_instances"', note: 'Delete a Prefab blueprint and either bake/unlink instances or remove them.' },
   { type: 'save_entity_as_prefab', category: 'prefab', fields: 'entityId, prefabId, name?, category?, linkSourceEntity?', note: 'Promote an entity into a reusable Prefab blueprint and optionally link it.' },
-  { type: 'instantiate_prefab', category: 'prefab', fields: 'prefabId, entityId?, name?, x?, y?, roomId?, overrides?', note: 'Spawn a linked prefab instance in a room.' },
+  { type: 'instantiate_prefab', category: 'prefab', fields: 'prefabId, entityId?, name?, x?, y?, z?, roomId?, overrides?', note: 'Spawn a linked prefab instance in a room (optional z snaps spatial3d.z to a 3D story).' },
   { type: 'revert_prefab_overrides', category: 'prefab', fields: 'entityId, keepPosition?', note: 'Reset sparse component overrides on a Prefab instance back to blueprint defaults.' },
   { type: 'unlink_prefab', category: 'prefab', fields: 'entityId', note: 'Bake resolved Prefab components onto an entity and break its Prefab link.' },
   { type: 'spawn_entity', category: 'entity', fields: 'entity: EcsEntityInitDef', note: 'Spawn a standalone ECS entity.' },
@@ -270,7 +274,7 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'remove_cutscene', category: 'scene', fields: 'cutsceneId', note: 'Remove a cutscene / PV sequence by ID.' },
   { type: 'set_atmosphere', category: 'scene', fields: 'patch: {skyTop?, skyBottom?, ambientDarkness?, waterLevelNorm?, waterTint?, shadowOcclusion?, shadowStrength?, shadowSoftness?, tiltShiftBlur?, tiltShiftFocusY?, ambientParticles?: "none"|"embers"|"fireflies"|"dust"|"snow", ambientParticleDensity?, juiceScale?}', note: 'Configure HD-2D sky, 2D raymarched wall shadow occlusion, Tilt-Shift DoF, ambient GPU particles, and combat hitstop/shake juice scale.' },
   { type: 'set_global', category: 'scene', fields: 'key, value', note: 'Set initial project global variable.' },
-  { type: 'set_projection', category: 'scene', fields: 'patch: {mode?: "ortho_2d"|"hd2d_iso"|"hd2d_3d"|"first_person_25d", pitchDeg?, fovDeg?, wallHeightScale?, billboardTiltDeg?, obliqueShadowAlpha?, elevationScale?, perspectiveSkew?, activeDimensionMask?, allowDimensionShift?}', note: 'Switch between True 3D HD-2D Perspective (hd2d_3d), 3/4 Strong-Volume 2.5D (hd2d_iso), ortho_2d, or first_person_25d.' },
+  { type: 'set_projection', category: 'scene', fields: 'patch: {mode?: "ortho_2d"|"hd2d_iso"|"hd2d_3d"|"first_person_25d", pitchDeg?, yawDeg?, rollDeg?, camCenterZ?, autoFollowHeroZ?, roofCutawayMode?: "auto"|"always"|"off", roofCutawayAlpha?, fovDeg?, wallHeightScale?, billboardTiltDeg?, obliqueShadowAlpha?, elevationScale?, perspectiveSkew?, activeDimensionMask?, allowDimensionShift?}', note: 'Switch between True 3D HD-2D Perspective (hd2d_3d), 3/4 Strong-Volume 2.5D (hd2d_iso), ortho_2d, or first_person_25d.' },
   { type: 'upsert_script', category: 'script', fields: 'script: EcsScriptDef, graphLayout?', note: 'Upsert sandbox VM script / EventGraph.' },
   { type: 'remove_script', category: 'script', fields: 'scriptId', note: 'Delete a script and graph layout, and detach it from all entities.' },
   { type: 'set_room_voxel', category: 'world_map', fields: 'roomId, cell: {col,row,zLevel,tileId,shape?,rotZ?}', note: 'Place or remove (tileId<=0) a multi-story 3D voxel cell in a room.' },
@@ -278,7 +282,7 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'clear_room_voxels', category: 'world_map', fields: 'roomId, zLevel?', note: 'Clear all 3D voxels in a room (or on a specific zLevel story).' },
   { type: 'upsert_model_3d', category: 'assets', fields: 'model: {id, name, parts[], rawMesh?, clips?, boundsSize?}', note: 'Create or update a 3D cuboid or glTF rawMesh model asset in project.models3d.' },
   { type: 'remove_model_3d', category: 'assets', fields: 'modelId', note: 'Remove a 3D model asset from project.models3d.' },
-  { type: 'set_camera_3d_pose', category: 'scene', fields: 'yawDeg?, pitchDeg?, rollDeg?, fovDeg?, camCenterZ?, cameraProjection3d?, quadView?, shadowMapEnabled?, shadowMapStrength?, showAxisGizmo3d?, showOrthoGrid3d?', note: 'Configure 6DoF 3D camera pose, orthographic projection, quad-view split, shadow map, and 3D gizmos.' },
+  { type: 'set_camera_3d_pose', category: 'scene', fields: 'yawDeg?, pitchDeg?, rollDeg?, fovDeg?, camCenterZ?, autoFollowHeroZ?, roofCutawayMode?, roofCutawayAlpha?, cameraProjection3d?, quadView?, shadowMapEnabled?, shadowMapStrength?, showAxisGizmo3d?, showOrthoGrid3d?', note: 'Configure 6DoF 3D camera pose, auto Z-follow, interior roof cutaway, orthographic projection, quad-view split, shadow map, and 3D gizmos.' },
 ] as const;
 
 export interface EcsCommandResult {
@@ -719,6 +723,12 @@ export class EcsStudioSession {
             ...(overrides.transform ?? {}),
             ...(cmd.x !== undefined ? { x: cmd.x } : {}),
             ...(cmd.y !== undefined ? { y: cmd.y } : {}),
+          };
+        }
+        if (cmd.z !== undefined && Number.isFinite(cmd.z)) {
+          overrides.spatial3d = {
+            ...(overrides.spatial3d ?? {}),
+            z: cmd.z,
           };
         }
         const inst: EcsEntityInitDef = {
@@ -1292,6 +1302,9 @@ export class EcsStudioSession {
           ...(cmd.rollDeg !== undefined ? { rollDeg: cmd.rollDeg } : {}),
           ...(cmd.fovDeg !== undefined ? { fovDeg: cmd.fovDeg } : {}),
           ...(cmd.camCenterZ !== undefined ? { camCenterZ: cmd.camCenterZ } : {}),
+          ...(cmd.autoFollowHeroZ !== undefined ? { autoFollowHeroZ: cmd.autoFollowHeroZ } : {}),
+          ...(cmd.roofCutawayMode !== undefined ? { roofCutawayMode: cmd.roofCutawayMode } : {}),
+          ...(cmd.roofCutawayAlpha !== undefined ? { roofCutawayAlpha: cmd.roofCutawayAlpha } : {}),
           ...(cmd.cameraProjection3d !== undefined ? { cameraProjection3d: cmd.cameraProjection3d } : {}),
           ...(cmd.quadView !== undefined ? { quadView: cmd.quadView } : {}),
           ...(cmd.shadowMapEnabled !== undefined ? { shadowMapEnabled: cmd.shadowMapEnabled } : {}),

@@ -191,6 +191,11 @@ export class EcsSnapshotProjector {
     const matCount = matStore.size();
     let heroViewerX = st.fpViewerX;
     let heroViewerY = st.fpViewerY;
+    let heroViewerZ = 0;
+    let heroFootMinX = 0;
+    let heroFootMaxX = 0;
+    let heroFootMinY = 0;
+    let heroFootMaxY = 0;
     let foundHero = false;
 
     for (let i = 0; i < matCount; i++) {
@@ -216,6 +221,12 @@ export class EcsSnapshotProjector {
       if (isHeroTag && !foundHero) {
         heroViewerX = rx + tr.w * 0.5;
         heroViewerY = ry + tr.h * 0.5;
+        heroViewerZ = rz;
+        const padX = Math.max(4, tr.w * 0.24);
+        heroFootMinX = rx + padX;
+        heroFootMaxX = rx + tr.w - padX;
+        heroFootMinY = ry + tr.h * 0.48;
+        heroFootMaxY = ry + tr.h - 3;
         foundHero = true;
       }
 
@@ -265,6 +276,7 @@ export class EcsSnapshotProjector {
       dst.castShadow = mat.castShadow && inActiveRealm;
       dst.shadowRadius = sp ? tr.w * 0.42 * sp.shadowScale : undefined;
       dst.elevationZ = projMode === 'ortho_2d' ? 0 : rz * elevScale;
+      dst.groundZ = projMode === 'ortho_2d' ? 0 : (sp ? sp.groundZ * elevScale : 0);
       dst.roughness = mat.roughness;
       dst.metallic = mat.metallic;
       dst.emissive = inActiveRealm ? mat.emissive : 0;
@@ -333,6 +345,7 @@ export class EcsSnapshotProjector {
       dst.castShadow = m3.castShadow && inActiveRealm;
       dst.shadowRadius = sp ? tr.w * 0.42 * sp.shadowScale : undefined;
       dst.elevationZ = projMode === 'ortho_2d' ? 0 : rz * elevScale;
+      dst.groundZ = projMode === 'ortho_2d' ? 0 : (sp ? sp.groundZ * elevScale : 0);
       dst.roughness = 0.58;
       dst.metallic = 0.08;
       dst.emissive = 0;
@@ -380,6 +393,61 @@ export class EcsSnapshotProjector {
       st.onSyncWorldMapRoom();
     }
 
+    // 1a3. Finalize Multi-Story Camera Z Follow & Automatic Interior Roof Cutaway
+    if (snap.hd2dDepth) {
+      const hasWm = st.worldMapCtrl.hasWorldMap();
+      const autoFollowZ = projCfg?.autoFollowHeroZ !== false;
+      const cutawayMode = projCfg?.roofCutawayMode ?? 'auto';
+      const cutawayAlpha = Math.max(0, Math.min(1, projCfg?.roofCutawayAlpha ?? 0.18));
+      snap.hd2dDepth.autoFollowHeroZ = autoFollowZ;
+      snap.hd2dDepth.roofCutawayMode = cutawayMode;
+      snap.hd2dDepth.roofCutawayAlpha = cutawayAlpha;
+
+      const baseCamZ = projCfg?.camCenterZ ?? 0;
+      const canFollowHeroZ =
+        projMode === 'hd2d_3d' &&
+        autoFollowZ &&
+        !projCfg?.quadView &&
+        !(hasWm && st.worldMapCtrl.isEditorCameraOverride());
+      if (canFollowHeroZ) {
+        const trackedZ = hasWm ? st.worldMapCtrl.cameraZ : (foundHero ? heroViewerZ : 0);
+        snap.hd2dDepth.camCenterZ = baseCamZ + trackedZ * elevScale;
+      } else {
+        snap.hd2dDepth.camCenterZ = baseCamZ;
+      }
+
+      if (
+        projMode === 'hd2d_3d' &&
+        !projCfg?.quadView &&
+        cutawayMode !== 'off' &&
+        hasWm &&
+        st.worldMapCtrl.outVoxels3dCount > 0 &&
+        foundHero
+      ) {
+        const storyH = Math.max(8, st.worldMapCtrl.getStoryHeight());
+        const heroStory = Math.max(0, Math.floor((heroViewerZ + 4) / storyH));
+        const nextStory = heroStory + 1;
+        const vol = st.worldMapCtrl.voxelVolume;
+        const shouldCut =
+          cutawayMode === 'always'
+            ? vol.hasAnyVoxelAtOrAboveStory(nextStory)
+            : vol.hasUpperVoxelAtFootprint(
+                heroFootMinX,
+                heroFootMinY,
+                heroFootMaxX,
+                heroFootMaxY,
+                nextStory,
+              );
+        snap.hd2dDepth.cutawayActive = shouldCut;
+        snap.hd2dDepth.cutawayPlaneZ = shouldCut ? nextStory * storyH : undefined;
+        snap.hd2dDepth.cutawayAlpha = cutawayAlpha;
+      } else {
+        snap.hd2dDepth.cutawayActive = false;
+        snap.hd2dDepth.cutawayPlaneZ = undefined;
+        snap.hd2dDepth.cutawayAlpha = cutawayAlpha;
+      }
+    }
+
     // 1b. Project Dynamic LightSource entities (respecting active realm & Z lift)
     const lightStore = core.getStore(c.LightSource);
     const lightCount = Math.min(24, lightStore.size());
@@ -399,7 +467,7 @@ export class EcsSnapshotProjector {
 
       const l = this.acquireLight(lCount);
       l.x = rx + tr.w * 0.5;
-      l.y = ry + tr.h * 0.5 - (projMode === 'ortho_2d' ? 0 : rz * elevScale);
+      l.y = ry + tr.h * 0.5 - (projMode === 'hd2d_iso' ? rz * elevScale : 0);
       l.z = projMode === 'ortho_2d' ? undefined : rz * elevScale + 24;
       l.radius = ls.radius;
       l.color = ls.color;

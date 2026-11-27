@@ -231,7 +231,9 @@ export class EcsWorkbenchMapCanvasController {
     const ts = Math.max(8, proj.worldMap.tileSize);
     const activeRoomId = this.deps.runtime.getActiveRoomId();
     const activeRoom = proj.worldMap.rooms.find((r) => r.id === activeRoomId);
-    const planeZ = this.deps.mapState.activeZLevel * (activeRoom?.storyHeight ?? 32);
+    const planeZ =
+      this.deps.mapState.activeZLevel *
+      (activeRoom?.storyHeight ?? activeRoom?.wallExtrudeH ?? 24);
 
     const cam3d = this.computeActiveEditorCamera3D(proj);
     let worldX: number;
@@ -380,11 +382,14 @@ export class EcsWorkbenchMapCanvasController {
 
         if (mapState.tool === 'stamp' && mapState.selectedStampPrefabId) {
           const ts = wm.tileSize;
+          const storyH = room.storyHeight ?? room.wallExtrudeH ?? 24;
+          const stampZ = mapState.activeZLevel * storyH;
           const res = session.dispatch({
             type: 'instantiate_prefab',
             prefabId: mapState.selectedStampPrefabId,
             x: hit.col * ts + ts * 0.5,
             y: hit.row * ts + ts * 0.5,
+            ...(stampZ > 0 ? { z: stampZ } : {}),
             roomId: room.id,
           });
           if (res.ok && res.createdEntityId) {

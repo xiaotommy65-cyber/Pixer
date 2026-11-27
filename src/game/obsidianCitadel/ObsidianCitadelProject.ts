@@ -1,3 +1,4 @@
+import type { EcsRawMesh3DData } from '../../core/ecs/EcsModel3D.ts';
 import type { EcsProjectV2 } from '../../core/ecs/EcsProjectSchema.ts';
 import {
   CASTLE_TILE_IDS as T,
@@ -6,6 +7,65 @@ import {
   setRoomTile,
   type EcsMapRoomDef,
 } from '../../core/ecs/EcsTilemapTypes.ts';
+import type { EcsVoxelCellDef } from '../../core/ecs/EcsVoxelVolume.ts';
+
+function buildFacetedOctahedronMesh(radius: number, halfH: number, centerZ: number): EcsRawMesh3DData {
+  const top: readonly [number, number, number] = [0, 0, centerZ + halfH];
+  const bot: readonly [number, number, number] = [0, 0, centerZ - halfH];
+  const ring: readonly (readonly [number, number, number])[] = [
+    [radius, 0, centerZ],
+    [0, radius, centerZ],
+    [-radius, 0, centerZ],
+    [0, -radius, centerZ],
+  ];
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
+
+  const pushTri = (
+    a: readonly [number, number, number],
+    b: readonly [number, number, number],
+    c: readonly [number, number, number],
+  ) => {
+    const ux = b[0] - a[0];
+    const uy = b[1] - a[1];
+    const uz = b[2] - a[2];
+    const vx = c[0] - a[0];
+    const vy = c[1] - a[1];
+    const vz = c[2] - a[2];
+    let nx = uy * vz - uz * vy;
+    let ny = uz * vx - ux * vz;
+    let nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len;
+    ny /= len;
+    nz /= len;
+    const base = positions.length / 3;
+    positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
+    uvs.push(0.5, 0, 0, 1, 1, 1);
+    indices.push(base, base + 1, base + 2);
+  };
+
+  for (let i = 0; i < 4; i++) {
+    const cur = ring[i];
+    const next = ring[(i + 1) % 4];
+    pushTri(top, cur, next);
+    pushTri(bot, next, cur);
+  }
+
+  return {
+    positions,
+    normals,
+    uvs,
+    indices,
+    tint: '#fb7185',
+    roughness: 0.14,
+    metallic: 0.72,
+    emissive: 0.95,
+  };
+}
 
 function buildCourtyardRoom(): EcsMapRoomDef {
   const room = createEmptyRoom('courtyard', '城門外庭 Outer Bailey', 28, 18, T.STONE_FLOOR);
@@ -13,6 +73,7 @@ function buildCourtyardRoom(): EcsMapRoomDef {
   room.skyTop = '#060914';
   room.skyBottom = '#12182b';
   room.wallExtrudeH = 28;
+  room.storyHeight = 28;
 
   // Weathered moss patches around courtyard corners
   fillRoomRect(room, 'ground', 1, 1, 5, 4, T.MOSS_FLOOR);
@@ -54,6 +115,35 @@ function buildCourtyardRoom(): EcsMapRoomDef {
   // Crimson heraldic banners flanking the gate
   setRoomTile(room, 'decor', 11, 1, T.DECOR_BANNER);
   setRoomTile(room, 'decor', 16, 1, T.DECOR_BANNER);
+
+  // SE Multi-Story Gothic Watchtower Bastion (L0 vaulted chamber + twin arches -> L1 parapet -> L2 rooftop beacon)
+  const towerVoxels: EcsVoxelCellDef[] = [
+    // L0: Ground approach stairs ascending east onto L1 balcony, perimeter piers & twin south entry arches
+    { col: 18, row: 15, zLevel: 0, tileId: T.STONE_STAIRS, shape: 'stair_e' },
+    { col: 19, row: 15, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 19, row: 14, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 19, row: 13, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 20, row: 13, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 21, row: 13, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 22, row: 13, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 22, row: 14, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 22, row: 15, zLevel: 0, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 20, row: 15, zLevel: 0, tileId: T.WALL_BRICK, shape: 'arch' },
+    { col: 21, row: 15, zLevel: 0, tileId: T.WALL_BRICK, shape: 'arch' },
+    // L1: Upper corner staircase climbing north to L2 NW landing + vaulted ceiling roof over L0 chamber (20..21, 14)
+    { col: 19, row: 14, zLevel: 1, tileId: T.STONE_STAIRS, shape: 'stair_n' },
+    { col: 19, row: 13, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 20, row: 13, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 21, row: 13, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 22, row: 13, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 20, row: 14, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 21, row: 14, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 22, row: 14, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 20, row: 15, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 21, row: 15, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+    { col: 22, row: 15, zLevel: 1, tileId: T.WALL_BRICK, shape: 'cube' },
+  ];
+  room.voxels = towerVoxels;
 
   return room;
 }
@@ -205,6 +295,76 @@ export const OBSIDIAN_CITADEL_PROJECT: EcsProjectV2 = {
     activeDimensionMask: 3,
     inactiveDimAlpha: 0.2,
     allowDimensionShift: false,
+    autoFollowHeroZ: true,
+    roofCutawayMode: 'auto',
+    roofCutawayAlpha: 0.18,
+  },
+  models3d: {
+    citadel_beacon: {
+      id: 'citadel_beacon',
+      name: '赤月哨塔星輝燈座',
+      boundsSize: [20, 20, 44],
+      parts: [
+        {
+          id: 'plinth_base',
+          origin: [-10, -10, 0],
+          size: [20, 20, 6],
+          faces: { top: 'castle_wall_top', side: 'castle_wall_side' },
+          roughness: 0.65,
+          metallic: 0.22,
+        },
+        {
+          id: 'pillar_shaft',
+          origin: [-6, -6, 6],
+          size: [12, 12, 14],
+          faces: { top: 'castle_wall_top', side: 'castle_wall_side' },
+          tint: '#cbd5e1',
+          roughness: 0.5,
+          metallic: 0.35,
+        },
+        {
+          id: 'brazier_crown',
+          parentId: 'pillar_shaft',
+          origin: [-8, -8, 20],
+          size: [16, 16, 4],
+          faces: { top: 'castle_wall_top', side: 'castle_wall_side' },
+          tint: '#f59e0b',
+          roughness: 0.28,
+          metallic: 0.82,
+          emissive: 0.38,
+        },
+        {
+          id: 'halo_ring',
+          parentId: 'brazier_crown',
+          origin: [-4, -4, 24],
+          size: [8, 8, 3],
+          pivot: [0, 0, 25.5],
+          faces: { top: 'castle_ember_orb', side: 'castle_ember_orb' },
+          tint: '#fda4af',
+          roughness: 0.18,
+          metallic: 0.75,
+          emissive: 0.9,
+        },
+      ],
+      rawMesh: buildFacetedOctahedronMesh(6.5, 9, 34),
+      clips: [
+        {
+          name: 'pulse',
+          durationSec: 2.4,
+          loop: true,
+          tracks: [
+            {
+              partId: 'halo_ring',
+              keyframes: [
+                { timeSec: 0, posOffset: [0, 0, 0], rotDeg: [0, 0, 0] },
+                { timeSec: 1.2, posOffset: [0, 0, 4], rotDeg: [0, 0, 180] },
+                { timeSec: 2.4, posOffset: [0, 0, 0], rotDeg: [0, 0, 360] },
+              ],
+            },
+          ],
+        },
+      ],
+    },
   },
   worldMap: {
     tileSize: TS,
@@ -552,6 +712,7 @@ export const OBSIDIAN_CITADEL_PROJECT: EcsProjectV2 = {
           dashSpeed: 340,
           topDown: true,
         },
+        spatial3d: { z: 0, height: 16, stepHeight: 10, gravityZ: 280, dimensionMask: 3 },
         health: { hp: 10, maxHp: 10, team: 1 },
         light: { radius: 112, color: '#93c5fd', intensity: 0.46, falloffPower: 2.0 },
         animatorId: 'anim_castle_hero',
@@ -576,6 +737,42 @@ export const OBSIDIAN_CITADEL_PROJECT: EcsProjectV2 = {
     { id: 'cy_chalice', name: '外庭回復聖杯', roomId: 'courtyard', prefabId: 'castle_chalice', components: {}, overrides: { transform: { x: 24 * TS, y: 3 * TS } } },
     { id: 'cy_guard_w', name: '西庭守衛', roomId: 'courtyard', prefabId: 'castle_sentinel', components: {}, overrides: { transform: { x: 4 * TS, y: 6 * TS } } },
     { id: 'cy_guard_e', name: '東庭守衛', roomId: 'courtyard', prefabId: 'castle_sentinel', components: {}, overrides: { transform: { x: 23 * TS, y: 6 * TS } } },
+
+    // SE Multi-Story Watchtower props: L2 3D Beacon Model + elevated L2 torch + L0 interior vaulted torch
+    {
+      id: 'cy_tower_beacon',
+      name: '哨塔星輝燈座 (3D)',
+      roomId: 'courtyard',
+      components: {
+        transform: { x: 21 * TS, y: 14 * TS, w: 32, h: 32 },
+        spatial3d: { z: 56, height: 38, dimensionMask: 3 },
+        mesh3d: { modelId: 'citadel_beacon', animClip: 'pulse', castShadow: true },
+        light: { radius: 144, color: '#fb7185', intensity: 0.92, falloffPower: 1.75 },
+        tag: 'prop',
+      },
+    },
+    {
+      id: 'cy_tower_torch_top',
+      name: '哨塔頂層火盆',
+      roomId: 'courtyard',
+      prefabId: 'castle_torch',
+      components: {},
+      overrides: {
+        transform: { x: 22 * TS, y: 15 * TS },
+        spatial3d: { z: 56, height: 20, dimensionMask: 3 },
+      },
+    },
+    {
+      id: 'cy_vault_torch_in',
+      name: '拱門暗室火盆',
+      roomId: 'courtyard',
+      prefabId: 'castle_torch',
+      components: {},
+      overrides: {
+        transform: { x: 21 * TS, y: 14 * TS },
+        spatial3d: { z: 0, height: 20, dimensionMask: 3 },
+      },
+    },
 
     // ================= ROOM 2: GRAND HALL (彩窗長廊) =================
     { id: 'gh_pillar_1', name: '長廊石柱一', roomId: 'grand_hall', prefabId: 'castle_pillar', components: {}, overrides: { transform: { x: 13 * TS, y: 4 * TS - 16 } } },
