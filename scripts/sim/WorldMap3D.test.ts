@@ -15,7 +15,7 @@ import { EcsCartridgeRuntime } from '../../src/core/ecs/EcsCartridgeRuntime.ts';
 import { EcsCoreWorld } from '../../src/core/ecs/EcsCoreWorld.ts';
 import type { EcsModel3DDef } from '../../src/core/ecs/EcsModel3D.ts';
 import { validateEcsProjectV2, type EcsProjectV2 } from '../../src/core/ecs/EcsProjectSchema.ts';
-import { ECS_COMMAND_CATALOG } from '../../src/core/ecs/EcsStudioSession.ts';
+import { ECS_COMMAND_CATALOG, EcsStudioSession } from '../../src/core/ecs/EcsStudioSession.ts';
 import {
   CASTLE_TILE_IDS,
   createEmptyRoom,
@@ -43,6 +43,7 @@ import {
 import { SceneTrue3DPass } from '../../src/core/runtime/SceneTrue3DPass.ts';
 import { createComposedLayerPool, type OrthogonalArtBlueprint } from '../../src/core/sim/OrthogonalArt.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS, type SimEvent } from '../../src/core/types/WorldTypes.ts';
+import { OBSIDIAN_CITADEL_PROJECT } from '../../src/game/obsidianCitadel/ObsidianCitadelProject.ts';
 
 function makeVoxelRoomProject(): EcsProjectV2 {
   const room = createEmptyRoom('voxel_hall', '立體多層大廳', 12, 10, CASTLE_TILE_IDS.STONE_FLOOR);
@@ -545,4 +546,265 @@ test('All 6 new 3D EcsStudioCommands, Undo/Redo, 48/48 catalog parity & MCP 3D t
   assert.equal(grammar.commands.length, 48);
   assert.ok(grammar.voxelShapes.includes('stair_e'));
   assert.ok(grammar.models3d.some((m) => m.id === 'relic_pillar'));
+});
+
+test('Auto Camera Z Follow smoothly tracks hero Spatial3D.z on stairs & respects opt-out / editor override', () => {
+  const proj = makeVoxelRoomProject();
+  const rt = new EcsCartridgeRuntime(proj);
+  const initSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(initSnap.hd2dDepth?.camCenterZ, 0, 'Camera Z starts grounded at hero Z=0');
+
+  // Climb east up (3,5,0) stair_e onto elevated z=24 bridge deck
+  const rightInput = { ...createEmptyInputState(), right: true };
+  let prevCamZ = 0;
+  let midClimbCamZ = 0;
+  for (let f = 0; f < 50; f++) {
+    rt.step(1 / 60, rightInput, DEFAULT_RUNTIME_PARAMS);
+    if (f === 26) {
+      midClimbCamZ = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1).hd2dDepth?.camCenterZ ?? 0;
+    }
+  }
+  const idleInput = createEmptyInputState();
+  for (let f = 0; f < 40; f++) {
+    rt.step(1 / 60, idleInput, DEFAULT_RUNTIME_PARAMS);
+  }
+  const topSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const heroEnt = topSnap.entities.find((e) => e.id === 'hero');
+  assert.ok(heroEnt && (heroEnt.elevationZ ?? 0) >= 23, `Hero should stand on z=24 deck (got ${heroEnt?.elevationZ})`);
+  assert.ok((heroEnt?.groundZ ?? 0) >= 23, `Hero groundZ should track deck surface (got ${heroEnt?.groundZ})`);
+  assert.ok(midClimbCamZ > prevCamZ, 'Camera Z should rise smoothly during stair ascent');
+  assert.ok(
+    Math.abs((topSnap.hd2dDepth?.camCenterZ ?? 0) - 24) < 1.0,
+    `Camera Z should converge smoothly to hero Z=24 (got ${topSnap.hd2dDepth?.camCenterZ})`,
+  );
+
+  // Editor camera override must freeze auto-follow to static proj.projection.camCenterZ
+  rt.setEditorCamera(0, 0);
+  const editorSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(editorSnap.hd2dDepth?.camCenterZ, 0, 'Editor override must honor static camCenterZ');
+  rt.clearEditorCamera();
+
+  // Explicit autoFollowHeroZ: false must pin camCenterZ even while hero is elevated
+  rt.patchLiveProjection({ autoFollowHeroZ: false, camCenterZ: 12 });
+  const pinnedSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(pinnedSnap.hd2dDepth?.camCenterZ, 12, 'autoFollowHeroZ=false must keep manual camCenterZ');
+});
+
+test('Interior Roof / Upper-Floor Cutaway hides/fades overhead voxels, caps boundary top faces & respects quadView/off', () => {
+  const proj = makeVoxelRoomProject();
+  // Add a stacked 2-story column at (4, 3) (z=0 cube below z=1 overpass cube) to verify FACE_CULL_TOP un-culling on cut boundary
+  setRoomVoxel(proj.worldMap!.rooms[0], {
+    col: 4,
+    row: 3,
+    zLevel: 0,
+    tileId: CASTLE_TILE_IDS.WALL_BRICK,
+    shape: 'cube',
+  });
+  const rt = new EcsCartridgeRuntime(proj);
+  const pass = new SceneTrue3DPass();
+  const composed = createComposedLayerPool();
+
+  // 1. Outdoors at (2, 5, z=0): cutaway stays inactive
+  const outdoorSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(outdoorSnap.hd2dDepth?.cutawayActive, false);
+
+  // 2. Move hero directly underneath the zLevel=1 overpass roof at (5, 3, z=0)
+  const core = rt.world.core;
+  const c = core.components;
+  const tagStore = core.getStore(c.Tag);
+  let heroHandle = 0;
+  for (let i = 0; i < tagStore.size(); i++) {
+    if (tagStore.getDenseDataAt(i).tag === 'hero') {
+      heroHandle = tagStore.getDenseEntityAt(i);
+      break;
+    }
+  }
+  const hTr = core.getComponent(heroHandle, c.Transform2D)!;
+  hTr.x = 5 * 32 + 4;
+  hTr.y = 3 * 32 + 4;
+  hTr.prevX = hTr.x;
+  hTr.prevY = hTr.y;
+  rt.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+
+  // Ghost-fade mode (default alpha 0.18) -> upper voxels emit into meshAlpha pass & boundary L0 cube clears FACE_CULL_TOP
+  const underSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(underSnap.hd2dDepth?.cutawayActive, true);
+  assert.equal(underSnap.hd2dDepth?.cutawayPlaneZ, 24);
+
+  const { gpu: gpuGhost, frames: ghostFrames } = createCaptureGpu();
+  const boundaryCullMasks: number[] = [];
+  const origCuboidGhost = gpuGhost.drawCuboid3D.bind(gpuGhost);
+  gpuGhost.drawCuboid3D = (topId, sideId, botId, x, y, z, sx, sy, sz, cullMask, ...rest) => {
+    if (Math.abs(x - 4 * 32) < 1 && Math.abs(y - 3 * 32) < 1 && Math.abs(z) < 1) {
+      boundaryCullMasks.push(cullMask ?? 0);
+    }
+    return origCuboidGhost(topId, sideId, botId, x, y, z, sx, sy, sz, cullMask, ...rest);
+  };
+  gpuGhost.beginFrame('#060914', '#14192e');
+  pass.render(gpuGhost, underSnap, underSnap.hd2dDepth!, 160, 112, 1, 640, 360, 0, 0, undefined, composed);
+  gpuGhost.flush(0);
+  assert.ok((ghostFrames[0].mesh3d?.alphaIndexCount ?? 0) > 0, 'Cutaway ghost mode must route upper voxels into meshAlpha pass');
+  assert.ok(
+    boundaryCullMasks.length > 0 && (boundaryCullMasks[0] & FACE_CULL_TOP) === 0,
+    'Boundary lower-story cube directly beneath cutawayPlaneZ must clear FACE_CULL_TOP to cap cut cross-section',
+  );
+
+  // Full-hide mode (roofCutawayAlpha: 0) -> zero upper-story cuboids drawn & alphaIndexCount === 0
+  rt.patchLiveProjection({ roofCutawayAlpha: 0 });
+  const hideSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const { gpu: gpuHide, frames: hideFrames } = createCaptureGpu();
+  let upperCuboidDraws = 0;
+  const origCuboidHide = gpuHide.drawCuboid3D.bind(gpuHide);
+  gpuHide.drawCuboid3D = (topId, sideId, botId, x, y, z, ...rest) => {
+    if (z >= 23.5) upperCuboidDraws++;
+    return origCuboidHide(topId, sideId, botId, x, y, z, ...rest);
+  };
+  gpuHide.beginFrame('#060914', '#14192e');
+  pass.render(gpuHide, hideSnap, hideSnap.hd2dDepth!, 160, 112, 1, 640, 360, 0, 0, undefined, composed);
+  gpuHide.flush(0);
+  assert.equal(upperCuboidDraws, 0, 'roofCutawayAlpha=0 must completely omit upper-story voxels');
+  assert.equal(hideFrames[0].mesh3d?.alphaIndexCount ?? 0, 0);
+
+  // roofCutawayMode='off' and quadView=true must both disable cutaway
+  rt.patchLiveProjection({ roofCutawayMode: 'off', roofCutawayAlpha: 0.2 });
+  assert.equal(rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1).hd2dDepth?.cutawayActive, false);
+  rt.patchLiveProjection({ roofCutawayMode: 'always', quadView: true });
+  assert.equal(rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1).hd2dDepth?.cutawayActive, false);
+  rt.patchLiveProjection({ roofCutawayMode: 'always', quadView: false });
+  assert.equal(rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1).hd2dDepth?.cutawayActive, true);
+
+  // Also verify elevated hero's contact shadow projects onto support deck Z (~24.25) instead of underground 0.25
+  const shadowZs: number[] = [];
+  const { gpu: gpuShadow } = createCaptureGpu();
+  const origShadow = gpuShadow.drawGroundShadow3D.bind(gpuShadow);
+  gpuShadow.drawGroundShadow3D = (cx, cy, z, sw, sh, color, alpha, soft) => {
+    shadowZs.push(z ?? 0);
+    return origShadow(cx, cy, z, sw, sh, color, alpha, soft);
+  };
+  const hSp = core.getComponent(heroHandle, c.Spatial3D)!;
+  hTr.x = 5 * 32 + 4;
+  hTr.y = 5 * 32 + 4;
+  hTr.prevX = hTr.x;
+  hTr.prevY = hTr.y;
+  hSp.z = 24;
+  hSp.prevZ = 24;
+  hSp.groundZ = 24;
+  rt.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  const deckSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  gpuShadow.beginFrame('#060914', '#14192e');
+  pass.render(gpuShadow, deckSnap, deckSnap.hd2dDepth!, 160, 160, 1, 640, 360, 0, 0, undefined, composed);
+  gpuShadow.flush(0);
+  assert.ok(
+    shadowZs.some((z) => z > 24 && z < 25),
+    `Elevated hero contact shadow should project onto elevated deck (~24.25), got [${shadowZs.join(', ')}]`,
+  );
+});
+
+test('Z-Aware Prefab Stamping (instantiate_prefab.z), 3D Story Lighting & Workbench Stamp parity', () => {
+  const session = new EcsStudioSession(OBSIDIAN_CITADEL_PROJECT);
+  const stampRes = session.dispatch({
+    type: 'instantiate_prefab',
+    prefabId: 'castle_torch',
+    entityId: 'stamped_l2_torch',
+    x: 20 * 32 + 16,
+    y: 13 * 32 + 16,
+    z: 56,
+    roomId: 'courtyard',
+  });
+  assert.equal(stampRes.ok, true);
+  const created = session.getProject().entities.find((e) => e.id === 'stamped_l2_torch');
+  assert.equal(created?.overrides?.spatial3d?.z, 56, 'instantiate_prefab.z must persist into overrides.spatial3d.z');
+
+  // Undo & Redo preserve Z-stamped prefab cleanly
+  assert.equal(session.undo().ok, true);
+  assert.equal(session.getProject().entities.some((e) => e.id === 'stamped_l2_torch'), false);
+  assert.equal(session.redo().ok, true);
+  assert.equal(
+    session.getProject().entities.find((e) => e.id === 'stamped_l2_torch')?.overrides?.spatial3d?.z,
+    56,
+  );
+
+  // Runtime snapshot places elevated 3D point light at true world (x, y, z+24) without 2.5D Y northward skew
+  const rt = new EcsCartridgeRuntime(session.getProject());
+  const snap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  const expectedX = 20 * 32 + 16 + 16;
+  const expectedY = 13 * 32 + 16 + 16;
+  const elevatedLight = snap.lights.find(
+    (l) => Math.abs(l.x - expectedX) < 1 && Math.abs(l.y - expectedY) < 1 && Math.abs((l.z ?? 0) - 80) < 1,
+  );
+  assert.ok(elevatedLight, 'Z-stamped torch must emit 3D point light at exact world (x, y, z+24) in hd2d_3d');
+
+  // Source contract: Map Canvas stamp tool snaps to activeZLevel * storyH
+  const canvasCtrlSrc = readFileSync(
+    resolve(process.cwd(), 'src/ui/EcsWorkbenchMapCanvasController.ts'),
+    'utf8',
+  );
+  assert.ok(
+    canvasCtrlSrc.includes('mapState.activeZLevel * storyH') && canvasCtrlSrc.includes('z: stampZ'),
+    'EcsWorkbenchMapCanvasController stamp tool must pass activeZLevel * storyH as z',
+  );
+});
+
+test('PA-14 Obsidian Citadel Flagship Multi-Story Watchtower passes 3D BFS (L0->L1->L2), hosts 3D Beacon & triggers live cutaway', () => {
+  assert.equal(validateEcsProjectV2(OBSIDIAN_CITADEL_PROJECT).ok, true);
+  const beacon = OBSIDIAN_CITADEL_PROJECT.models3d?.citadel_beacon;
+  assert.ok(beacon && beacon.parts.length >= 4 && beacon.rawMesh && beacon.rawMesh.indices.length === 24);
+
+  const reach3d = analyzeWorldMap3DReachability(OBSIDIAN_CITADEL_PROJECT);
+  assert.equal(reach3d.pass, true, `PA-14 3D BFS failed: ${reach3d.softLockRisks.join('; ')}`);
+  assert.ok(reach3d.maxStoryReached >= 2, `PA-14 watchtower must be climbable to L2 (got ${reach3d.maxStoryReached})`);
+  assert.equal(reach3d.reachableRoomIds.length, 3);
+  assert.equal(reach3d.unlockedGlobals.has_gate_key, 1);
+  assert.equal(reach3d.unlockedGlobals.throne_gate_open, 1);
+
+  // Live runtime test: (1) stand under vaulted ground chamber -> cutaway triggers; (2) climb L0->L1->L2 -> cameraZ follows
+  const rt = new EcsCartridgeRuntime(OBSIDIAN_CITADEL_PROJECT);
+  const core = rt.world.core;
+  const c = core.components;
+  const tagStore = core.getStore(c.Tag);
+  let heroHandle = 0;
+  for (let i = 0; i < tagStore.size(); i++) {
+    if (tagStore.getDenseDataAt(i).tag === 'hero') {
+      heroHandle = tagStore.getDenseEntityAt(i);
+      break;
+    }
+  }
+  assert.ok(heroHandle !== 0);
+  const hTr = core.getComponent(heroHandle, c.Transform2D)!;
+  const hSp = core.getComponent(heroHandle, c.Spatial3D)!;
+  assert.ok(hSp, 'PA-14 hero must carry Spatial3D component for multi-story climbing');
+
+  // Step 1: Enter vaulted chamber at (20, 14, L0) beneath L1 roof
+  hTr.x = 20 * 32 + 2;
+  hTr.y = 14 * 32 + 2;
+  hTr.prevX = hTr.x;
+  hTr.prevY = hTr.y;
+  rt.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+  const chamberSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.equal(chamberSnap.hd2dDepth?.cutawayActive, true, 'Walking under PA-14 watchtower vault must trigger cutaway');
+  assert.equal(chamberSnap.hd2dDepth?.cutawayPlaneZ, 28);
+
+  // Step 2: Approach L0->L1 stair_e at (18,15), turn north up L1->L2 stair_n at (19,14) onto L2 landing (19,13), then step east onto L2 deck
+  hTr.x = 17 * 32 + 8;
+  hTr.y = 15 * 32 + 2;
+  hTr.prevX = hTr.x;
+  hTr.prevY = hTr.y;
+  hSp.z = 0;
+  hSp.prevZ = 0;
+  const moveRight = { ...createEmptyInputState(), right: true };
+  const moveUp = { ...createEmptyInputState(), up: true };
+  for (let f = 0; f < 40; f++) rt.step(1 / 60, moveRight, DEFAULT_RUNTIME_PARAMS);
+  assert.ok(hSp.z >= 27, `Hero should climb L0->L1 stair onto z=28 balcony (got z=${hSp.z})`);
+  for (let f = 0; f < 24; f++) rt.step(1 / 60, moveUp, DEFAULT_RUNTIME_PARAMS);
+  assert.ok(hSp.z >= 55, `Hero should climb L1->L2 stair onto z=56 landing (got z=${hSp.z}, y=${hTr.y})`);
+  for (let f = 0; f < 22; f++) rt.step(1 / 60, moveRight, DEFAULT_RUNTIME_PARAMS);
+  for (let f = 0; f < 40; f++) rt.step(1 / 60, createEmptyInputState(), DEFAULT_RUNTIME_PARAMS);
+
+  const summitSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  assert.ok(hSp.z >= 55, `Hero should climb L1->L2 stair onto z=56 tower summit (got z=${hSp.z})`);
+  assert.ok(
+    (summitSnap.hd2dDepth?.camCenterZ ?? 0) > 48,
+    `Camera Z must smoothly follow hero to L2 tower summit (got ${summitSnap.hd2dDepth?.camCenterZ})`,
+  );
+  assert.equal(summitSnap.hd2dDepth?.cutawayActive, false, 'Open L2 watchtower rooftop must disable cutaway');
 });

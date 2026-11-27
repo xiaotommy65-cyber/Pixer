@@ -340,6 +340,56 @@ export class RoomVoxelVolume {
     return bestCeiling;
   }
 
+  /**
+   * Zero-GC check whether any non-empty voxel at story `zLevel >= minStory` overlaps
+   * the horizontal footprint `[minX..maxX, minY..maxY]` directly overhead.
+   */
+  public hasUpperVoxelAtFootprint(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    minStory: number,
+  ): boolean {
+    if (this.cols <= 0 || this.rows <= 0) return false;
+    const zStart = Math.max(0, minStory | 0);
+    if (zStart >= this.stories) return false;
+    const ts = this.tileSize;
+    const c0 = Math.max(0, Math.floor(minX / ts));
+    const c1 = Math.min(this.cols - 1, Math.floor(maxX / ts));
+    const r0 = Math.max(0, Math.floor(minY / ts));
+    const r1 = Math.min(this.rows - 1, Math.floor(maxY / ts));
+    if (c0 > c1 || r0 > r1) return false;
+
+    for (let z = zStart; z < this.stories; z++) {
+      const zBase = z * this.rows;
+      for (let r = r0; r <= r1; r++) {
+        const rowOff = (zBase + r) * this.cols;
+        for (let c = c0; c <= c1; c++) {
+          if (this.shapeCodes[rowOff + c] !== VOXEL_SHAPE_CODE.empty) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Zero-GC check whether any non-empty voxel exists anywhere in the room at story `zLevel >= minStory`.
+   */
+  public hasAnyVoxelAtOrAboveStory(minStory: number): boolean {
+    if (this.cols <= 0 || this.rows <= 0) return false;
+    const zStart = Math.max(0, minStory | 0);
+    if (zStart >= this.stories) return false;
+    const startIdx = zStart * this.rows * this.cols;
+    const endIdx = this.stories * this.rows * this.cols;
+    for (let i = startIdx; i < endIdx; i++) {
+      if (this.shapeCodes[i] !== VOXEL_SHAPE_CODE.empty) return true;
+    }
+    return false;
+  }
+
   private samplePointBlocks(
     col: number,
     row: number,

@@ -243,6 +243,12 @@ export interface EcsProjectionConfig {
   rollDeg?: number;
   /** Camera target elevation Z in world px (default 0). */
   camCenterZ?: number;
+  /** Smoothly follow the hero's Spatial3D elevation Z while climbing multi-story buildings (default true in hd2d_3d). */
+  autoFollowHeroZ?: boolean;
+  /** Interior roof & upper-story cutaway mode when exploring under ceilings ('auto' | 'always' | 'off', default 'auto'). */
+  roofCutawayMode?: 'auto' | 'always' | 'off';
+  /** Opacity multiplier (0..1) for cut-away upper-story voxels & props (0 = full hide, default 0.18). */
+  roofCutawayAlpha?: number;
   /** 3D camera projection mode ('perspective' | 'ortho_top' | 'ortho_front' | 'ortho_side' | 'ortho_iso' | 'ortho_free'). */
   cameraProjection3d?: Camera3DProjectionMode;
   /** Enables 4-quadrant CAD quad-view split (Persp / Top XY / Front XZ / Side YZ). */

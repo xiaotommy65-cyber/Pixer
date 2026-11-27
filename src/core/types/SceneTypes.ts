@@ -117,6 +117,8 @@ export interface EntityDesc {
   additive?: boolean;
   /** 2.5D vertical lift off the ground plane (world px, shrinks & detaches contact shadow). */
   elevationZ?: number;
+  /** Supporting floor elevation Z beneath this entity (world px, projects grounded contact shadow on upper stories). */
+  groundZ?: number;
   /** Distance from entity bottom to ground plane in side-view levels (projects landing shadow). */
   shadowOffsetY?: number;
   /** Opt in/out of elliptical pixel ground contact shadow. */
@@ -330,6 +332,18 @@ export interface Hd2dDepthConfig {
   rollDeg?: number;
   /** 3D camera target elevation Z in world px (default 0). */
   camCenterZ?: number;
+  /** Smoothly follow hero Spatial3D Z elevation in hd2d_3d gameplay (default true). */
+  autoFollowHeroZ?: boolean;
+  /** Interior upper-story cutaway policy ('auto' | 'always' | 'off', default 'auto'). */
+  roofCutawayMode?: 'auto' | 'always' | 'off';
+  /** Opacity multiplier (0..1) for cut-away upper stories (0 = complete hide, default 0.18). */
+  roofCutawayAlpha?: number;
+  /** Computed per-frame flag indicating upper stories above cutawayPlaneZ should cut away. */
+  cutawayActive?: boolean;
+  /** World-space Z threshold at/above which upper-story voxels and props cut away. */
+  cutawayPlaneZ?: number;
+  /** Effective opacity multiplier (0..1) applied to cut-away upper stories this frame. */
+  cutawayAlpha?: number;
   /** 3D projection mode ('perspective' | 'ortho_top' | 'ortho_front' | 'ortho_side' | 'ortho_iso' | 'ortho_free'). */
   cameraProjection3d?: Camera3DProjectionMode;
   /** Directional sunlight vector pointing toward sun (default [-0.38, 0.48, 0.79]). */

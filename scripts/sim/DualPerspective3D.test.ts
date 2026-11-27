@@ -555,11 +555,16 @@ test('Cutscene subtitle/splash HUD emits Pass 1B overlays after 3D Pass 1A and G
   const { gpu, frames } = attachMockGpu('webgpu', atlas);
   const drawEvents: string[] = [];
   const origDrawBox3D = gpu.drawBox3DWall.bind(gpu);
+  const origDrawCuboid3D = gpu.drawCuboid3D.bind(gpu);
   const origDrawRect = gpu.drawRect.bind(gpu);
   const origDrawText = gpu.drawPixelText.bind(gpu);
   gpu.drawBox3DWall = (...args) => {
     drawEvents.push('3d_wall');
     return origDrawBox3D(...args);
+  };
+  gpu.drawCuboid3D = (...args) => {
+    drawEvents.push('3d_wall');
+    return origDrawCuboid3D(...args);
   };
   gpu.drawRect = (...args) => {
     drawEvents.push('2d_rect');
@@ -629,8 +634,10 @@ test('SceneTrue3DPass forwards tile PBR (roughness/metallic/emissive) and separa
 
   const { gpu } = attachMockGpu('webgpu', atlas);
   const wallCalls: Array<{ topId: string; sideId: string | null; roughness: number; metallic: number; emissive: number }> = [];
+  const cuboidCalls: Array<{ topId: string | null; sideId: string | null; roughness: number; metallic: number; emissive: number }> = [];
   const floorCalls: Array<{ id: string; roughness: number; metallic: number; emissive: number }> = [];
   const origWall = gpu.drawBox3DWall.bind(gpu);
+  const origCuboid = gpu.drawCuboid3D.bind(gpu);
   const origFloor = gpu.drawFloorTile3D.bind(gpu);
   gpu.drawBox3DWall = (topId, sideId, x, y, w, h, zBase, wallH, mask, tint, wallTint, alpha, palRow, roughness, metallic, obl, emissive) => {
     wallCalls.push({
@@ -642,6 +649,16 @@ test('SceneTrue3DPass forwards tile PBR (roughness/metallic/emissive) and separa
     });
     return origWall(topId, sideId, x, y, w, h, zBase, wallH, mask, tint, wallTint, alpha, palRow, roughness, metallic, obl, emissive);
   };
+  gpu.drawCuboid3D = (topId, sideId, botId, x, y, z, sx, sy, sz, cullMask, tint, alpha, palRow, roughness, metallic, emissive, yawDeg) => {
+    cuboidCalls.push({
+      topId,
+      sideId,
+      roughness: roughness ?? -1,
+      metallic: metallic ?? -1,
+      emissive: emissive ?? 0,
+    });
+    return origCuboid(topId, sideId, botId, x, y, z, sx, sy, sz, cullMask, tint, alpha, palRow, roughness, metallic, emissive, yawDeg);
+  };
   gpu.drawFloorTile3D = (id, x, y, w, h, z, tint, alpha, palRow, shade, roughness, metallic, emissive) => {
     floorCalls.push({
       id,
@@ -652,7 +669,18 @@ test('SceneTrue3DPass forwards tile PBR (roughness/metallic/emissive) and separa
     return origFloor(id, x, y, w, h, z, tint, alpha, palRow, shade, roughness, metallic, emissive);
   };
 
+  // 1. Multi-story voxel room (courtyard) forwards distinct topId/sideSprite + PBR via Mesh3D drawCuboid3D
   bridge.render(gpu, snap, null);
+  const splitVoxelWall = cuboidCalls.find((c) => c.topId === 'castle_wall_top' && c.sideId === 'castle_wall_brick');
+  assert.ok(splitVoxelWall, 'hd2d_3d voxel wall must pass distinct topId and sideSprite to drawCuboid3D');
+  assert.ok(Math.abs(splitVoxelWall.roughness - 0.21) < 1e-6);
+  assert.ok(Math.abs(splitVoxelWall.metallic - 0.77) < 1e-6);
+  assert.ok(Math.abs(splitVoxelWall.emissive - 0.44) < 1e-6);
+
+  // 2. Classic 2D-wall room (grand_hall) forwards distinct topId/sideSprite + PBR via Quad3D drawBox3DWall
+  assert.equal(rt.switchRoomForEditor('grand_hall'), true);
+  const hallSnap = rt.snapshot(DEFAULT_RUNTIME_PARAMS, 1);
+  bridge.render(gpu, hallSnap, null);
   const splitWall = wallCalls.find((c) => c.topId === 'castle_wall_top' && c.sideId === 'castle_wall_brick');
   assert.ok(splitWall, 'hd2d_3d wall must pass distinct topId and sideSprite to drawBox3DWall');
   assert.ok(Math.abs(splitWall.roughness - 0.21) < 1e-6);

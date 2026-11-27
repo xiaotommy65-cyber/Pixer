@@ -344,6 +344,36 @@ export function buildSceneAndHistorySections(
     session.dispatch({ type: 'set_projection', patch: { allowDimensionShift: !shiftOn } });
   });
 
+  const autoFollowZOn = proj.projection?.autoFollowHeroZ !== false;
+  const toggleAutoFollowZBtn = document.createElement('button');
+  toggleAutoFollowZBtn.type = 'button';
+  toggleAutoFollowZBtn.className = autoFollowZOn ? 'p7-btn p7-btn-accent' : 'p7-btn';
+  toggleAutoFollowZBtn.setAttribute('data-testid', 'toggle-auto-follow-z');
+  toggleAutoFollowZBtn.textContent = autoFollowZOn ? '相機跟隨高度 Z：開' : '相機跟隨高度 Z：關';
+  toggleAutoFollowZBtn.addEventListener('click', () => {
+    commitProj({ autoFollowHeroZ: !autoFollowZOn });
+  });
+
+  const curCutawayMode = proj.projection?.roofCutawayMode ?? 'auto';
+  const cutawayLabels: Record<'auto' | 'always' | 'off', string> = {
+    auto: '室內剖面：自動',
+    always: '室內剖面：恆開',
+    off: '室內剖面：關閉',
+  };
+  const nextCutawayMap: Record<'auto' | 'always' | 'off', 'auto' | 'always' | 'off'> = {
+    auto: 'always',
+    always: 'off',
+    off: 'auto',
+  };
+  const cycleCutawayBtn = document.createElement('button');
+  cycleCutawayBtn.type = 'button';
+  cycleCutawayBtn.className = curCutawayMode !== 'off' ? 'p7-btn p7-btn-accent' : 'p7-btn';
+  cycleCutawayBtn.setAttribute('data-testid', 'cycle-roof-cutaway');
+  cycleCutawayBtn.textContent = cutawayLabels[curCutawayMode];
+  cycleCutawayBtn.addEventListener('click', () => {
+    commitProj({ roofCutawayMode: nextCutawayMap[curCutawayMode] });
+  });
+
   const fovOn = Boolean(options.fovPreviewEnabled);
   const toggleFovBtn = document.createElement('button');
   toggleFovBtn.type = 'button';
@@ -353,7 +383,7 @@ export function buildSceneAndHistorySections(
   toggleFovBtn.addEventListener('click', () => {
     options.onToggleFovPreview?.();
   });
-  waterRow.append(toggleShadowBtn, toggleWaterBtn, toggleShiftBtn, toggleFovBtn);
+  waterRow.append(toggleShadowBtn, toggleWaterBtn, toggleShiftBtn, toggleAutoFollowZBtn, cycleCutawayBtn, toggleFovBtn);
 
   const particleField = document.createElement('div');
   particleField.className = 'p7-field';

@@ -240,7 +240,7 @@ export function renderMapDesignerPane(
   roomSec.append(roomHead, roomSelect, roomMeta);
 
   if (proj.projection?.mode === 'hd2d_3d') {
-    const storyH = activeRoom.storyHeight ?? 32;
+    const storyH = activeRoom.storyHeight ?? activeRoom.wallExtrudeH ?? 24;
     const zSliceWrap = document.createElement('div');
     zSliceWrap.className = 'p7-slider-group';
 
@@ -790,7 +790,7 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
   const { room, portals, camX, camY, state } = info;
   const cam3d = info.camera3D ?? null;
   const editing = info.showEditingAffordances !== false;
-  const planeZ = state.activeZLevel * (room.storyHeight ?? 32);
+  const planeZ = state.activeZLevel * (room.storyHeight ?? room.wallExtrudeH ?? 24);
 
   // 0. Phase 4 Symmetric Shadowcasting FOV Fog-of-War Preview
   if (state.showFovPreview && info.fovMask) {
@@ -967,7 +967,10 @@ export function drawMapEditorOverlay(canvas: HTMLCanvasElement, ctx: CanvasRende
       ctx.strokeRect(hx + 1, hy + 1, Math.max(2, hw - 2), Math.max(2, hh - 2));
     }
 
-    const coordText = `(${info.hoverCol}, ${info.hoverRow})`;
+    const coordText =
+      state.activeZLevel > 0
+        ? `(${info.hoverCol}, ${info.hoverRow}, Z${state.activeZLevel})`
+        : `(${info.hoverCol}, ${info.hoverRow})`;
     ctx.font = '600 10px "JetBrains Mono", monospace';
     const tw = ctx.measureText(coordText).width;
     const tx = Math.max(4, Math.min(cw - tw - 10, hx + 2));
