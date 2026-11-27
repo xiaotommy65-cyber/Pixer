@@ -416,7 +416,20 @@ export class EcsSnapshotProjector {
         snap.hd2dDepth.camCenterZ = baseCamZ;
       }
 
+      const editorSlice = hasWm ? st.worldMapCtrl.getEditorSliceCutaway() : null;
       if (
+        projMode === 'hd2d_3d' &&
+        !projCfg?.quadView &&
+        hasWm &&
+        st.worldMapCtrl.outVoxels3dCount > 0 &&
+        editorSlice &&
+        editorSlice.mode !== 'all'
+      ) {
+        const storyH = Math.max(8, st.worldMapCtrl.getStoryHeight());
+        snap.hd2dDepth.cutawayActive = true;
+        snap.hd2dDepth.cutawayPlaneZ = (editorSlice.zLevel + 1) * storyH;
+        snap.hd2dDepth.cutawayAlpha = editorSlice.mode === 'solo_floor' ? 0 : 0.16;
+      } else if (
         projMode === 'hd2d_3d' &&
         !projCfg?.quadView &&
         cutawayMode !== 'off' &&
@@ -989,7 +1002,14 @@ export class EcsSnapshotProjector {
       snap.cameraX = baseCamX + st.juice.shakeX;
       snap.cameraY = baseCamY + st.juice.shakeY;
     }
-    snap.cameraZoom = hasWm ? st.worldMapCtrl.director.cameraZoom : 1;
+    if (
+      hasWm &&
+      (st.worldMapCtrl.isEditorCameraOverride() || Math.abs(st.worldMapCtrl.getEditorZoom() - 1) > 1e-4)
+    ) {
+      snap.cameraZoom = st.worldMapCtrl.getEditorZoom();
+    } else {
+      snap.cameraZoom = hasWm ? st.worldMapCtrl.director.cameraZoom : 1;
+    }
     snap.ambientDarkness = Math.min(
       0.92,
       (st.project.atmosphere.ambientDarkness ?? 0.25) +

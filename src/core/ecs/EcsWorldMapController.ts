@@ -52,6 +52,8 @@ import {
 
 export type { WorldMapStepCallbacks } from './EcsWorldMapPhysics.ts';
 
+export type EditorSliceCutawayMode = 'all' | 'ghost_above' | 'solo_floor';
+
 /**
  * Pure, DOM-free, Zero-GC Generic Multi-Room HD-2D Tilemap & Top-Down Adventure Engine Controller.
  *
@@ -95,6 +97,13 @@ export class EcsWorldMapController {
   private editorCamOverride = false;
   private editorCamX = 0;
   private editorCamY = 0;
+  private editorZoom = 1;
+  private editorSliceMode: EditorSliceCutawayMode = 'all';
+  private editorSliceZLevel = 0;
+  private readonly editorSliceScratch: { mode: EditorSliceCutawayMode; zLevel: number } = {
+    mode: 'all',
+    zLevel: 0,
+  };
 
   private readonly sim: WorldMapCombatState = createWorldMapCombatState();
   private readonly cachedAmbientLights: LightDesc[] = [];
@@ -284,7 +293,7 @@ export class EcsWorldMapController {
     return s;
   }
 
-  public setEditorCamera(x: number, y: number): void {
+  public setEditorCamera(x: number, y: number, zoom?: number): void {
     this.editorCamOverride = true;
     this.editorCamX = x;
     this.editorCamY = y;
@@ -292,14 +301,41 @@ export class EcsWorldMapController {
     this.cameraY = y;
     this.sim.cameraX = x;
     this.sim.cameraY = y;
+    if (zoom !== undefined && Number.isFinite(zoom)) {
+      this.editorZoom = Math.max(0.35, Math.min(3.0, zoom));
+    }
+  }
+
+  public setEditorZoom(zoom: number): number {
+    if (Number.isFinite(zoom)) {
+      this.editorZoom = Math.max(0.35, Math.min(3.0, zoom));
+    }
+    return this.editorZoom;
+  }
+
+  public getEditorZoom(): number {
+    return this.editorZoom;
   }
 
   public clearEditorCamera(): void {
     this.editorCamOverride = false;
+    this.editorZoom = 1;
   }
 
   public isEditorCameraOverride(): boolean {
     return this.editorCamOverride;
+  }
+
+  public setEditorSliceCutaway(mode: EditorSliceCutawayMode, zLevel: number): void {
+    this.editorSliceMode = mode;
+    const clampedZ = Number.isFinite(zLevel) ? Math.round(zLevel) : 0;
+    this.editorSliceZLevel = Math.max(0, Math.min(7, clampedZ));
+  }
+
+  public getEditorSliceCutaway(): { mode: EditorSliceCutawayMode; zLevel: number } {
+    this.editorSliceScratch.mode = this.editorSliceMode;
+    this.editorSliceScratch.zLevel = this.editorSliceZLevel;
+    return this.editorSliceScratch;
   }
 
   public getOcclusionGrid(shadowStrength = 0.85, shadowSoftness = 0.36): OcclusionGridDesc | undefined {
@@ -531,7 +567,7 @@ export class EcsWorldMapController {
       this.snapCameraTo(heroFoundX, heroFoundY, vpW, vpH);
       this.cameraZ = heroFoundZ;
     } else {
-      this.clampCamera(vpW, vpH, 1.0);
+      this.clampCamera(vpW, vpH, this.editorZoom);
     }
     this.director.syncLivePose(
       this.cameraX,
@@ -892,7 +928,7 @@ export class EcsWorldMapController {
           if (this.editorCamOverride) {
             this.cameraX = this.editorCamX;
             this.cameraY = this.editorCamY;
-            this.clampCamera(vpW, vpH, 1.0);
+            this.clampCamera(vpW, vpH, this.editorZoom);
           } else {
             this.cameraX = this.director.cameraX;
             this.cameraY = this.director.cameraY;
