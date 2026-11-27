@@ -543,7 +543,7 @@ test('All 6 new 3D EcsStudioCommands, Undo/Redo, 51/51 catalog parity & MCP 3D t
     voxelShapes: string[];
     models3d: Array<{ id: string }>;
   };
-  assert.equal(grammar.commands.length, 48);
+  assert.equal(grammar.commands.length, 51);
   assert.ok(grammar.voxelShapes.includes('stair_e'));
   assert.ok(grammar.models3d.some((m) => m.id === 'relic_pillar'));
 });
