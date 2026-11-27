@@ -5,8 +5,8 @@ import { appLogger } from '../runtime/AppLogger.ts';
 import { Canvas2DBackend } from './Canvas2DBackend.ts';
 import { hexToRgb01, INV_255, packHexRgb } from './GpuColorCache.ts';
 import { GpuDynamicGlyphCache } from './GpuDynamicGlyphCache.ts';
-import { type CardinalFacing3D, GpuMesh3DBatch } from './GpuMesh3DBatch.ts';
-import { GpuQuad3DBatch } from './GpuQuad3DBatch.ts';
+import { GpuEngine3DHelpers, type Mesh3DIndexedOptions } from './GpuEngine3DHelpers.ts';
+import type { CardinalFacing3D } from './GpuMesh3DBatch.ts';
 import {
   FLOATS_PER_INSTANCE,
   MAX_DYNAMIC_LIGHTS,
@@ -29,8 +29,7 @@ export class GpuEngine {
   private canvas: HTMLCanvasElement;
   private alphaItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
   private addItems = new Float32Array(MAX_INSTANCES_PER_PASS * FLOATS_PER_INSTANCE);
-  private readonly quad3d = new GpuQuad3DBatch();
-  private readonly mesh3d = new GpuMesh3DBatch();
+  private readonly scene3d = new GpuEngine3DHelpers();
   private readonly dynamicGlyphCache = new GpuDynamicGlyphCache();
   private readonly glyphMeasureScratch = {
     rect: null as SpriteRect | null,
@@ -127,7 +126,7 @@ export class GpuEngine {
   }
 
   public getQuad3DStats(): { opaqueCount: number; alphaCount: number; additiveCount: number; enabled: boolean } {
-    return this.quad3d.getStats();
+    return this.scene3d.getQuad3DStats();
   }
 
   public getMesh3DStats(): {
@@ -137,7 +136,7 @@ export class GpuEngine {
     alphaTriangles: number;
     lineSegments: number;
   } {
-    return this.mesh3d.getStats();
+    return this.scene3d.getMesh3DStats();
   }
 
   private replaceCanvasNode(): void {
@@ -171,12 +170,7 @@ export class GpuEngine {
     this.backend?.dispose();
     this.backend = null;
     if (replaceCanvas) this.replaceCanvasNode();
-    const c2d = Canvas2DBackend.tryCreate(
-      this.canvas,
-      this.atlas.width,
-      this.atlas.height,
-      this.atlas.pixels,
-    );
+    const c2d = Canvas2DBackend.tryCreate(this.canvas, this.atlas.width, this.atlas.height, this.atlas.pixels);
     if (!c2d) {
       appLogger.error('gpu', 'gpu.activateCanvas2D', 'Canvas 2D 保底渲染器初始化失敗', new Error('2D context null'), {
         reason,
@@ -253,14 +247,16 @@ export class GpuEngine {
       this.backend = gpu;
       this.lastStats.backend = 'webgpu';
       this.onBackendChange?.('webgpu', this.canvas);
-      appLogger.success('gpu', 'gpu.initBackend', '已啟動 WebGPU WGSL 次世代像素渲染管線', {
-        backend: 'webgpu',
-        atlasSize: this.atlas.width,
-      }, dt);
+      appLogger.success(
+        'gpu',
+        'gpu.initBackend',
+        '已啟動 WebGPU WGSL 次世代像素渲染管線',
+        { backend: 'webgpu', atlasSize: this.atlas.width },
+        dt,
+      );
       return 'webgpu';
     }
 
-    // Replace canvas safely in case WebGPU initialization touched getContext('webgpu')
     return this.activateWebGl2(true, 'webgpu_unavailable');
   }
 
@@ -344,8 +340,7 @@ export class GpuEngine {
     this.currentSky.tiltShiftBlur = 0;
     this.currentSky.tiltShiftFocusY = 0.52;
     this.occlusionState.enabled = false;
-    this.quad3d.resetFrame();
-    this.mesh3d.resetFrame();
+    this.scene3d.resetFrame();
     this.dynamicLightCount = 0;
     this.alphaCount = 0;
     this.addCount = 0;
@@ -354,83 +349,44 @@ export class GpuEngine {
   }
 
   public setCamera3D(
-    camCenterX: number,
-    camCenterY: number,
-    zoom: number,
-    pitchDeg = 42,
-    fovDeg = 38,
-    occOriginWorldX = 0,
-    occOriginWorldY = 0,
-    occTileSizeWorld = 32,
-    yawDeg = 0,
-    rollDeg = 0,
-    camCenterZ = 0,
-    projection: Camera3DProjectionMode = 'perspective',
+    camCenterX: number, camCenterY: number, zoom: number, pitchDeg = 42, fovDeg = 38,
+    occOriginWorldX = 0, occOriginWorldY = 0, occTileSizeWorld = 32,
+    yawDeg = 0, rollDeg = 0, camCenterZ = 0, projection: Camera3DProjectionMode = 'perspective',
   ): void {
-    this.quad3d.setCamera3D(
-      camCenterX,
-      camCenterY,
-      zoom,
-      pitchDeg,
-      fovDeg,
-      this.viewW,
-      this.viewH,
-      occOriginWorldX,
-      occOriginWorldY,
-      occTileSizeWorld,
-      yawDeg,
-      rollDeg,
-      camCenterZ,
-      projection,
+    this.scene3d.setCamera3D(
+      camCenterX, camCenterY, zoom, pitchDeg, fovDeg, this.viewW, this.viewH,
+      occOriginWorldX, occOriginWorldY, occTileSizeWorld, yawDeg, rollDeg, camCenterZ, projection,
     );
   }
 
   public setSunLight3D(
-    dirX: number,
-    dirY: number,
-    dirZ: number,
-    shadowMapEnabled = true,
-    shadowStrength = 0.45,
+    dirX: number, dirY: number, dirZ: number, shadowMapEnabled = true, shadowStrength = 0.45,
   ): void {
-    this.quad3d.setSunLight3D(dirX, dirY, dirZ, shadowMapEnabled, shadowStrength);
+    this.scene3d.setSunLight3D(dirX, dirY, dirZ, shadowMapEnabled, shadowStrength);
   }
 
   public setQuadViewEnabled(enabled: boolean): void {
-    this.quad3d.setQuadViewEnabled(enabled);
+    this.scene3d.setQuadViewEnabled(enabled);
   }
 
   public pushDynamicLight3D(
-    x: number,
-    y: number,
-    z: number,
-    radius: number,
-    colorHex: string,
-    intensity: number,
-    falloff = 2.0,
+    x: number, y: number, z: number, radius: number, colorHex: string, intensity: number, falloff = 2.0,
   ): void {
     const idx = this.dynamicLightCount;
     this.pushDynamicLight(x, y, radius, colorHex, intensity, falloff);
     if (this.dynamicLightCount > idx && idx < MAX_DYNAMIC_LIGHTS) {
-      this.mesh3d.lightPosZ[idx] = Number.isFinite(z) ? z : 24.0;
+      this.scene3d.setLightPosZ(idx, z);
     }
   }
 
   public pushDynamicLight(
-    x: number,
-    y: number,
-    radius: number,
-    colorHex: string,
-    intensity: number,
-    falloff = 2.0,
+    x: number, y: number, radius: number, colorHex: string, intensity: number, falloff = 2.0,
   ): void {
     if (
       this.dynamicLightCount >= MAX_DYNAMIC_LIGHTS ||
-      !Number.isFinite(x) ||
-      !Number.isFinite(y) ||
-      !(radius > 0) ||
-      !Number.isFinite(radius) ||
-      !(intensity > 0.001) ||
-      !Number.isFinite(intensity)
+      !Number.isFinite(x) || !Number.isFinite(y) ||
+      !(radius > 0) || !Number.isFinite(radius) ||
+      !(intensity > 0.001) || !Number.isFinite(intensity)
     ) {
       return;
     }
@@ -462,15 +418,8 @@ export class GpuEngine {
   }
 
   public setOcclusionGrid(
-    cols: number,
-    rows: number,
-    originScreenX: number,
-    originScreenY: number,
-    tileSizePx: number,
-    data: Uint8Array,
-    version: number,
-    shadowStrength = 0.85,
-    shadowSoftness = 0.35,
+    cols: number, rows: number, originScreenX: number, originScreenY: number,
+    tileSizePx: number, data: Uint8Array, version: number, shadowStrength = 0.85, shadowSoftness = 0.35,
   ): void {
     this.occlusionState.enabled = cols > 0 && rows > 0 && shadowStrength > 0.001;
     this.occlusionState.cols = cols;
@@ -485,31 +434,12 @@ export class GpuEngine {
   }
 
   private pushInstance(
-    additive: boolean,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    u0: number,
-    v0: number,
-    u1: number,
-    v1: number,
-    r: number,
-    g: number,
-    b: number,
-    a: number,
-    rot: number,
-    mode: number,
-    flash = 0,
-    param = 0,
-    pivotX = 0.5,
-    pivotY = 0.5,
-    skewX = 0,
-    paletteRow = 0,
-    atlasPage = 0,
-    roughness = 0.48,
-    metallic = 0.12,
-    matEmissive = 0,
+    additive: boolean, x: number, y: number, w: number, h: number,
+    u0: number, v0: number, u1: number, v1: number,
+    r: number, g: number, b: number, a: number,
+    rot: number, mode: number, flash = 0, param = 0,
+    pivotX = 0.5, pivotY = 0.5, skewX = 0, paletteRow = 0,
+    atlasPage = 0, roughness = 0.48, metallic = 0.12, matEmissive = 0,
   ): void {
     const arr = additive ? this.addItems : this.alphaItems;
     const count = additive ? this.addCount : this.alphaCount;
@@ -546,109 +476,32 @@ export class GpuEngine {
   }
 
   private pushInstanceHex(
-    additive: boolean,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    u0: number,
-    v0: number,
-    u1: number,
-    v1: number,
-    colorHex: string | undefined,
-    a: number,
-    rot: number,
-    mode: number,
-    flash = 0,
-    param = 0,
-    pivotX = 0.5,
-    pivotY = 0.5,
-    skewX = 0,
-    paletteRow = 0,
-    atlasPage = 0,
-    roughness = 0.48,
-    metallic = 0.12,
-    matEmissive = 0,
+    additive: boolean, x: number, y: number, w: number, h: number,
+    u0: number, v0: number, u1: number, v1: number,
+    colorHex: string | undefined, a: number, rot: number, mode: number,
+    flash = 0, param = 0, pivotX = 0.5, pivotY = 0.5, skewX = 0,
+    paletteRow = 0, atlasPage = 0, roughness = 0.48, metallic = 0.12, matEmissive = 0,
   ): void {
+    let r = 1;
+    let g = 1;
+    let b = 1;
     if (colorHex) {
       const n = packHexRgb(colorHex);
-      this.pushInstance(
-        additive,
-        x,
-        y,
-        w,
-        h,
-        u0,
-        v0,
-        u1,
-        v1,
-        ((n >> 16) & 255) * INV_255,
-        ((n >> 8) & 255) * INV_255,
-        (n & 255) * INV_255,
-        a,
-        rot,
-        mode,
-        flash,
-        param,
-        pivotX,
-        pivotY,
-        skewX,
-        paletteRow,
-        atlasPage,
-        roughness,
-        metallic,
-        matEmissive,
-      );
-      return;
+      r = ((n >> 16) & 255) * INV_255;
+      g = ((n >> 8) & 255) * INV_255;
+      b = (n & 255) * INV_255;
     }
     this.pushInstance(
-      additive,
-      x,
-      y,
-      w,
-      h,
-      u0,
-      v0,
-      u1,
-      v1,
-      1,
-      1,
-      1,
-      a,
-      rot,
-      mode,
-      flash,
-      param,
-      pivotX,
-      pivotY,
-      skewX,
-      paletteRow,
-      atlasPage,
-      roughness,
-      metallic,
-      matEmissive,
+      additive, x, y, w, h, u0, v0, u1, v1, r, g, b, a, rot, mode,
+      flash, param, pivotX, pivotY, skewX, paletteRow, atlasPage, roughness, metallic, matEmissive,
     );
   }
 
   public drawSpriteRaw(
-    id: SpriteId,
-    x: number,
-    y: number,
-    w?: number,
-    h?: number,
-    flipX = false,
-    rot = 0,
-    tint?: string,
-    alpha = 1,
-    flash = 0,
-    additive = false,
-    pivotX = 0.5,
-    pivotY = 0.5,
-    skewX = 0,
-    paletteRow = 0,
-    emissive = 0,
-    roughness = 0.48,
-    metallic = 0.12,
+    id: SpriteId, x: number, y: number, w?: number, h?: number, flipX = false,
+    rot = 0, tint?: string, alpha = 1, flash = 0, additive = false,
+    pivotX = 0.5, pivotY = 0.5, skewX = 0, paletteRow = 0,
+    emissive = 0, roughness = 0.48, metallic = 0.12,
   ): void {
     const rect = this.atlas.getRect(id);
     const dw = w ?? rect.w;
@@ -657,29 +510,8 @@ export class GpuEngine {
     const u1 = flipX ? rect.u0 : rect.u1;
     this.spriteTotal++;
     this.pushInstanceHex(
-      additive,
-      x,
-      y,
-      dw,
-      dh,
-      u0,
-      rect.v0,
-      u1,
-      rect.v1,
-      tint,
-      alpha,
-      rot,
-      0,
-      flash,
-      emissive,
-      pivotX,
-      pivotY,
-      skewX,
-      paletteRow,
-      rect.page ?? 0,
-      roughness,
-      metallic,
-      emissive,
+      additive, x, y, dw, dh, u0, rect.v0, u1, rect.v1, tint, alpha, rot, 0,
+      flash, emissive, pivotX, pivotY, skewX, paletteRow, rect.page ?? 0, roughness, metallic, emissive,
     );
   }
 
@@ -688,25 +520,10 @@ export class GpuEngine {
    * `su0..su1` and `sv0..sv1` are normalized [0..1] sub-coordinates inside the sprite's atlas rect.
    */
   public drawSpriteUvSlice(
-    id: SpriteId,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    su0: number,
-    sv0: number,
-    su1: number,
-    sv1: number,
-    tint?: string,
-    alpha = 1,
-    flash = 0,
-    additive = false,
-    pivotX = 0.5,
-    pivotY = 0.5,
-    paletteRow = 0,
-    emissive = 0,
-    roughness = 0.55,
-    metallic = 0.08,
+    id: SpriteId, x: number, y: number, w: number, h: number,
+    su0: number, sv0: number, su1: number, sv1: number,
+    tint?: string, alpha = 1, flash = 0, additive = false,
+    pivotX = 0.5, pivotY = 0.5, paletteRow = 0, emissive = 0, roughness = 0.55, metallic = 0.08,
   ): void {
     const rect = this.atlas.getRect(id);
     const spanU = rect.u1 - rect.u0;
@@ -717,29 +534,8 @@ export class GpuEngine {
     const v1 = rect.v0 + spanV * sv1;
     this.spriteTotal++;
     this.pushInstanceHex(
-      additive,
-      x,
-      y,
-      w,
-      h,
-      u0,
-      v0,
-      u1,
-      v1,
-      tint,
-      alpha,
-      0,
-      0,
-      flash,
-      emissive,
-      pivotX,
-      pivotY,
-      0,
-      paletteRow,
-      rect.page ?? 0,
-      roughness,
-      metallic,
-      emissive,
+      additive, x, y, w, h, u0, v0, u1, v1, tint, alpha, 0, 0,
+      flash, emissive, pivotX, pivotY, 0, paletteRow, rect.page ?? 0, roughness, metallic, emissive,
     );
   }
 
@@ -766,50 +562,23 @@ export class GpuEngine {
     },
   ): void {
     this.drawSpriteRaw(
-      id,
-      x,
-      y,
-      opts?.w,
-      opts?.h,
-      opts?.flipX ?? false,
-      opts?.rot ?? 0,
-      opts?.tint,
-      opts?.alpha ?? 1,
-      opts?.flash ?? 0,
-      opts?.additive ?? false,
-      opts?.pivotX ?? 0.5,
-      opts?.pivotY ?? 0.5,
-      opts?.skewX ?? 0,
-      opts?.paletteRow ?? 0,
-      opts?.emissive ?? 0,
-      opts?.roughness ?? 0.48,
-      opts?.metallic ?? 0.12,
+      id, x, y, opts?.w, opts?.h, opts?.flipX ?? false, opts?.rot ?? 0, opts?.tint,
+      opts?.alpha ?? 1, opts?.flash ?? 0, opts?.additive ?? false,
+      opts?.pivotX ?? 0.5, opts?.pivotY ?? 0.5, opts?.skewX ?? 0,
+      opts?.paletteRow ?? 0, opts?.emissive ?? 0, opts?.roughness ?? 0.48, opts?.metallic ?? 0.12,
     );
   }
 
   public drawRect(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    colorHex: string,
-    alpha = 1,
-    rot = 0,
-    additive = false,
-    flash = 0,
-    bevelRadius = 0,
+    x: number, y: number, w: number, h: number, colorHex: string,
+    alpha = 1, rot = 0, additive = false, flash = 0, bevelRadius = 0,
   ): void {
     this.spriteTotal++;
     this.pushInstanceHex(additive, x, y, w, h, 0, 0, 1, 1, colorHex, alpha, rot, 2, flash, bevelRadius);
   }
 
   public drawLight(
-    x: number,
-    y: number,
-    radius: number,
-    colorHex: string,
-    intensity = 0.45,
-    falloffPower = 2.0,
+    x: number, y: number, radius: number, colorHex: string, intensity = 0.45, falloffPower = 2.0,
   ): void {
     this.lightTotal++;
     this.pushInstanceHex(true, x, y, radius * 2, radius * 2, 0, 0, 1, 1, colorHex, intensity, 0, 1, 0, falloffPower);
@@ -823,13 +592,7 @@ export class GpuEngine {
 
   /** Mode 3: Smooth analytical SDF elliptical soft drop shadow. */
   public drawSoftShadow(
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-    colorHex = '#0d0918',
-    alpha = 0.42,
-    softness = 0.62,
+    cx: number, cy: number, w: number, h: number, colorHex = '#0d0918', alpha = 0.42, softness = 0.62,
   ): void {
     this.spriteTotal++;
     this.pushInstanceHex(false, cx, cy, w, h, 0, 0, 1, 1, colorHex, alpha, 0, 3, 0, softness);
@@ -840,14 +603,8 @@ export class GpuEngine {
    * materialKind: 0=stone masonry, 1=earth cliff strata, 2=timber/riveted lip, 3=astral rune pillar.
    */
   public drawBeveledWall(
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-    colorHex: string,
-    materialKind: 0 | 1 | 2 | 3 = 0,
-    alpha = 0.98,
-    seed = 0,
+    cx: number, cy: number, w: number, h: number, colorHex: string,
+    materialKind: 0 | 1 | 2 | 3 = 0, alpha = 0.98, seed = 0,
   ): void {
     this.spriteTotal++;
     const tilesX = Math.max(0.5, w / 16);
@@ -860,25 +617,14 @@ export class GpuEngine {
    * dir: 0 = fade top->bottom, 1 = fade bottom->top, 2 = elliptical vignette.
    */
   public drawSmoothGradient(
-    cx: number,
-    cy: number,
-    w: number,
-    h: number,
-    colorHex: string,
-    alpha: number,
-    dir: 0 | 1 | 2 = 0,
-    power = 1.35,
+    cx: number, cy: number, w: number, h: number, colorHex: string, alpha: number,
+    dir: 0 | 1 | 2 = 0, power = 1.35,
   ): void {
     this.spriteTotal++;
     this.pushInstanceHex(false, cx, cy, w, h, dir, power, 1, 1, colorHex, alpha, 0, 5, 0, power);
   }
 
-  private resolveGlyphInto(
-    rawCodePoint: number,
-    stepW: number,
-    drawH: number,
-    scale: number,
-  ): boolean {
+  private resolveGlyphInto(rawCodePoint: number, stepW: number, drawH: number, scale: number): boolean {
     const out = this.glyphMeasureScratch;
     if (rawCodePoint === 32 || rawCodePoint === 0x3000) {
       out.rect = null;
@@ -908,85 +654,12 @@ export class GpuEngine {
     return true;
   }
 
-  /**
-   * Zero-GC bitmap pixel text renderer using 6x8 atlas glyphs + dynamic Unicode/CJK glyph cache.
-   * Uses paletteRow = -2 so shaders skip Auto-Sobel/normal lighting on crisp UI text.
-   */
-  public drawPixelText(
-    text: string,
-    x: number,
-    y: number,
-    colorHex: string,
-    scale = 1,
-    align: 'left' | 'center' | 'right' = 'left',
-    shadowColor = '#120d1e',
-    alpha = 1,
+  private emitTextGlyphPass(
+    text: string, startX: number, y: number, stepW: number, drawH: number, scale: number,
+    colorHex: string, alpha: number, offsetX: number, offsetY: number,
   ): void {
-    if (!text || alpha <= 0.005) return;
-    if (typeof this.atlas.getGlyphRect !== 'function') return;
-
-    const ctor = this.atlas.constructor as { FONT_GLYPH_W?: number; FONT_GLYPH_H?: number };
-    const glyphW = ctor.FONT_GLYPH_W ?? 6;
-    const glyphH = ctor.FONT_GLYPH_H ?? 8;
-    const stepW = glyphW * scale;
-    const drawH = glyphH * scale;
     const len = text.length;
     const gm = this.glyphMeasureScratch;
-
-    let totalW = 0;
-    for (let i = 0; i < len; ) {
-      const cp = text.codePointAt(i) ?? text.charCodeAt(i);
-      i += cp > 0xffff ? 2 : 1;
-      if (this.resolveGlyphInto(cp, stepW, drawH, scale)) {
-        totalW += gm.advanceX;
-      }
-    }
-    if (totalW <= 0) return;
-
-    let startX = x;
-    if (align === 'center') startX = x - totalW * 0.5;
-    else if (align === 'right') startX = x - totalW;
-
-    if (shadowColor) {
-      let cx = startX;
-      const shadowAlpha = alpha * 0.85;
-      for (let i = 0; i < len; ) {
-        const cp = text.codePointAt(i) ?? text.charCodeAt(i);
-        i += cp > 0xffff ? 2 : 1;
-        if (!this.resolveGlyphInto(cp, stepW, drawH, scale)) continue;
-        const rect = gm.rect;
-        if (rect) {
-          this.spriteTotal++;
-          this.pushInstanceHex(
-            false,
-            cx + scale,
-            y + scale + gm.yOffset,
-            gm.drawW,
-            gm.drawH,
-            rect.u0,
-            rect.v0,
-            rect.u1,
-            rect.v1,
-            shadowColor,
-            shadowAlpha,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            -2,
-            rect.page ?? 0,
-            1.0,
-            0.0,
-            0,
-          );
-        }
-        cx += gm.advanceX;
-      }
-    }
-
     let cx = startX;
     for (let i = 0; i < len; ) {
       const cp = text.codePointAt(i) ?? text.charCodeAt(i);
@@ -996,29 +669,9 @@ export class GpuEngine {
       if (rect) {
         this.spriteTotal++;
         this.pushInstanceHex(
-          false,
-          cx,
-          y + gm.yOffset,
-          gm.drawW,
-          gm.drawH,
-          rect.u0,
-          rect.v0,
-          rect.u1,
-          rect.v1,
-          colorHex,
-          alpha,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          -2,
-          rect.page ?? 0,
-          1.0,
-          0.0,
-          0,
+          false, cx + offsetX, y + offsetY + gm.yOffset, gm.drawW, gm.drawH,
+          rect.u0, rect.v0, rect.u1, rect.v1, colorHex, alpha,
+          0, 0, 0, 0, 0, 0, 0, -2, rect.page ?? 0, 1.0, 0.0, 0,
         );
       }
       cx += gm.advanceX;
@@ -1026,272 +679,163 @@ export class GpuEngine {
   }
 
   /**
-   * Zero-GC 3D Quad primitive emitter.
-   * pass: 0 = opaque (hardware depth write + alpha cutout), 1 = alpha blend, 2 = additive blend.
+   * Zero-GC bitmap pixel text renderer using 6x8 atlas glyphs + dynamic Unicode/CJK glyph cache.
+   * Uses paletteRow = -2 so shaders skip Auto-Sobel/normal lighting on crisp UI text.
    */
-  public pushQuad3D(
-    pass: 0 | 1 | 2,
-    ox: number,
-    oy: number,
-    oz: number,
-    ux: number,
-    uy: number,
-    uz: number,
-    vx: number,
-    vy: number,
-    vz: number,
-    u0: number,
-    v0: number,
-    u1: number,
-    v1: number,
-    r: number,
-    g: number,
-    b: number,
-    a: number,
-    nx: number,
-    ny: number,
-    nz: number,
-    mode = 0,
-    flash = 0,
-    shadeMult = 1,
-    paletteRow = 0,
-    atlasPage = 0,
-    roughness = 0.48,
-    metallic = 0.12,
-    emissive = 0,
+  public drawPixelText(
+    text: string, x: number, y: number, colorHex: string, scale = 1,
+    align: 'left' | 'center' | 'right' = 'left', shadowColor = '#120d1e', alpha = 1,
   ): void {
-    this.quad3d.pushQuad3D(
+    if (!text || alpha <= 0.005) return;
+    if (typeof this.atlas.getGlyphRect !== 'function') return;
+
+    const ctor = this.atlas.constructor as { FONT_GLYPH_W?: number; FONT_GLYPH_H?: number };
+    const stepW = (ctor.FONT_GLYPH_W ?? 6) * scale;
+    const drawH = (ctor.FONT_GLYPH_H ?? 8) * scale;
+    const len = text.length;
+    const gm = this.glyphMeasureScratch;
+
+    let totalW = 0;
+    for (let i = 0; i < len; ) {
+      const cp = text.codePointAt(i) ?? text.charCodeAt(i);
+      i += cp > 0xffff ? 2 : 1;
+      if (this.resolveGlyphInto(cp, stepW, drawH, scale)) totalW += gm.advanceX;
+    }
+    if (totalW <= 0) return;
+
+    let startX = x;
+    if (align === 'center') startX = x - totalW * 0.5;
+    else if (align === 'right') startX = x - totalW;
+
+    if (shadowColor) {
+      this.emitTextGlyphPass(text, startX, y, stepW, drawH, scale, shadowColor, alpha * 0.85, scale, scale);
+    }
+    this.emitTextGlyphPass(text, startX, y, stepW, drawH, scale, colorHex, alpha, 0, 0);
+  }
+
+  /** Zero-GC 3D Quad primitive emitter (0=opaque cutout, 1=alpha blend, 2=additive blend). */
+  public pushQuad3D(
+    pass: 0 | 1 | 2, ox: number, oy: number, oz: number,
+    ux: number, uy: number, uz: number, vx: number, vy: number, vz: number,
+    u0: number, v0: number, u1: number, v1: number,
+    r: number, g: number, b: number, a: number, nx: number, ny: number, nz: number,
+    mode = 0, flash = 0, shadeMult = 1, paletteRow = 0, atlasPage = 0,
+    roughness = 0.48, metallic = 0.12, emissive = 0,
+  ): void {
+    this.scene3d.pushQuad3D(
       pass, ox, oy, oz, ux, uy, uz, vx, vy, vz, u0, v0, u1, v1,
       r, g, b, a, nx, ny, nz, mode, flash, shadeMult, paletteRow, atlasPage, roughness, metallic, emissive,
     );
   }
 
   public drawFloorTile3D(
-    id: SpriteId,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    z = 0,
-    tint?: string,
-    alpha = 1,
-    paletteRow = 0,
-    shadeMult = 1.0,
-    roughness = 0.62,
-    metallic = 0.06,
-    emissive = 0,
+    id: SpriteId, x: number, y: number, w: number, h: number, z = 0,
+    tint?: string, alpha = 1, paletteRow = 0, shadeMult = 1.0,
+    roughness = 0.62, metallic = 0.06, emissive = 0,
   ): void {
-    this.quad3d.drawFloorTile3D(this.atlas, id, x, y, w, h, z, tint, alpha, paletteRow, shadeMult, roughness, metallic, emissive);
+    this.scene3d.drawFloorTile3D(this.atlas, id, x, y, w, h, z, tint, alpha, paletteRow, shadeMult, roughness, metallic, emissive);
   }
 
-  /**
-   * Extrudes a 2D map wall tile into a crisp 3D pixel box with automatic adjacent-wall face culling.
-   * neighborMask: 4-bit N/E/S/W solid wall bitmask (N=1, E=2, S=4, W=8).
-   */
+  /** Extrudes a 2D map wall tile into a crisp 3D pixel box with automatic adjacent-wall face culling. */
   public drawBox3DWall(
-    topId: SpriteId,
-    sideId: SpriteId | null,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    zBase: number,
-    wallH: number,
-    neighborMask: number,
-    tint?: string,
-    wallTint?: string,
-    alpha = 1,
-    paletteRow = 0,
-    roughness = 0.58,
-    metallic = 0.1,
-    obliqueShadowAlpha = 0.35,
-    emissive = 0,
+    topId: SpriteId, sideId: SpriteId | null, x: number, y: number, w: number, h: number,
+    zBase: number, wallH: number, neighborMask: number, tint?: string, wallTint?: string,
+    alpha = 1, paletteRow = 0, roughness = 0.58, metallic = 0.1, obliqueShadowAlpha = 0.35, emissive = 0,
   ): void {
-    this.quad3d.drawBox3DWall(
+    this.scene3d.drawBox3DWall(
       this.atlas, topId, sideId, x, y, w, h, zBase, wallH, neighborMask,
       tint, wallTint, alpha, paletteRow, roughness, metallic, obliqueShadowAlpha, emissive,
     );
   }
 
-  /**
-   * Emits an upright HD-2D pixel sprite billboard planted at (footX, footY, footZ) and tilted back by tiltDeg.
-   */
+  /** Emits an upright HD-2D pixel sprite billboard planted at (footX, footY, footZ) and tilted back by tiltDeg. */
   public drawBillboard3D(
-    id: SpriteId,
-    footX: number,
-    footY: number,
-    footZ: number,
-    w?: number,
-    h?: number,
-    tiltDeg = 12,
-    flipX = false,
-    tint?: string,
-    alpha = 1,
-    flash = 0,
-    additive = false,
-    paletteRow = 0,
-    emissive = 0,
-    roughness = 0.48,
-    metallic = 0.12,
-    swayX = 0,
-    opaqueCutout = true,
+    id: SpriteId, footX: number, footY: number, footZ: number, w?: number, h?: number,
+    tiltDeg = 12, flipX = false, tint?: string, alpha = 1, flash = 0, additive = false,
+    paletteRow = 0, emissive = 0, roughness = 0.48, metallic = 0.12, swayX = 0, opaqueCutout = true,
   ): void {
-    this.quad3d.drawBillboard3D(
+    this.scene3d.drawBillboard3D(
       this.atlas, id, footX, footY, footZ, w, h, tiltDeg, flipX, tint, alpha, flash,
       additive, paletteRow, emissive, roughness, metallic, swayX, opaqueCutout,
     );
   }
 
   public drawGroundShadow3D(
-    cx: number,
-    cy: number,
-    z = 0,
-    w = 20,
-    h = 10,
-    colorHex = '#0c0816',
-    alpha = 0.44,
-    softness = 0.62,
+    cx: number, cy: number, z = 0, w = 20, h = 10, colorHex = '#0c0816', alpha = 0.44, softness = 0.62,
   ): void {
-    this.quad3d.drawGroundShadow3D(cx, cy, z, w, h, colorHex, alpha, softness);
+    this.scene3d.drawGroundShadow3D(cx, cy, z, w, h, colorHex, alpha, softness);
   }
 
   public drawLight3D(
-    cx: number,
-    cy: number,
-    z = 0,
-    radius = 64,
-    colorHex = '#ffaa55',
-    intensity = 0.45,
-    falloffPower = 2.0,
+    cx: number, cy: number, z = 0, radius = 64, colorHex = '#ffaa55', intensity = 0.45, falloffPower = 2.0,
   ): void {
-    this.quad3d.drawLight3D(cx, cy, z, radius, colorHex, intensity, falloffPower);
+    this.scene3d.drawLight3D(cx, cy, z, radius, colorHex, intensity, falloffPower);
   }
 
   public drawParticle3D(
-    cx: number,
-    cy: number,
-    cz: number,
-    size: number,
-    colorHex: string,
-    alpha = 1,
-    additive = false,
-    emissive = 0.45,
+    cx: number, cy: number, cz: number, size: number, colorHex: string, alpha = 1, additive = false, emissive = 0.45,
   ): void {
-    this.quad3d.drawParticle3D(cx, cy, cz, size, colorHex, alpha, additive, emissive);
+    this.scene3d.drawParticle3D(cx, cy, cz, size, colorHex, alpha, additive, emissive);
   }
 
   public pushMesh3DIndexed(
-    positions: Float32Array | readonly number[],
-    normals: Float32Array | readonly number[],
-    uvs: Float32Array | readonly number[] | null,
-    indices: Uint32Array | Uint16Array | readonly number[],
-    options?: Parameters<GpuMesh3DBatch['pushMesh3DIndexed']>[4],
+    positions: Float32Array | readonly number[], normals: Float32Array | readonly number[],
+    uvs: Float32Array | readonly number[] | null, indices: Uint32Array | Uint16Array | readonly number[],
+    options?: Mesh3DIndexedOptions,
   ): void {
-    this.mesh3d.pushMesh3DIndexed(positions, normals, uvs, indices, options);
+    this.scene3d.pushMesh3DIndexed(positions, normals, uvs, indices, options);
   }
 
   public drawCuboid3D(
-    topId: SpriteId | null,
-    sideId: SpriteId | null,
-    bottomId: SpriteId | null,
-    x: number,
-    y: number,
-    z: number,
-    sx: number,
-    sy: number,
-    sz: number,
-    cullMask = 0,
-    tint?: string,
-    alpha = 1,
-    paletteRow = -1,
-    roughness = 0.58,
-    metallic = 0.08,
-    emissive = 0,
-    yawDeg = 0,
+    topId: SpriteId | null, sideId: SpriteId | null, bottomId: SpriteId | null,
+    x: number, y: number, z: number, sx: number, sy: number, sz: number,
+    cullMask = 0, tint?: string, alpha = 1, paletteRow = -1,
+    roughness = 0.58, metallic = 0.08, emissive = 0, yawDeg = 0,
   ): void {
-    this.mesh3d.pushCuboid3D(
+    this.scene3d.drawCuboid3D(
       this.atlas, topId, sideId, bottomId, x, y, z, sx, sy, sz, cullMask,
       tint, alpha, paletteRow, roughness, metallic, emissive, yawDeg,
     );
   }
 
   public drawRamp3D(
-    topId: SpriteId | null,
-    sideId: SpriteId | null,
-    x: number,
-    y: number,
-    z: number,
-    sx: number,
-    sy: number,
-    sz: number,
-    facing: CardinalFacing3D,
-    tint?: string,
-    alpha = 1,
-    paletteRow = -1,
-    roughness = 0.6,
-    metallic = 0.06,
-    emissive = 0,
+    topId: SpriteId | null, sideId: SpriteId | null,
+    x: number, y: number, z: number, sx: number, sy: number, sz: number,
+    facing: CardinalFacing3D, tint?: string, alpha = 1, paletteRow = -1,
+    roughness = 0.6, metallic = 0.06, emissive = 0,
   ): void {
-    this.mesh3d.pushRamp3D(
-      this.atlas, topId, sideId, x, y, z, sx, sy, sz, facing,
-      tint, alpha, paletteRow, roughness, metallic, emissive,
+    this.scene3d.drawRamp3D(
+      this.atlas, topId, sideId, x, y, z, sx, sy, sz, facing, tint, alpha, paletteRow, roughness, metallic, emissive,
     );
   }
 
   public drawStairs3D(
-    topId: SpriteId | null,
-    sideId: SpriteId | null,
-    x: number,
-    y: number,
-    z: number,
-    sx: number,
-    sy: number,
-    sz: number,
-    facing: CardinalFacing3D,
-    steps = 4,
-    tint?: string,
-    alpha = 1,
-    paletteRow = -1,
-    roughness = 0.62,
-    metallic = 0.06,
-    emissive = 0,
+    topId: SpriteId | null, sideId: SpriteId | null,
+    x: number, y: number, z: number, sx: number, sy: number, sz: number,
+    facing: CardinalFacing3D, steps = 4, tint?: string, alpha = 1, paletteRow = -1,
+    roughness = 0.62, metallic = 0.06, emissive = 0,
   ): void {
-    this.mesh3d.pushStairs3D(
+    this.scene3d.drawStairs3D(
       this.atlas, topId, sideId, x, y, z, sx, sy, sz, facing, steps,
       tint, alpha, paletteRow, roughness, metallic, emissive,
     );
   }
 
   public drawLine3D(
-    x0: number,
-    y0: number,
-    z0: number,
-    x1: number,
-    y1: number,
-    z1: number,
-    colorHex: string,
-    alpha = 1,
+    x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, colorHex: string, alpha = 1,
   ): void {
-    this.mesh3d.pushLine3D(x0, y0, z0, x1, y1, z1, colorHex, alpha);
+    this.scene3d.drawLine3D(x0, y0, z0, x1, y1, z1, colorHex, alpha);
   }
 
   public drawAxisGizmo3D(ox: number, oy: number, oz: number, axisLen = 48): void {
-    this.mesh3d.pushAxisGizmo3D(ox, oy, oz, axisLen);
+    this.scene3d.drawAxisGizmo3D(ox, oy, oz, axisLen);
   }
 
   public drawOrthoGrid3D(
-    minX: number,
-    minY: number,
-    maxX: number,
-    maxY: number,
-    zPlane = 0,
-    step = 32,
-    majorEvery = 4,
-    minorColor = '#334155',
-    majorColor = '#64748b',
-    alpha = 0.55,
+    minX: number, minY: number, maxX: number, maxY: number,
+    zPlane = 0, step = 32, majorEvery = 4, minorColor = '#334155', majorColor = '#64748b', alpha = 0.55,
   ): void {
-    this.mesh3d.pushOrthoGrid3D(minX, minY, maxX, maxY, zPlane, step, majorEvery, minorColor, majorColor, alpha);
+    this.scene3d.drawOrthoGrid3D(minX, minY, maxX, maxY, zPlane, step, majorEvery, minorColor, majorColor, alpha);
   }
 
   public flush(timeSec: number): GpuFrameStats {
@@ -1310,14 +854,14 @@ export class GpuEngine {
       this.dynamicLights,
       this.dynamicLightCount,
       this.occlusionState,
-      this.quad3d.getPassData(),
-      this.mesh3d.getPassData(),
+      this.scene3d.getQuadPassData(),
+      this.scene3d.getMeshPassData(),
     );
     const frameTimeMs = performance.now() - t0;
     this.lastStats.backend = this.backend.kind;
     this.lastStats.drawCalls = drawCalls;
-    this.lastStats.spriteCount = this.spriteTotal + this.quad3d.spriteCount;
-    this.lastStats.lightCount = Math.max(this.lightTotal + this.quad3d.lightCount, this.dynamicLightCount);
+    this.lastStats.spriteCount = this.spriteTotal + this.scene3d.quad3d.spriteCount;
+    this.lastStats.lightCount = Math.max(this.lightTotal + this.scene3d.quad3d.lightCount, this.dynamicLightCount);
     this.lastStats.frameTimeMs = frameTimeMs;
     return this.lastStats;
   }

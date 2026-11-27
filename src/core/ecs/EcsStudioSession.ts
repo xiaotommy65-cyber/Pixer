@@ -1,18 +1,14 @@
-import { VIEWPORT_PRESETS, type ViewportPreset } from '../gpu/GpuTypes.ts';
+import type { ViewportPreset } from '../gpu/GpuTypes.ts';
 import type { Camera3DProjectionMode } from '../math/Perspective3DMath.ts';
 import type { AnimationStateMachineDef } from '../sim/AnimationStateMachine.ts';
 import { createEmptyInputState, DEFAULT_RUNTIME_PARAMS } from '../types/WorldTypes.ts';
 import { EcsCartridgeRuntime } from './EcsCartridgeRuntime.ts';
 import type { EcsEventGraphLayoutMap } from './EcsEventGraph.ts';
-import { validateModel3DDef, type EcsModel3DDef } from './EcsModel3D.ts';
+import type { EcsModel3DDef } from './EcsModel3D.ts';
 import {
   cloneEcsProject,
   getEntityPrefabId,
-  resolveEntityComponents,
-  validateCustomSpriteDef,
-  validateCutsceneDef,
   validateEcsProjectV2,
-  type EcsComponentBundle,
   type EcsComponentOverrides,
   type EcsCustomSpriteDef,
   type EcsCutsceneDef,
@@ -24,41 +20,77 @@ import {
   type EcsScriptDef,
 } from './EcsProjectSchema.ts';
 import {
-  createEmptyRoom,
-  fillRoomBox3D,
-  fillRoomRect,
-  floodFillRoom,
-  setRoomTile,
-  setRoomVoxel,
-  type EcsMapInteractionRule,
-  type EcsMapLayerName,
-  type EcsMapPortalDef,
-  type EcsMapRoomDef,
-  type EcsTileDef,
-  type EcsTopDownAiProfile,
-  type EcsTopDownHeroConfig,
-  type EcsVoxelCellDef,
-  type EcsVoxelShape,
+  ECS_ATTACHABLE_COMPONENTS,
+  handleAttachComponent,
+  handleClearRoomVoxels,
+  handleCreatePrefab,
+  handleDeletePrefab,
+  handleDeleteRoom,
+  handleDetachComponent,
+  handleEnsureWorldMap,
+  handleFillRect,
+  handleFillRoomBox3D,
+  handleFloodFill,
+  handleInstantiatePrefab,
+  handlePaintTiles,
+  handlePatchEntity,
+  handleRemoveAiProfile,
+  handleRemoveAnimation,
+  handleRemoveCustomSprite,
+  handleRemoveCutscene,
+  handleRemoveEntity,
+  handleRemoveHudGauge,
+  handleRemoveInteractionRule,
+  handleRemoveModel3D,
+  handleRemovePortal,
+  handleRemoveScript,
+  handleRevertPrefabOverrides,
+  handleSaveEntityAsPrefab,
+  handleSetAtmosphere,
+  handleSetCamera3DPose,
+  handleSetGlobal,
+  handleSetProjection,
+  handleSetRoomVoxel,
+  handleSetViewport,
+  handleSetWorldMapConfig,
+  handleSpawnEntity,
+  handleStampRoomAscii,
+  handleUnlinkPrefab,
+  handleUpdatePrefab,
+  handleUpsertAiProfile,
+  handleUpsertAnimation,
+  handleUpsertCustomSprite,
+  handleUpsertCutscene,
+  handleUpsertHudGauge,
+  handleUpsertInteractionRule,
+  handleUpsertModel3D,
+  handleUpsertPortal,
+  handleUpsertRoom,
+  handleUpsertScript,
+  handleUpsertTileDef,
+  type EcsAsciiLegendEntry,
+  type EcsAttachableComponent,
+  type EcsCommandHandlerOutcome,
+  type EcsCommandResult,
+} from './EcsStudioCommandHandlers.ts';
+import type {
+  EcsMapInteractionRule,
+  EcsMapLayerName,
+  EcsMapPortalDef,
+  EcsMapRoomDef,
+  EcsTileDef,
+  EcsTopDownAiProfile,
+  EcsTopDownHeroConfig,
+  EcsVoxelCellDef,
+  EcsVoxelShape,
 } from './EcsTilemapTypes.ts';
 
-export const ECS_ATTACHABLE_COMPONENTS = [
-  'body2d',
-  'sprite',
-  'health',
-  'light',
-  'collider',
-  'pathFollower',
-  'lifetime',
-  'rhythmLane',
-  'characterMotor2d',
-  'grappleAnchor',
-  'triggerZone',
-  'verletChain',
-  'spatial3d',
-  'mesh3d',
-] as const;
-
-export type EcsAttachableComponent = (typeof ECS_ATTACHABLE_COMPONENTS)[number];
+export {
+  ECS_ATTACHABLE_COMPONENTS,
+  type EcsAsciiLegendEntry,
+  type EcsAttachableComponent,
+  type EcsCommandResult,
+};
 
 export interface EcsPrefabSummary {
   id: string;
@@ -67,15 +99,6 @@ export interface EcsPrefabSummary {
   instanceCount: number;
   componentKeys: string[];
   spriteId?: string;
-}
-
-export interface EcsAsciiLegendEntry {
-  ground?: number;
-  wall?: number;
-  decor?: number;
-  prefabId?: string;
-  entityName?: string;
-  entityIdPrefix?: string;
 }
 
 export interface EcsCustomSpriteSummary {
@@ -285,19 +308,6 @@ export const ECS_COMMAND_CATALOG: readonly EcsCommandGrammarEntry[] = [
   { type: 'set_camera_3d_pose', category: 'scene', fields: 'yawDeg?, pitchDeg?, rollDeg?, fovDeg?, camCenterZ?, autoFollowHeroZ?, roofCutawayMode?, roofCutawayAlpha?, cameraProjection3d?, quadView?, shadowMapEnabled?, shadowMapStrength?, showAxisGizmo3d?, showOrthoGrid3d?', note: 'Configure 6DoF 3D camera pose, auto Z-follow, interior roof cutaway, orthographic projection, quad-view split, shadow map, and 3D gizmos.' },
 ] as const;
 
-export interface EcsCommandResult {
-  ok: boolean;
-  revision: number;
-  summary: string;
-  errors: string[];
-  createdEntityId?: string;
-  createdPrefabId?: string;
-  createdSpriteId?: string;
-  createdEntityIds?: string[];
-  createdPrefabIds?: string[];
-  createdSpriteIds?: string[];
-}
-
 export interface EcsHistoryItem {
   revision: number;
   type: EcsStudioCommand['type'] | 'batch' | 'undo' | 'redo';
@@ -316,55 +326,6 @@ export interface EcsPlaytestReport {
 }
 
 const MAX_UNDO = 40;
-
-function mergeOverridesIntoTarget(
-  target: Record<string, unknown>,
-  patch: EcsComponentOverrides,
-  isSparse: boolean,
-): void {
-  const objectKeys = [
-    'transform',
-    'body2d',
-    'sprite',
-    'health',
-    'light',
-    'collider',
-    'pathFollower',
-    'rhythmLane',
-    'characterMotor2d',
-    'grappleAnchor',
-    'triggerZone',
-    'verletChain',
-    'spatial3d',
-    'mesh3d',
-  ] as const;
-
-  for (const key of objectKeys) {
-    const patchVal = patch[key];
-    if (!patchVal) continue;
-    const prevVal = target[key] as Record<string, unknown> | undefined;
-    if (isSparse) {
-      target[key] = { ...(prevVal ?? {}), ...patchVal };
-    } else {
-      let defaults: Record<string, unknown> = {};
-      if (key === 'transform') defaults = { x: 0, y: 0 };
-      else if (key === 'sprite') defaults = { sprite: 'solid' };
-      else if (key === 'health') defaults = { hp: 3, team: 1 };
-      else if (key === 'light') defaults = { radius: 48, color: '#ffd447' };
-      else if (key === 'collider') defaults = { radius: 12 };
-      else if (key === 'pathFollower') defaults = { pathId: '', speed: 48 };
-      else if (key === 'rhythmLane') defaults = { lane: 0, judgeX: 112 };
-      else if (key === 'mesh3d') defaults = { modelId: '' };
-      target[key] = { ...defaults, ...(prevVal ?? {}), ...patchVal };
-    }
-  }
-
-  if (patch.animatorId !== undefined) target.animatorId = patch.animatorId;
-  if (patch.lifetime !== undefined) target.lifetime = patch.lifetime;
-  if (patch.vars !== undefined) target.vars = [...patch.vars];
-  if (patch.scripts !== undefined) target.scripts = [...patch.scripts];
-  if (patch.tag !== undefined) target.tag = patch.tag;
-}
 
 /**
  * Pure DOM-free transactional ECS Studio Session shared by both the Pixer 7.0+ Workstation UI
@@ -502,837 +463,135 @@ export class EcsStudioSession {
 
   public dispatch(cmd: EcsStudioCommand): EcsCommandResult {
     const prev = cloneEcsProject(this.doc);
-    const next = cloneEcsProject(this.doc);
-    let summary = '';
-    let createdEntityId: string | undefined;
-    let createdPrefabId: string | undefined;
-    let createdSpriteId: string | undefined;
+    if (cmd.type === 'load_project') {
+      const loaded = cloneEcsProject(cmd.project);
+      const check = validateEcsProjectV2(loaded);
+      if (!check.ok) return { ok: false, revision: this.revision, summary: '載入失敗', errors: check.errors };
+      this.commit(prev, loaded, 'load_project', `載入 ECS 專案「${loaded.meta.title}」`);
+      return { ok: true, revision: this.revision, summary: `已載入「${loaded.meta.title}」`, errors: [] };
+    }
 
-    switch (cmd.type) {
-      case 'load_project': {
-        const loaded = cloneEcsProject(cmd.project);
-        const check = validateEcsProjectV2(loaded);
-        if (!check.ok) return { ok: false, revision: this.revision, summary: '載入失敗', errors: check.errors };
-        this.commit(prev, loaded, 'load_project', `載入 ECS 專案「${loaded.meta.title}」`);
-        return { ok: true, revision: this.revision, summary: `已載入「${loaded.meta.title}」`, errors: [] };
-      }
-      case 'set_viewport': {
-        if (cmd.preset && VIEWPORT_PRESETS[cmd.preset]) {
-          const vp = VIEWPORT_PRESETS[cmd.preset];
-          next.viewport = { preset: cmd.preset, width: vp.width, height: vp.height };
-          summary = `解析度切換至 ${vp.width}×${vp.height} (${cmd.preset})`;
-        } else if (cmd.width && cmd.height) {
-          next.viewport = { width: cmd.width, height: cmd.height };
-          summary = `解析度切換至 ${cmd.width}×${cmd.height}`;
-        } else {
-          return { ok: false, revision: this.revision, summary: '缺少解析度參數', errors: ['Invalid viewport command'] };
-        }
-        break;
-      }
-      case 'spawn_entity': {
-        if (next.entities.some((e) => e.id === cmd.entity.id)) {
-          return { ok: false, revision: this.revision, summary: '實體 ID 重複', errors: [`Duplicate entity id: ${cmd.entity.id}`] };
-        }
-        next.entities.push(cmd.entity);
-        createdEntityId = cmd.entity.id;
-        summary = `新增實體「${cmd.entity.name}」`;
-        break;
-      }
-      case 'remove_entity': {
-        const idx = next.entities.findIndex((e) => e.id === cmd.entityId);
-        if (idx < 0) {
-          return { ok: false, revision: this.revision, summary: '找不到實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const [removed] = next.entities.splice(idx, 1);
-        summary = `移除實體「${removed.name}」`;
-        break;
-      }
-      case 'patch_entity': {
-        const ent = next.entities.find((e) => e.id === cmd.entityId);
-        if (!ent) {
-          return { ok: false, revision: this.revision, summary: '找不到實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const pid = getEntityPrefabId(ent);
-        if (pid && next.prefabs[pid]) {
-          ent.overrides = ent.overrides ?? {};
-          mergeOverridesIntoTarget(ent.overrides as Record<string, unknown>, cmd.patch, true);
-          if (ent.detachedComponents && ent.detachedComponents.length > 0) {
-            const patchedKeys = new Set(Object.keys(cmd.patch));
-            ent.detachedComponents = ent.detachedComponents.filter((k) => !patchedKeys.has(k));
-            if (ent.detachedComponents.length === 0) delete ent.detachedComponents;
-          }
-        } else {
-          mergeOverridesIntoTarget(ent.components as Record<string, unknown>, cmd.patch, false);
-        }
-        summary = `更新實體「${ent.name}」元件屬性`;
-        break;
-      }
-      case 'attach_component': {
-        const ent = next.entities.find((e) => e.id === cmd.entityId);
-        if (!ent) {
-          return { ok: false, revision: this.revision, summary: '找不到實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const pid = getEntityPrefabId(ent);
-        if (pid && next.prefabs[pid]) {
-          ent.overrides = ent.overrides ?? {};
-          (ent.overrides as Record<string, unknown>)[cmd.component] = cmd.value;
-          if (ent.detachedComponents) {
-            ent.detachedComponents = ent.detachedComponents.filter((k) => k !== cmd.component);
-            if (ent.detachedComponents.length === 0) delete ent.detachedComponents;
-          }
-        } else {
-          (ent.components as Record<string, unknown>)[cmd.component] = cmd.value;
-        }
-        summary = `為「${ent.name}」掛載元件 ${cmd.component}`;
-        break;
-      }
-      case 'detach_component': {
-        const ent = next.entities.find((e) => e.id === cmd.entityId);
-        if (!ent) {
-          return { ok: false, revision: this.revision, summary: '找不到實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const pid = getEntityPrefabId(ent);
-        delete (ent.components as Record<string, unknown>)[cmd.component];
-        if (ent.overrides) {
-          delete (ent.overrides as Record<string, unknown>)[cmd.component];
-        }
-        if (pid && next.prefabs[pid]) {
-          const baseHas =
-            (next.prefabs[pid].components as unknown as Record<string, unknown>)[cmd.component] !== undefined;
-          if (baseHas) {
-            ent.detachedComponents = ent.detachedComponents ?? [];
-            if (!ent.detachedComponents.includes(cmd.component)) {
-              ent.detachedComponents.push(cmd.component);
-            }
-          }
-        }
-        summary = `已從「${ent.name}」移除元件 ${cmd.component}`;
-        break;
-      }
-      case 'create_prefab': {
-        const cleanId = cmd.prefab.id.trim();
-        if (!cleanId) {
-          return { ok: false, revision: this.revision, summary: 'Prefab ID 不可為空', errors: ['Prefab id is required'] };
-        }
-        if (next.prefabs[cleanId]) {
-          return { ok: false, revision: this.revision, summary: 'Prefab ID 重複', errors: [`Duplicate prefab id: ${cleanId}`] };
-        }
-        next.prefabs[cleanId] = {
-          ...JSON.parse(JSON.stringify(cmd.prefab)),
-          id: cleanId,
-          name: cmd.prefab.name.trim() || cleanId,
-        } as EcsPrefabDef;
-        createdPrefabId = cleanId;
-        summary = `建立 Prefab 模板「${next.prefabs[cleanId].name}」`;
-        break;
-      }
-      case 'update_prefab': {
-        const pref = next.prefabs[cmd.prefabId];
-        if (!pref) {
-          return { ok: false, revision: this.revision, summary: '找不到 Prefab', errors: [`Prefab not found: ${cmd.prefabId}`] };
-        }
-        if (cmd.name !== undefined && cmd.name.trim()) pref.name = cmd.name.trim();
-        if (cmd.category !== undefined) pref.category = cmd.category.trim();
-        if (cmd.patch) {
-          mergeOverridesIntoTarget(pref.components as unknown as Record<string, unknown>, cmd.patch, false);
-        }
-        if (cmd.attachComponent) {
-          (pref.components as unknown as Record<string, unknown>)[cmd.attachComponent.component] =
-            cmd.attachComponent.value;
-        }
-        if (cmd.detachComponent) {
-          delete (pref.components as unknown as Record<string, unknown>)[cmd.detachComponent];
-        }
-        summary = `更新 Prefab 模板「${pref.name}」`;
-        break;
-      }
-      case 'delete_prefab': {
-        const pref = next.prefabs[cmd.prefabId];
-        if (!pref) {
-          return { ok: false, revision: this.revision, summary: '找不到 Prefab', errors: [`Prefab not found: ${cmd.prefabId}`] };
-        }
-        const mode = cmd.mode ?? 'unlink';
-        if (mode === 'remove_instances') {
-          next.entities = next.entities.filter((e) => getEntityPrefabId(e) !== cmd.prefabId);
-        } else {
-          for (let i = 0; i < next.entities.length; i++) {
-            const e = next.entities[i];
-            if (getEntityPrefabId(e) !== cmd.prefabId) continue;
-            e.components = resolveEntityComponents(e, next.prefabs);
-            delete e.prefabId;
-            delete e.prefab;
-            delete e.overrides;
-            delete e.detachedComponents;
-          }
-        }
-        delete next.prefabs[cmd.prefabId];
-        summary = `刪除 Prefab 模板「${pref.name}」`;
-        break;
-      }
-      case 'save_entity_as_prefab': {
-        const ent = next.entities.find((e) => e.id === cmd.entityId);
-        if (!ent) {
-          return { ok: false, revision: this.revision, summary: '找不到來源實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const cleanId = cmd.prefabId.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-        if (!cleanId) {
-          return { ok: false, revision: this.revision, summary: 'Prefab ID 無效', errors: ['Invalid prefab id'] };
-        }
-        if (next.prefabs[cleanId]) {
-          return { ok: false, revision: this.revision, summary: 'Prefab ID 已存在', errors: [`Duplicate prefab id: ${cleanId}`] };
-        }
-        const resolved = resolveEntityComponents(ent, next.prefabs);
-        const prefName = cmd.name?.trim() || `${ent.name} 模板`;
-        next.prefabs[cleanId] = {
-          id: cleanId,
-          name: prefName,
-          category: cmd.category ?? (resolved.tag || 'custom'),
-          components: JSON.parse(JSON.stringify(resolved)) as EcsComponentBundle,
-        };
-        if (cmd.linkSourceEntity !== false) {
-          ent.prefabId = cleanId;
-          delete ent.prefab;
-          ent.components = {};
-          ent.overrides = {
-            transform: {
-              x: resolved.transform.x,
-              y: resolved.transform.y,
-            },
-          };
-          delete ent.detachedComponents;
-        }
-        createdPrefabId = cleanId;
-        summary = `將「${ent.name}」存為 Prefab「${prefName}」`;
-        break;
-      }
-      case 'instantiate_prefab': {
-        const pref = next.prefabs[cmd.prefabId];
-        if (!pref) {
-          return { ok: false, revision: this.revision, summary: '找不到 Prefab', errors: [`Prefab not found: ${cmd.prefabId}`] };
-        }
-        let seq = next.entities.filter((e) => getEntityPrefabId(e) === cmd.prefabId).length + 1;
-        let entId = cmd.entityId?.trim() || `${cmd.prefabId}_inst_${seq}`;
-        while (next.entities.some((e) => e.id === entId)) {
-          seq++;
-          entId = `${cmd.prefabId}_inst_${seq}`;
-        }
-        const entName = cmd.name?.trim() || `${pref.name} #${seq}`;
-        const overrides: EcsComponentOverrides = cmd.overrides ? JSON.parse(JSON.stringify(cmd.overrides)) : {};
-        if (cmd.x !== undefined || cmd.y !== undefined) {
-          overrides.transform = {
-            ...(overrides.transform ?? {}),
-            ...(cmd.x !== undefined ? { x: cmd.x } : {}),
-            ...(cmd.y !== undefined ? { y: cmd.y } : {}),
-          };
-        }
-        if (cmd.z !== undefined && Number.isFinite(cmd.z)) {
-          overrides.spatial3d = {
-            ...(overrides.spatial3d ?? {}),
-            z: cmd.z,
-          };
-        }
-        const inst: EcsEntityInitDef = {
-          id: entId,
-          name: entName,
-          prefabId: cmd.prefabId,
-          ...(cmd.roomId ? { roomId: cmd.roomId } : {}),
-          components: {},
-          ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
-        };
-        next.entities.push(inst);
-        createdEntityId = entId;
-        summary = `從 Prefab「${pref.name}」實例化「${entName}」`;
-        break;
-      }
-      case 'revert_prefab_overrides': {
-        const ent = next.entities.find((e) => e.id === cmd.entityId);
-        if (!ent) {
-          return { ok: false, revision: this.revision, summary: '找不到實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const pid = getEntityPrefabId(ent);
-        if (!pid || !next.prefabs[pid]) {
-          return { ok: false, revision: this.revision, summary: '此實體未連結 Prefab', errors: ['Entity is not linked to a Prefab'] };
-        }
-        const resolved = resolveEntityComponents(ent, next.prefabs);
-        ent.components = {};
-        delete ent.detachedComponents;
-        if (cmd.keepPosition !== false) {
-          ent.overrides = { transform: { x: resolved.transform.x, y: resolved.transform.y } };
-        } else {
-          delete ent.overrides;
-        }
-        summary = `已重置「${ent.name}」的 Prefab 覆寫`;
-        break;
-      }
-      case 'unlink_prefab': {
-        const ent = next.entities.find((e) => e.id === cmd.entityId);
-        if (!ent) {
-          return { ok: false, revision: this.revision, summary: '找不到實體', errors: [`Entity not found: ${cmd.entityId}`] };
-        }
-        const pid = getEntityPrefabId(ent);
-        if (!pid) {
-          return { ok: false, revision: this.revision, summary: '此實體未連結 Prefab', errors: ['Entity has no Prefab link'] };
-        }
-        ent.components = resolveEntityComponents(ent, next.prefabs);
-        delete ent.prefabId;
-        delete ent.prefab;
-        delete ent.overrides;
-        delete ent.detachedComponents;
-        summary = `已將「${ent.name}」與 Prefab 斷開連結`;
-        break;
-      }
-      case 'upsert_script': {
-        next.scripts[cmd.script.id] = cmd.script;
-        if (cmd.graphLayout) {
-          if (!next.graphLayouts) next.graphLayouts = {};
-          next.graphLayouts[cmd.script.id] = cmd.graphLayout;
-        }
-        summary = `更新事件圖腳本「${cmd.script.name}」`;
-        break;
-      }
-      case 'remove_script': {
-        if (!next.scripts[cmd.scriptId]) {
-          return { ok: false, revision: this.revision, summary: '找不到腳本', errors: [`Script not found: ${cmd.scriptId}`] };
-        }
-        const removedName = next.scripts[cmd.scriptId].name;
-        delete next.scripts[cmd.scriptId];
-        if (next.graphLayouts) {
-          delete next.graphLayouts[cmd.scriptId];
-        }
-        for (const ent of next.entities) {
-          if (ent.components.scripts) {
-            ent.components.scripts = ent.components.scripts.filter((id) => id !== cmd.scriptId);
-          }
-          if (ent.overrides?.scripts) {
-            ent.overrides.scripts = ent.overrides.scripts.filter((id) => id !== cmd.scriptId);
-          }
-        }
-        summary = `刪除腳本「${removedName}」`;
-        break;
-      }
-      case 'set_global': {
-        next.globals[cmd.key] = cmd.value;
-        summary = `設定全域變數 ${cmd.key} = ${cmd.value}`;
-        break;
-      }
-      case 'set_atmosphere': {
-        next.atmosphere = { ...next.atmosphere, ...cmd.patch };
-        summary = '更新大氣與水面反射設定';
-        break;
-      }
-      case 'set_projection': {
-        const prevProj: EcsProjectionConfig = next.projection ?? {
-          mode: 'hd2d_3d',
-          elevationScale: 1.0,
-          pitchDeg: 42,
-          fovDeg: 38,
-          wallHeightScale: 1.25,
-          billboardTiltDeg: 12,
-          obliqueShadowAlpha: 0.42,
-          activeDimensionMask: 3,
-          inactiveDimAlpha: 0.16,
-          allowDimensionShift: false,
-        };
-        next.projection = { ...prevProj, ...cmd.patch };
-        const pMode = next.projection.mode;
-        const extra =
-          pMode === 'hd2d_3d'
-            ? ` (俯角 ${Math.round(next.projection.pitchDeg ?? 42)}° · FOV ${Math.round(next.projection.fovDeg ?? 38)}° · 牆高 ${(next.projection.wallHeightScale ?? 1.25).toFixed(2)}×)`
-            : ` (位面遮罩 ${next.projection.activeDimensionMask ?? 3})`;
-        summary = `切換多維投影：${pMode}${extra}`;
-        break;
-      }
-      case 'ensure_world_map': {
-        if (!next.worldMap) {
-          const cols = cmd.cols ?? 24;
-          const rows = cmd.rows ?? 16;
-          const room = createEmptyRoom('room_main', cmd.roomName ?? '主廳地圖', cols, rows);
-          next.worldMap = {
-            tileSize: 32,
-            startRoomId: room.id,
-            rooms: [room],
-            portals: [],
-          };
-          summary = `建立 32px 多層地圖（${cols}×${rows}）`;
-        } else {
-          summary = '專案已包含多層地圖';
-        }
-        break;
-      }
-      case 'paint_tiles': {
-        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        let changed = 0;
-        for (let i = 0; i < cmd.changes.length; i++) {
-          const ch = cmd.changes[i];
-          if (setRoomTile(room, cmd.layer, ch.col, ch.row, ch.tileId)) changed++;
-        }
-        if (changed === 0) {
-          return { ok: true, revision: this.revision, summary: '地圖無格點變更', errors: [] };
-        }
-        summary = `繪製 ${room.name} (${cmd.layer}) 共 ${changed} 格`;
-        break;
-      }
-      case 'fill_rect': {
-        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        const changed = fillRoomRect(room, cmd.layer, cmd.c0, cmd.r0, cmd.c1, cmd.r1, cmd.tileId);
-        if (changed === 0) {
-          return { ok: true, revision: this.revision, summary: '矩形區域無變更', errors: [] };
-        }
-        summary = `矩形填滿 ${room.name} (${cmd.layer}) 共 ${changed} 格`;
-        break;
-      }
-      case 'flood_fill': {
-        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        const changed = floodFillRoom(room, cmd.layer, cmd.col, cmd.row, cmd.tileId);
-        if (changed === 0) {
-          return { ok: true, revision: this.revision, summary: '油漆桶無變更', errors: [] };
-        }
-        summary = `油漆桶填滿 ${room.name} (${cmd.layer}) 共 ${changed} 格`;
-        break;
-      }
-      case 'upsert_room': {
-        if (!next.worldMap) {
-          next.worldMap = { tileSize: 32, startRoomId: cmd.room.id, rooms: [cmd.room], portals: [] };
-        } else {
-          const idx = next.worldMap.rooms.findIndex((r) => r.id === cmd.room.id);
-          if (idx >= 0) next.worldMap.rooms[idx] = cmd.room;
-          else next.worldMap.rooms.push(cmd.room);
-        }
-        summary = `更新房間「${cmd.room.name}」(${cmd.room.cols}×${cmd.room.rows})`;
-        break;
-      }
-      case 'delete_room': {
-        if (!next.worldMap || next.worldMap.rooms.length <= 1) {
-          return { ok: false, revision: this.revision, summary: '至少需保留一間房間', errors: ['Cannot delete last room'] };
-        }
-        const idx = next.worldMap.rooms.findIndex((r) => r.id === cmd.roomId);
-        if (idx < 0) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        const removed = next.worldMap.rooms.splice(idx, 1)[0];
-        next.worldMap.portals = next.worldMap.portals.filter(
-          (p) => p.fromRoomId !== cmd.roomId && p.toRoomId !== cmd.roomId,
-        );
-        if (next.worldMap.startRoomId === cmd.roomId) {
-          next.worldMap.startRoomId = next.worldMap.rooms[0].id;
-        }
-        summary = `刪除房間「${removed.name}」`;
-        break;
-      }
-      case 'upsert_portal': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        const idx = next.worldMap.portals.findIndex((p) => p.id === cmd.portal.id);
-        if (idx >= 0) next.worldMap.portals[idx] = cmd.portal;
-        else next.worldMap.portals.push(cmd.portal);
-        summary = `更新傳送門「${cmd.portal.name}」`;
-        break;
-      }
-      case 'remove_portal': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        next.worldMap.portals = next.worldMap.portals.filter((p) => p.id !== cmd.portalId);
-        summary = `移除傳送門 ${cmd.portalId}`;
-        break;
-      }
-      case 'stamp_room_ascii': {
-        if (!Array.isArray(cmd.lines) || cmd.lines.length === 0) {
-          return { ok: false, revision: this.revision, summary: 'ASCII 地圖藍圖為空', errors: ['lines must be a non-empty string array'] };
-        }
-        const gridH = cmd.lines.length;
-        const gridW = Math.max(8, ...cmd.lines.map((l) => l.length));
-        if (!next.worldMap) {
-          const fresh = createEmptyRoom(cmd.roomId, cmd.roomName ?? cmd.roomId, gridW, Math.max(8, gridH));
-          next.worldMap = { tileSize: 32, startRoomId: fresh.id, rooms: [fresh], portals: [] };
-        }
-        let room = next.worldMap.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          if (!cmd.createIfMissing) {
-            return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-          }
-          room = createEmptyRoom(cmd.roomId, cmd.roomName ?? cmd.roomId, gridW, Math.max(8, gridH));
-          next.worldMap.rooms.push(room);
-        }
-        if (typeof cmd.editorFocusY === 'number') {
-          room.editorFocusY = cmd.editorFocusY;
-        }
-        if (cmd.clearExistingRoomEntities) {
-          next.entities = next.entities.filter((e) => {
-            if (e.roomId !== room!.id) return true;
-            const c = resolveEntityComponents(e, next.prefabs);
-            return c.tag === 'hero' || c.tag === 'player';
-          });
-        }
-        const ox = Math.max(0, Math.floor(cmd.originCol ?? 0));
-        const oy = Math.max(0, Math.floor(cmd.originRow ?? 0));
-        const ts = next.worldMap.tileSize;
-        let painted = 0;
-        let spawned = 0;
-        for (let r = 0; r < cmd.lines.length; r++) {
-          const line = cmd.lines[r];
-          for (let c = 0; c < line.length; c++) {
-            const ch = line[c];
-            const entry = cmd.legend[ch];
-            if (!entry) continue;
-            const col = ox + c;
-            const row = oy + r;
-            if (col < 0 || row < 0 || col >= room.cols || row >= room.rows) continue;
-            if (typeof entry.ground === 'number') {
-              if (setRoomTile(room, 'ground', col, row, entry.ground)) painted++;
-            }
-            if (typeof entry.wall === 'number') {
-              if (setRoomTile(room, 'wall', col, row, entry.wall)) painted++;
-            }
-            if (typeof entry.decor === 'number') {
-              if (setRoomTile(room, 'decor', col, row, entry.decor)) painted++;
-            }
-            if (entry.prefabId) {
-              const prefab = next.prefabs[entry.prefabId];
-              if (!prefab) {
-                return {
-                  ok: false,
-                  revision: this.revision,
-                  summary: `ASCII 圖例 '${ch}' 找不到 Prefab`,
-                  errors: [`Unknown prefabId "${entry.prefabId}" for legend glyph "${ch}"`],
-                };
-              }
-              const prefix = entry.entityIdPrefix ?? `${room.id}_${entry.prefabId}`;
-              let seq = 1;
-              let eid = `${prefix}_${col}_${row}`;
-              while (next.entities.some((e) => e.id === eid)) {
-                seq++;
-                eid = `${prefix}_${col}_${row}_${seq}`;
-              }
-              const pw = prefab.components.transform?.w ?? ts;
-              const ph = prefab.components.transform?.h ?? ts;
-              const px = col * ts + Math.round((ts - pw) * 0.5);
-              const py = row * ts + (ts - ph);
-              next.entities.push({
-                id: eid,
-                name: entry.entityName ?? prefab.name,
-                roomId: room.id,
-                prefabId: entry.prefabId,
-                components: {},
-                overrides: { transform: { x: px, y: py } },
-              });
-              createdEntityId = eid;
-              spawned++;
-            }
-          }
-        }
-        summary = `ASCII 藍圖套用至「${room.name}」（繪製 ${painted} 格、生成 ${spawned} 個實體）`;
-        break;
-      }
-      case 'set_world_map_config': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        if (cmd.startRoomId) {
-          if (!next.worldMap.rooms.some((r) => r.id === cmd.startRoomId)) {
-            return { ok: false, revision: this.revision, summary: '找不到起始房間', errors: [`Room not found: ${cmd.startRoomId}`] };
-          }
-          next.worldMap.startRoomId = cmd.startRoomId;
-        }
-        if (typeof cmd.tileSize === 'number' && cmd.tileSize >= 8 && cmd.tileSize <= 128) {
-          next.worldMap.tileSize = Math.round(cmd.tileSize);
-        }
-        if (cmd.heroConfig) {
-          next.worldMap.heroConfig = { ...(next.worldMap.heroConfig ?? {}), ...cmd.heroConfig };
-        }
-        if (typeof cmd.hostileProjectileTag === 'string' && cmd.hostileProjectileTag.trim()) {
-          next.worldMap.hostileProjectileTag = cmd.hostileProjectileTag.trim();
-        }
-        summary = '更新多房間世界地圖核心設定';
-        break;
-      }
-      case 'upsert_tile_def': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        const defs = [...(next.worldMap.tileDefs ?? [])];
-        const idx = defs.findIndex((d) => d.id === cmd.tileDef.id);
-        if (idx >= 0) defs[idx] = cmd.tileDef;
-        else defs.push(cmd.tileDef);
-        next.worldMap.tileDefs = defs;
-        summary = `註冊自訂瓦片 #${cmd.tileDef.id}「${cmd.tileDef.name}」`;
-        break;
-      }
-      case 'upsert_interaction_rule': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        const rules = [...(next.worldMap.interactions ?? [])];
-        const idx = rules.findIndex((r) => r.tag === cmd.rule.tag);
-        if (idx >= 0) rules[idx] = cmd.rule;
-        else rules.push(cmd.rule);
-        next.worldMap.interactions = rules;
-        summary = `更新互動規則 tag="${cmd.rule.tag}"`;
-        break;
-      }
-      case 'remove_interaction_rule': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        next.worldMap.interactions = (next.worldMap.interactions ?? []).filter((r) => r.tag !== cmd.tag);
-        summary = `移除互動規則 tag="${cmd.tag}"`;
-        break;
-      }
-      case 'upsert_ai_profile': {
-        if (!next.worldMap) {
-          return { ok: false, revision: this.revision, summary: '尚未建立地圖', errors: ['No worldMap'] };
-        }
-        next.worldMap.aiProfiles = { ...(next.worldMap.aiProfiles ?? {}), [cmd.tag]: cmd.profile };
-        summary = `更新敵人/魔王 AI 規則 tag="${cmd.tag}"`;
-        break;
-      }
-      case 'remove_ai_profile': {
-        if (!next.worldMap?.aiProfiles) {
-          return { ok: false, revision: this.revision, summary: '找不到 AI 規則', errors: [`AI profile not found: ${cmd.tag}`] };
-        }
-        const copy = { ...next.worldMap.aiProfiles };
-        delete copy[cmd.tag];
-        next.worldMap.aiProfiles = copy;
-        summary = `移除 AI 規則 tag="${cmd.tag}"`;
-        break;
-      }
-      case 'upsert_hud_gauge': {
-        const list = [...next.hud];
-        const idx = list.findIndex((g) => g.label === cmd.gauge.label);
-        if (idx >= 0) list[idx] = cmd.gauge;
-        else list.push(cmd.gauge);
-        next.hud = list;
-        summary = `更新 HUD 指標「${cmd.gauge.label}」`;
-        break;
-      }
-      case 'remove_hud_gauge': {
-        next.hud = next.hud.filter((g) => g.label !== cmd.label);
-        summary = `移除 HUD 指標「${cmd.label}」`;
-        break;
-      }
-      case 'upsert_custom_sprite': {
-        const spriteErrs = validateCustomSpriteDef(cmd.sprite, 'sprite');
-        if (spriteErrs.length > 0) {
-          return { ok: false, revision: this.revision, summary: '自訂精靈定義驗證失敗', errors: spriteErrs };
-        }
-        const cleaned = JSON.parse(JSON.stringify(cmd.sprite)) as EcsCustomSpriteDef;
-        if (!next.customSprites) next.customSprites = {};
-        next.customSprites[cleaned.id] = cleaned;
-        createdSpriteId = cleaned.id;
-        summary = `更新自訂精靈「${cleaned.name ?? cleaned.id}」(${cleaned.width}×${cleaned.height})`;
-        break;
-      }
-      case 'remove_custom_sprite': {
-        if (!next.customSprites || !next.customSprites[cmd.spriteId]) {
-          return {
-            ok: false,
-            revision: this.revision,
-            summary: '找不到自訂精靈',
-            errors: [`Custom sprite '${cmd.spriteId}' not found`],
-          };
-        }
-        const copy = { ...next.customSprites };
-        delete copy[cmd.spriteId];
-        next.customSprites = copy;
-        summary = `移除自訂精靈「${cmd.spriteId}」`;
-        break;
-      }
-      case 'upsert_animation': {
-        const animId = cmd.animation?.id?.trim() ?? '';
-        if (!animId) {
-          return { ok: false, revision: this.revision, summary: '動畫 ID 不可為空', errors: ['Animation id is required'] };
-        }
-        if (!Array.isArray(cmd.animation.clips) || cmd.animation.clips.length === 0) {
-          return { ok: false, revision: this.revision, summary: '動畫至少需要一個 Clip', errors: ['Animation must have at least one clip'] };
-        }
-        const cleaned = JSON.parse(JSON.stringify(cmd.animation)) as AnimationStateMachineDef;
-        cleaned.id = animId;
-        if (!cleaned.initialState) cleaned.initialState = cleaned.clips[0].name;
-        const list = [...next.animations];
-        const idx = list.findIndex((a) => a.id === animId);
-        if (idx >= 0) list[idx] = cleaned;
-        else list.push(cleaned);
-        next.animations = list;
-        summary = `更新幀動畫狀態機「${animId}」(${cleaned.clips.length} 個片段)`;
-        break;
-      }
-      case 'remove_animation': {
-        const idx = next.animations.findIndex((a) => a.id === cmd.animationId);
-        if (idx < 0) {
-          return { ok: false, revision: this.revision, summary: '找不到動畫狀態機', errors: [`Animation '${cmd.animationId}' not found`] };
-        }
-        next.animations = next.animations.filter((a) => a.id !== cmd.animationId);
-        summary = `移除幀動畫狀態機「${cmd.animationId}」`;
-        break;
-      }
-      case 'upsert_cutscene': {
-        const csErrs = validateCutsceneDef(cmd.cutscene, 'cutscene');
-        if (csErrs.length > 0) {
-          return { ok: false, revision: this.revision, summary: '導演分鏡腳本驗證失敗', errors: csErrs };
-        }
-        const cleaned = JSON.parse(JSON.stringify(cmd.cutscene)) as EcsCutsceneDef;
-        const list = [...(next.cutscenes ?? [])];
-        const idx = list.findIndex((c) => c.id === cleaned.id);
-        if (idx >= 0) list[idx] = cleaned;
-        else list.push(cleaned);
-        next.cutscenes = list;
-        summary = `更新導演分鏡腳本「${cleaned.name}」(${cleaned.shots.length} 顆鏡頭)`;
-        break;
-      }
-      case 'remove_cutscene': {
-        const list = next.cutscenes ?? [];
-        if (!list.some((c) => c.id === cmd.cutsceneId)) {
-          return {
-            ok: false,
-            revision: this.revision,
-            summary: '找不到導演分鏡腳本',
-            errors: [`Cutscene '${cmd.cutsceneId}' not found`],
-          };
-        }
-        next.cutscenes = list.filter((c) => c.id !== cmd.cutsceneId);
-        summary = `移除導演分鏡腳本「${cmd.cutsceneId}」`;
-        break;
-      }
-      case 'set_room_voxel': {
-        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        setRoomVoxel(room, cmd.cell);
-        summary =
-          cmd.cell.tileId <= 0
-            ? `清除 ${room.name} (${cmd.cell.col},${cmd.cell.row},z${cmd.cell.zLevel}) 體素`
-            : `設定 ${room.name} (${cmd.cell.col},${cmd.cell.row},z${cmd.cell.zLevel}) 體素`;
-        break;
-      }
-      case 'fill_room_box_3d': {
-        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        const filled = fillRoomBox3D(
-          room,
-          cmd.c0,
-          cmd.r0,
-          cmd.z0,
-          cmd.c1,
-          cmd.r1,
-          cmd.z1,
-          cmd.tileId,
-          cmd.shape,
-        );
-        summary = `3D 體素填充 ${room.name} 共 ${filled} 格`;
-        break;
-      }
-      case 'clear_room_voxels': {
-        const room = next.worldMap?.rooms.find((r) => r.id === cmd.roomId);
-        if (!room) {
-          return { ok: false, revision: this.revision, summary: '找不到房間', errors: [`Room not found: ${cmd.roomId}`] };
-        }
-        if (cmd.zLevel !== undefined) {
-          const targetZ = cmd.zLevel | 0;
-          if (room.voxels) {
-            room.voxels = room.voxels.filter((v) => (v.zLevel | 0) !== targetZ);
-          }
-          summary = `清除 ${room.name} z=${targetZ} 層體素`;
-        } else {
-          room.voxels = [];
-          summary = `清除 ${room.name} 全部 3D 體素`;
-        }
-        break;
-      }
-      case 'upsert_model_3d': {
-        const modelErrs = validateModel3DDef(cmd.model, 'model');
-        if (modelErrs.length > 0) {
-          return { ok: false, revision: this.revision, summary: '3D 模型定義驗證失敗', errors: modelErrs };
-        }
-        let cloned: EcsModel3DDef;
-        try {
-          cloned = structuredClone(cmd.model);
-        } catch {
-          cloned = JSON.parse(JSON.stringify(cmd.model)) as EcsModel3DDef;
-        }
-        if (!next.models3d) next.models3d = {};
-        next.models3d[cloned.id] = cloned;
-        summary = `註冊 3D 模型「${cloned.name}」(${cloned.id})`;
-        break;
-      }
-      case 'remove_model_3d': {
-        if (!next.models3d || !next.models3d[cmd.modelId]) {
-          return {
-            ok: false,
-            revision: this.revision,
-            summary: '找不到 3D 模型',
-            errors: [`Model3D '${cmd.modelId}' not found`],
-          };
-        }
-        const copy = { ...next.models3d };
-        delete copy[cmd.modelId];
-        next.models3d = copy;
-        summary = `移除 3D 模型「${cmd.modelId}」`;
-        break;
-      }
-      case 'set_camera_3d_pose': {
-        const baseProj: EcsProjectionConfig = next.projection ?? {
-          mode: 'hd2d_3d',
-          elevationScale: 1.0,
-          pitchDeg: 42,
-          fovDeg: 38,
-          wallHeightScale: 1.25,
-          billboardTiltDeg: 12,
-          obliqueShadowAlpha: 0.42,
-          activeDimensionMask: 3,
-          inactiveDimAlpha: 0.16,
-          allowDimensionShift: false,
-        };
-        next.projection = {
-          ...baseProj,
-          ...(cmd.yawDeg !== undefined ? { yawDeg: cmd.yawDeg } : {}),
-          ...(cmd.pitchDeg !== undefined ? { pitchDeg: cmd.pitchDeg } : {}),
-          ...(cmd.rollDeg !== undefined ? { rollDeg: cmd.rollDeg } : {}),
-          ...(cmd.fovDeg !== undefined ? { fovDeg: cmd.fovDeg } : {}),
-          ...(cmd.camCenterZ !== undefined ? { camCenterZ: cmd.camCenterZ } : {}),
-          ...(cmd.autoFollowHeroZ !== undefined ? { autoFollowHeroZ: cmd.autoFollowHeroZ } : {}),
-          ...(cmd.roofCutawayMode !== undefined ? { roofCutawayMode: cmd.roofCutawayMode } : {}),
-          ...(cmd.roofCutawayAlpha !== undefined ? { roofCutawayAlpha: cmd.roofCutawayAlpha } : {}),
-          ...(cmd.cameraProjection3d !== undefined ? { cameraProjection3d: cmd.cameraProjection3d } : {}),
-          ...(cmd.quadView !== undefined ? { quadView: cmd.quadView } : {}),
-          ...(cmd.shadowMapEnabled !== undefined ? { shadowMapEnabled: cmd.shadowMapEnabled } : {}),
-          ...(cmd.shadowMapStrength !== undefined ? { shadowMapStrength: cmd.shadowMapStrength } : {}),
-          ...(cmd.showAxisGizmo3d !== undefined ? { showAxisGizmo3d: cmd.showAxisGizmo3d } : {}),
-          ...(cmd.showOrthoGrid3d !== undefined ? { showOrthoGrid3d: cmd.showOrthoGrid3d } : {}),
-        };
-        summary = `更新 3D 相機姿態 (${next.projection.cameraProjection3d ?? 'perspective'} · yaw ${Math.round(next.projection.yawDeg ?? 0)}° · pitch ${Math.round(next.projection.pitchDeg ?? 42)}°)`;
-        break;
-      }
-      default:
-        return { ok: false, revision: this.revision, summary: '未知指令', errors: ['Unknown ECS command'] };
+    const next = cloneEcsProject(this.doc);
+    const res = this.applyCommand(next, cmd);
+    if (!res.ok || res.skipValidationAndCommit) {
+      return { ok: res.ok, revision: this.revision, summary: res.summary, errors: res.errors };
     }
 
     const valid = validateEcsProjectV2(next);
     if (!valid.ok) {
       return { ok: false, revision: this.revision, summary: '驗證失敗並已自動復原', errors: valid.errors };
     }
-    this.commit(prev, next, cmd.type, summary);
+    this.commit(prev, next, cmd.type, res.summary);
     return {
       ok: true,
       revision: this.revision,
-      summary,
+      summary: res.summary,
       errors: [],
-      createdEntityId,
-      createdPrefabId,
-      createdSpriteId,
+      createdEntityId: res.createdEntityId,
+      createdPrefabId: res.createdPrefabId,
+      createdSpriteId: res.createdSpriteId,
     };
+  }
+
+  private applyCommand(next: EcsProjectV2, cmd: Exclude<EcsStudioCommand, { type: 'load_project' }>): EcsCommandHandlerOutcome {
+    switch (cmd.type) {
+      case 'set_viewport':
+        return handleSetViewport(next, cmd.preset, cmd.width, cmd.height);
+      case 'spawn_entity':
+        return handleSpawnEntity(next, cmd.entity);
+      case 'remove_entity':
+        return handleRemoveEntity(next, cmd.entityId);
+      case 'patch_entity':
+        return handlePatchEntity(next, cmd.entityId, cmd.patch);
+      case 'attach_component':
+        return handleAttachComponent(next, cmd.entityId, cmd.component, cmd.value);
+      case 'detach_component':
+        return handleDetachComponent(next, cmd.entityId, cmd.component);
+      case 'create_prefab':
+        return handleCreatePrefab(next, cmd.prefab);
+      case 'update_prefab':
+        return handleUpdatePrefab(next, cmd);
+      case 'delete_prefab':
+        return handleDeletePrefab(next, cmd.prefabId, cmd.mode);
+      case 'save_entity_as_prefab':
+        return handleSaveEntityAsPrefab(next, cmd);
+      case 'instantiate_prefab':
+        return handleInstantiatePrefab(next, cmd);
+      case 'revert_prefab_overrides':
+        return handleRevertPrefabOverrides(next, cmd.entityId, cmd.keepPosition);
+      case 'unlink_prefab':
+        return handleUnlinkPrefab(next, cmd.entityId);
+      case 'upsert_script':
+        return handleUpsertScript(next, cmd.script, cmd.graphLayout);
+      case 'remove_script':
+        return handleRemoveScript(next, cmd.scriptId);
+      case 'set_global':
+        return handleSetGlobal(next, cmd.key, cmd.value);
+      case 'set_atmosphere':
+        return handleSetAtmosphere(next, cmd.patch);
+      case 'set_projection':
+        return handleSetProjection(next, cmd.patch);
+      case 'ensure_world_map':
+        return handleEnsureWorldMap(next, cmd.cols, cmd.rows, cmd.roomName);
+      case 'paint_tiles':
+        return handlePaintTiles(next, cmd.roomId, cmd.layer, cmd.changes);
+      case 'fill_rect':
+        return handleFillRect(next, cmd.roomId, cmd.layer, cmd.c0, cmd.r0, cmd.c1, cmd.r1, cmd.tileId);
+      case 'flood_fill':
+        return handleFloodFill(next, cmd.roomId, cmd.layer, cmd.col, cmd.row, cmd.tileId);
+      case 'stamp_room_ascii':
+        return handleStampRoomAscii(next, cmd);
+      case 'upsert_room':
+        return handleUpsertRoom(next, cmd.room);
+      case 'delete_room':
+        return handleDeleteRoom(next, cmd.roomId);
+      case 'upsert_portal':
+        return handleUpsertPortal(next, cmd.portal);
+      case 'remove_portal':
+        return handleRemovePortal(next, cmd.portalId);
+      case 'set_world_map_config':
+        return handleSetWorldMapConfig(next, cmd);
+      case 'upsert_tile_def':
+        return handleUpsertTileDef(next, cmd.tileDef);
+      case 'upsert_interaction_rule':
+        return handleUpsertInteractionRule(next, cmd.rule);
+      case 'remove_interaction_rule':
+        return handleRemoveInteractionRule(next, cmd.tag);
+      case 'upsert_ai_profile':
+        return handleUpsertAiProfile(next, cmd.tag, cmd.profile);
+      case 'remove_ai_profile':
+        return handleRemoveAiProfile(next, cmd.tag);
+      case 'upsert_hud_gauge':
+        return handleUpsertHudGauge(next, cmd.gauge);
+      case 'remove_hud_gauge':
+        return handleRemoveHudGauge(next, cmd.label);
+      case 'upsert_custom_sprite':
+        return handleUpsertCustomSprite(next, cmd.sprite);
+      case 'remove_custom_sprite':
+        return handleRemoveCustomSprite(next, cmd.spriteId);
+      case 'upsert_animation':
+        return handleUpsertAnimation(next, cmd.animation);
+      case 'remove_animation':
+        return handleRemoveAnimation(next, cmd.animationId);
+      case 'upsert_cutscene':
+        return handleUpsertCutscene(next, cmd.cutscene);
+      case 'remove_cutscene':
+        return handleRemoveCutscene(next, cmd.cutsceneId);
+      case 'set_room_voxel':
+        return handleSetRoomVoxel(next, cmd.roomId, cmd.cell);
+      case 'fill_room_box_3d':
+        return handleFillRoomBox3D(next, cmd);
+      case 'clear_room_voxels':
+        return handleClearRoomVoxels(next, cmd.roomId, cmd.zLevel);
+      case 'upsert_model_3d':
+        return handleUpsertModel3D(next, cmd.model);
+      case 'remove_model_3d':
+        return handleRemoveModel3D(next, cmd.modelId);
+      case 'set_camera_3d_pose':
+        return handleSetCamera3DPose(next, cmd);
+      default:
+        return { ok: false, summary: '未知指令', errors: ['Unknown ECS command'] };
+    }
   }
 
   /**

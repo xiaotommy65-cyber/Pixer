@@ -1,13 +1,21 @@
-# Pixer — 工程交接書（Engineering Handoff · Wave 1–5.5 Spatial 3D & Multi-Story Tower Complete）
+# Pixer — 工程交接書（Engineering Handoff · Wave 6 Architecture Diet `warn=0` Complete）
 
-> **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit -- --strict`**（~0.8s 唯讀體檢），即可零盲點掌握全倉狀態。
+> **給下一位接手對話／工程師的零搜索起點**：請先閱讀 [`AGENTS.md`](../AGENTS.md)、[`docs/CODEBASE_MAP.md`](CODEBASE_MAP.md)、[`docs/MASTER_PLAN.md`](MASTER_PLAN.md) 與本交接書，並於開工前執行 **`bun run audit -- --strict`**（~1.0s 唯讀體檢），即可零盲點掌握全倉狀態。
 
 ---
 
 ## 1. 目前 Git 分支與交付進度
 
-- **`main` 基線**：PR #1 → #14（`3802295`，Wave 1–5 Spatial 3D Complete，含 Phase 0–7、Universal Pixel Forge、多管線烘焙、真 Z-Up 3D 空間引擎、`ModelAtelierModalView` 與 `.glb`/`.bbmodel` 匯入）。
-- **最新推進分支：`feat/multi-story-tower-cutaway`**（基於 `main@3802295`，已完成全門檻驗證並透過 PR 合入 `main`）：
+- **`main` 基線**：PR #1 → #15（`ef82213`，Wave 1–5.5 Complete：Phase 0–7、Pixel Forge、多管線烘焙、真 Z-Up 3D 空間引擎、多層高塔探索／自動剖面／Z 跟隨）。
+- **最新推進分支：`refactor/arch-god-file-diet`**（基於 `main@ef82213`，透過 5 軌 Swarm `workspace: "share"` 並行完成全倉 17 支 `ARCH-GOD-FILE` 清零、舊分支清理、全門檻與瀏覽器實機驗收後合入 `main`）：
+  - **舊分支清理**：清除已合入 PR #14 / #15 之本機與遠端殘留分支（`feat/swarm-p0-p1-hardening`、`origin/feat/multi-story-tower-cutaway`），保留尚在審核中的 PR #13（`chore/env-setup-bun-1-4-5`）。
+  - **樣式表模組化（CSS Cascade Preservation）**：將 `switch.css`（→ `+switch-joycon.css`、`switch-overlays.css`）、`lobby.css`（→ `+lobby-desk.css`、`lobby-drawers.css`）與 `studio7.css`（→ `+studio7-panels.css`、`studio7-spatial3d.css`）拆分至全數 `< 970` 行並按原始級聯順序於 `src/main.ts` 匯入。
+  - **核心 ECS／AI 與模擬／匯入模組拆分（DOM-free + `circularDepsCount=0`）**：
+    - [`EcsSpatialOracle.ts`](../src/core/ai/EcsSpatialOracle.ts)（→ `+EcsSpatialOracle3D.ts`、`EcsSpatialOracleWorld.ts`）、[`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts)（→ `+EcsWorldMapPhysics.ts`、`EcsWorldMapSystems.ts`）、[`EcsStudioSession.ts`](../src/core/ecs/EcsStudioSession.ts)（→ `+EcsStudioCommandHandlers.ts`，完整保留 `48/48` `EcsStudioCommand` 與 `ECS_COMMAND_CATALOG`）。
+    - [`GenreControllers.ts`](../src/core/sim/GenreControllers.ts)（→ `+GenreControllersExtra.ts`）、[`DataCartridgeRuntime.ts`](../src/core/sim/DataCartridgeRuntime.ts)（→ `+DataRuntimeHelpers.ts`，皆維持 `legacy-v1-sim` chunk 歸屬）、[`PixelForgeProcessor.ts`](../src/core/interop/PixelForgeProcessor.ts)（→ `+PixelForgeQuantizer.ts`、`PixelForgeBakeProfiles.ts`）。
+  - **GPU 後端與著色器拆分（WGSL/GLSL 位元等價）**：將 [`WebGpuBackend.ts`](../src/core/gpu/WebGpuBackend.ts)（→ `+WebGpuPipelines.ts`、`WebGpuResources.ts`）、[`WebGl2Backend.ts`](../src/core/gpu/WebGl2Backend.ts)（→ `+WebGl2Programs.ts`）、[`WebGpuShaders.ts`](../src/core/gpu/WebGpuShaders.ts)（→ `+WebGpuMesh3DShaders.ts`、`WebGpuPostShaders.ts`）、[`WebGl2Shaders.ts`](../src/core/gpu/WebGl2Shaders.ts)（→ `+WebGl2Mesh3DShaders.ts`、`WebGl2PostShaders.ts`）與 [`GpuEngine.ts`](../src/core/gpu/GpuEngine.ts)（→ `+GpuEngine3DHelpers.ts`）拆分至全數 `< 930` 行並守住全數著色器與 GPU 資源釋放契約。
+  - **工作站與工坊 UI 拆分（保留全懶載入邊界）**：將 [`ModelAtelierModalView.ts`](../src/ui/ModelAtelierModalView.ts)（→ `+ModelAtelierViewport.ts`、`ModelAtelierInspector.ts`）、[`SpriteAtelierView.ts`](../src/ui/SpriteAtelierView.ts)（→ `+SpriteAtelierDomBuilder.ts`）與 [`EcsWorkbenchView.ts`](../src/ui/EcsWorkbenchView.ts)（→ `+EcsWorkbenchPreviewRuntime.ts`）拆分至全數 `< 970` 行，`dynamicImportCount` 維持 `6`、Zero `.runner` 違規。
+- **最近主線里程碑：`feat/multi-story-tower-cutaway`（PR #15，`ef82213`）**：
   - **Wave 5.5｜多層立體建築與高塔探索體驗（Multi-Story Building & Explorable Tower）**：
     - **自動相機 Z 高度跟隨（Auto Camera Z Follow）**：於 [`EcsProjectSchema.ts`](../src/core/ecs/EcsProjectSchema.ts) 與 [`SceneTypes.ts`](../src/core/types/SceneTypes.ts) 擴充 `autoFollowHeroZ`；於 [`EcsWorldMapController.ts`](../src/core/ecs/EcsWorldMapController.ts) 新增平滑指數阻尼 `cameraZ` 追蹤（切房即時鎖定至主角 `Spatial3D.z`），並由 [`EcsSnapshotProjector.ts`](../src/core/ecs/EcsSnapshotProjector.ts) 寫入 `hd2dDepth.camCenterZ`（尊重 `autoFollowHeroZ === false`、`quadView` 及 `editorCamOverride`）。
     - **室內屋頂／上層自動剖面（Interior Roof / Upper-Floor Cutaway）**：於 [`EcsVoxelVolume.ts`](../src/core/ecs/EcsVoxelVolume.ts) 新增零分配 `hasUpperVoxelAtFootprint()` / `hasAnyVoxelAtOrAboveStory()`，搭配 `roofCutawayMode`（`'auto' | 'always' | 'off'`）與 `roofCutawayAlpha`（預設 `0.18`）；於 [`SceneTrue3DPass.ts`](../src/core/runtime/SceneTrue3DPass.ts) 將剖面上方體素、3D 模型（[`EcsModel3D.ts`](../src/core/ecs/EcsModel3D.ts) `alphaScale`）、Billboard 與樓層光源光暈自動隱藏或送入硬體半透明 `meshAlpha`（`depthWrite: false`），同時對緊貼 `cutawayPlaneZ` 下方的邊界牆體解除 `FACE_CULL_TOP` 封頂，並將高層角色接觸陰影精準投影至 `groundZ + 0.25`。
@@ -50,12 +58,12 @@
 
 - **本機環境**：Windows 已安裝並寫入 User PATH：`Node v26.13.0`、`Bun 1.4.5`、`Git 2.56.1`、`uv`/`uvx`，PowerShell `CurrentUser` `RemoteSigned` + `Unblock-File` 已生效；Swarm `workspace: "share"` 獨立工作樹可直接運作。
 - **驗證門檻與最新基線**：
-  - `bun run audit -- --strict`：**PASS**（exit 0，`critical=0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=6`，`ecsCommandTypes=48/48`，`agentsLines=43/120`）
+  - `bun run audit -- --strict`：**PASS**（exit 0，**`critical=0`, `warn=0`**，`godFilesCount: 36 → 26`、`ARCH-GOD-FILE [WARN]: 17 → 0`，Math/Shader `0` warn，Perf/Arch `0` warn，`circularDepsCount=0`，`snapshotArrayResets=0`，`dynamicImportCount=6`，`ecsCommandTypes=48/48`，`agentsLines=43/120`）
   - `bun run lint`（`tsc --noEmit`）：**0 errors**
-  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.35ms`、`EcsCartridgeRuntime=0.76ms`、`PA-14 extrudedWalls=100, shadows=18`）
+  - `bun run sim`：**`[SIM ALL PASSED]`**（`ColorMath 50k: 2.33ms / heapDelta=0KB`、`EcsCartridgeRuntime=0.78ms`、`PA-14 extrudedWalls=100, shadows=18`）
   - `npm run test`：**93 pass / 0 fail**
-  - `bun run build && bun run clean`：**PASS**（222 modules，`949ms`，**0 chunk warnings**：`cartridges 460.56 kB`、`model-atelier 260.60 kB`、`index 226.08 kB`、`ecs-workbench 204.04 kB`、`external-import 115.41 kB`、`sprite-atelier 73.07 kB`、`core-ecs-interop 57.92 kB`、`cartridges-hd2d 52.15 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`、`cloud-publish 14.82 kB`；`dist/` 已清理）
-  - **本機瀏覽器實機驗收**：`http://localhost:3001/` WebGL2 實測「四視圖分割 + XYZ 軸 Gizmo + 正交格線」與「`ModelAtelierModalView` 載入範例 `.bbmodel`（`Knight_Relic_Chest`）3D 即時預覽 + 儲存」，全程 **0 console / page / shader errors**。
+  - `bun run build && bun run clean`：**PASS**（249 modules，`390ms`，**0 chunk warnings**：`cartridges 459.84 kB`、`model-atelier 256.05 kB`、`index 226.08 kB`、`ecs-workbench 206.00 kB`、`external-import 115.42 kB`、`sprite-atelier 72.94 kB`、`core-ecs-interop 56.31 kB`、`cartridges-hd2d 52.15 kB`、`event-graph 32.95 kB`、`legacy-v1-sim 24.38 kB`、`cloud-publish 14.82 kB`；`dist/` 已清理）
+  - **本機瀏覽器實機驗收（`1280×800`）**：`http://localhost:3000/` WebGL2 實測 ECS 工作站 `PA-14` `hd2d_3d` 城塞、場景檢查器（`相機跟隨高度 Z`／`室內剖面` 切換）、Spatial3D 四視圖分割、`ModelAtelierModalView`（載入 `citadel_beacon` 4 零件／120 頂點）與 `掌機展示`／`HomeLobbyView` 遊戲輪播（完整驗證拆分後之 `studio7-*.css`、`switch-*.css`、`lobby-*.css`），全程 **0 console / page / network errors**（附註：Model Atelier 彈窗開啟時頂部 `.p7-topbar` `52px` 固定導覽列仍微遮蓋彈窗頂欄，列入後續 UI z-index 微調項目）。
 - **不可動搖鐵則**：
   1. 任何開工與收尾先跑 `bun run audit -- --strict`；新修結構問題必補規則與端到端持久性測試。
   2. 不得將測試檔放回 `src/`，不得在純核心使用 DOM 或遊戲專屬硬編碼，不得產生 `package-lock.json`，不得直推 `main`。
@@ -65,7 +73,7 @@
 
 ## 3. 下一階段推進路線
 
-1. **技術債瘦身（`ARCH-GOD-FILE` 模組拆分 & 舊分支整理）**：
-   - 依 `bun run audit` 清單優先拆分超大模組（`EcsSpatialOracle.ts`、`WebGpuBackend.ts`、`EcsWorldMapController.ts`、`EcsStudioSession.ts`、`switch.css` / `lobby.css` / `studio7.css`）並清理已合入之過時本機／遠端分支。
-2. **Phase 8｜正式環境雲端佈建 / BYOK AI 生圖接橋**：
+1. **Phase 8｜正式環境雲端佈建 / BYOK AI 生圖接橋**：
    - 依 [`docs/CLOUD_SETUP.md`](CLOUD_SETUP.md) 佈建 Supabase PostgreSQL migration、Cloudflare R2 (`pixer-assets`) 與 `workers/api`，設定 `VITE_CLOUD_API_BASE` / `VITE_CDN_BASE_URL` 並實測工作站「雲端發佈」與 `?play=<slug>` 遠端載入／SRAM 同步，或選配接橋外部生圖 API 至 Pixel Forge。
+2. **選配 UI 拋光**：
+   - 調整 `.p7-topbar` 與全螢幕彈窗（`ModelAtelierModalView` 等）之 `z-index` 層級，避免工作站頂欄遮擋彈窗標題列。

@@ -7,7 +7,6 @@ import {
 } from '../math/Visibility2D.ts';
 import {
   createPathfinderWorkspace,
-  findAStarNextCell,
   findAStarPathInto,
 } from '../sim/GridPathfinder.ts';
 import type {
@@ -18,35 +17,40 @@ import type {
   TileDesc,
   VoxelRenderDesc,
 } from '../types/WorldTypes.ts';
-import { ecsEntitiesInteractInSpace } from './EcsActionPhysicsSystems.ts';
 import { EcsCinematicDirector, type EcsCutsceneShotDef } from './EcsCinematicDirector.ts';
 import type { EcsProjectV2 } from './EcsProjectSchema.ts';
 import {
   getCastleTileDef,
   isRoomCellHazard,
   isRoomCellSolid,
-  type EcsMapInteractionRule,
-  type EcsMapPortalDef,
   type EcsMapRoomDef,
   type EcsTileDef,
-  type EcsTopDownAiProfile,
 } from './EcsTilemapTypes.ts';
 import { RoomVoxelVolume } from './EcsVoxelVolume.ts';
 import type { EcsWorld } from './EcsWorld.ts';
+import {
+  clampWorldCamera,
+  computeWorldUnlockMask,
+  findTriggeredPortalInRoom,
+  rebuildWorldTilesAndVoxels,
+  moveWithTileCollisionPure,
+  updateActorVoxelElevationPure,
+  type WorldMapStepCallbacks,
+  type WorldTileRebuildOutput,
+} from './EcsWorldMapPhysics.ts';
+import {
+  createWorldMapCombatState,
+  damageHeroInWorld,
+  findWorldAiProfile,
+  findWorldInteractionRule,
+  performWorldMeleeHitCheck,
+  stepWorldAiEntities,
+  stepWorldInteractions,
+  stepWorldTorchFlicker,
+  type WorldMapCombatState,
+} from './EcsWorldMapSystems.ts';
 
-export interface WorldMapStepCallbacks {
-  onScoreDelta: (delta: number) => void;
-  onStatusChange: (status: 'playing' | 'won' | 'lost') => void;
-  onPopup: (text: string, x: number, y: number, color: string) => void;
-  onRoomBanner: (banner: string) => void;
-  onMeleeSwing?: (x: number, y: number, dirX: number, dirY: number, color: string, heroHandle: number) => void;
-  onHitImpact?: (x: number, y: number, dirX: number, dirY: number, killed: boolean, isBoss: boolean, targetHandle: number) => void;
-  onHeroHurt?: (x: number, y: number, heroHandle: number) => void;
-  onDash?: (x: number, y: number, dirX: number, dirY: number, heroHandle: number) => void;
-  onFootstep?: (x: number, y: number) => void;
-  onInteract?: (x: number, y: number, color: string) => void;
-  onBossPhase?: (x: number, y: number) => void;
-}
+export type { WorldMapStepCallbacks } from './EcsWorldMapPhysics.ts';
 
 /**
  * Pure, DOM-free, Zero-GC Generic Multi-Room HD-2D Tilemap & Top-Down Adventure Engine Controller.
@@ -92,47 +96,14 @@ export class EcsWorldMapController {
   private editorCamX = 0;
   private editorCamY = 0;
 
-  // Top-down hero combat & exploration timers
-  private facingX = 0;
-  private facingY = -1;
-  private dashTimer = 0;
-  private dashCooldown = 0;
-  private dashDirX = 0;
-  private dashDirY = -1;
-  private slashCooldown = 0;
-  private slashActiveTimer = 0;
-  private slashX = 0;
-  private slashY = 0;
-  private heroInvulnTimer = 0;
-  private portalCooldown = 0;
-  private walkAnimAccum = 0;
-  private footstepTimer = 0;
-
-  // Generic boss tracking (driven by any entity whose tag has `aiProfiles[tag].isBoss === true`)
-  private bossName = '';
-  private bossMaxHp = 0;
-  private bossHp = 0;
-  private bossPhase = 1;
-  private readonly aiTimers = new Map<string, number>();
-
-  // Persisted per-entity completion state across room transitions (one-shot props / defeated foes)
-  private readonly clearedEntityIds = new Set<string>();
-  private heroHpCarry = -1;
-  private heroMaxHpCarry = 10;
-
-  // Room banner timer
-  private roomBannerText = '';
-  private roomBannerTimer = 0;
-
-  // Previous button edges
-  private prevAction = false;
-  private prevJump = false;
-
-  private readonly scratchPos: [number, number] = [0, 0];
-  private readonly toDestroyScratch: number[] = [];
-  private toDestroyCount = 0;
+  private readonly sim: WorldMapCombatState = createWorldMapCombatState();
   private readonly cachedAmbientLights: LightDesc[] = [];
   private cachedAmbientLightCount = 0;
+  private readonly rebuildResultScratch: WorldTileRebuildOutput = {
+    outVoxels3dCount: 0,
+    cachedAmbientLightCount: 0,
+    unlockMask: 0,
+  };
   private readonly slashVisualScratch: {
     active: boolean;
     sprite: SpriteId | null;
@@ -155,6 +126,12 @@ export class EcsWorldMapController {
   private readonly pathWorkspace = createPathfinderWorkspace(OCCLUSION_GRID_MAX * OCCLUSION_GRID_MAX);
   private readonly fovScratch = createSymmetricFovScratch(512);
   private currentGlobalsRef: ReadonlyMap<string, number> | null = null;
+  private readonly setCurrentGlobalsBound = (globals: ReadonlyMap<string, number>): void => {
+    this.currentGlobalsRef = globals;
+  };
+  private readonly rebuildTilesCurrentBound = (): void => {
+    if (this.currentGlobalsRef) this.rebuildTiles(this.currentGlobalsRef);
+  };
   private readonly isCellWalkablePredicate = (c: number, r: number): boolean => {
     const room = this.activeRoom;
     const wm = this.project.worldMap;
@@ -270,19 +247,19 @@ export class EcsWorldMapController {
   }
 
   public getRoomBanner(): string {
-    return this.roomBannerTimer > 0 ? this.roomBannerText : '';
+    return this.sim.roomBannerTimer > 0 ? this.sim.roomBannerText : '';
   }
 
   public getBossInfo(): { name: string; hp: number; maxHp: number } {
-    this.bossInfoScratch.name = this.bossName;
-    this.bossInfoScratch.hp = this.bossHp;
-    this.bossInfoScratch.maxHp = this.bossMaxHp;
+    this.bossInfoScratch.name = this.sim.bossName;
+    this.bossInfoScratch.hp = this.sim.bossHp;
+    this.bossInfoScratch.maxHp = this.sim.bossMaxHp;
     return this.bossInfoScratch;
   }
 
   public getHeroHp(): { hp: number; maxHp: number } {
-    this.heroHpScratch.hp = Math.max(0, this.heroHpCarry);
-    this.heroHpScratch.maxHp = this.heroMaxHpCarry;
+    this.heroHpScratch.hp = Math.max(0, this.sim.heroHpCarry);
+    this.heroHpScratch.maxHp = this.sim.heroMaxHpCarry;
     return this.heroHpScratch;
   }
 
@@ -297,13 +274,13 @@ export class EcsWorldMapController {
   } {
     const hc = this.project.worldMap?.heroConfig;
     const s = this.slashVisualScratch;
-    s.active = this.slashActiveTimer > 0 && Boolean(hc?.slashSprite);
+    s.active = this.sim.slashActiveTimer > 0 && Boolean(hc?.slashSprite);
     s.sprite = hc?.slashSprite ?? null;
     s.color = hc?.slashColor ?? '#fef08a';
-    s.x = this.slashX;
-    s.y = this.slashY;
-    s.rot = Math.atan2(this.facingY, this.facingX);
-    s.alpha = Math.min(1, this.slashActiveTimer / 0.14);
+    s.x = this.sim.slashX;
+    s.y = this.sim.slashY;
+    s.rot = Math.atan2(this.sim.facingY, this.sim.facingX);
+    s.alpha = Math.min(1, this.sim.slashActiveTimer / 0.14);
     return s;
   }
 
@@ -313,6 +290,8 @@ export class EcsWorldMapController {
     this.editorCamY = y;
     this.cameraX = x;
     this.cameraY = y;
+    this.sim.cameraX = x;
+    this.sim.cameraY = y;
   }
 
   public clearEditorCamera(): void {
@@ -357,6 +336,8 @@ export class EcsWorldMapController {
       this.cameraX = 0;
       this.cameraY = 0;
       this.cameraZ = 0;
+      this.sim.cameraX = 0;
+      this.sim.cameraY = 0;
       return;
     }
     const desiredId =
@@ -367,27 +348,28 @@ export class EcsWorldMapController {
   }
 
   public reset(world: EcsWorld, vpW: number, vpH: number, roomIdOverride?: string): void {
-    this.clearedEntityIds.clear();
-    this.aiTimers.clear();
+    const s = this.sim;
+    s.clearedEntityIds.clear();
+    s.aiTimers.clear();
     this.director.reset(true);
     this.cameraZ = 0;
-    this.heroHpCarry = -1;
-    this.heroMaxHpCarry = 10;
-    this.facingX = 0;
-    this.facingY = -1;
-    this.dashTimer = 0;
-    this.dashCooldown = 0;
-    this.slashCooldown = 0;
-    this.slashActiveTimer = 0;
-    this.heroInvulnTimer = 0;
-    this.portalCooldown = 0.25;
-    this.footstepTimer = 0;
-    this.bossName = '';
-    this.bossPhase = 1;
-    this.bossHp = 0;
-    this.bossMaxHp = 0;
-    this.prevAction = false;
-    this.prevJump = false;
+    s.heroHpCarry = -1;
+    s.heroMaxHpCarry = 10;
+    s.facingX = 0;
+    s.facingY = -1;
+    s.dashTimer = 0;
+    s.dashCooldown = 0;
+    s.slashCooldown = 0;
+    s.slashActiveTimer = 0;
+    s.heroInvulnTimer = 0;
+    s.portalCooldown = 0.25;
+    s.footstepTimer = 0;
+    s.bossName = '';
+    s.bossPhase = 1;
+    s.bossHp = 0;
+    s.bossMaxHp = 0;
+    s.prevAction = false;
+    s.prevJump = false;
 
     const wm = this.project.worldMap;
     if (!wm || wm.rooms.length === 0) {
@@ -421,19 +403,6 @@ export class EcsWorldMapController {
     return true;
   }
 
-  private findInteractionRule(tag: string): EcsMapInteractionRule | undefined {
-    const rules = this.project.worldMap?.interactions;
-    if (!rules) return undefined;
-    for (let i = 0; i < rules.length; i++) {
-      if (rules[i].tag === tag) return rules[i];
-    }
-    return undefined;
-  }
-
-  private findAiProfile(tag: string): EcsTopDownAiProfile | undefined {
-    return this.project.worldMap?.aiProfiles?.[tag];
-  }
-
   private loadRoomIntoWorld(
     world: EcsWorld,
     roomId: string,
@@ -455,13 +424,14 @@ export class EcsWorldMapController {
       }
     }
 
+    const s = this.sim;
     this.activeRoom = room;
     this.activeRoomId = room.id;
-    this.bossName = '';
-    this.bossHp = 0;
-    this.bossMaxHp = 0;
-    this.bossPhase = 1;
-    this.aiTimers.clear();
+    s.bossName = '';
+    s.bossHp = 0;
+    s.bossMaxHp = 0;
+    s.bossPhase = 1;
+    s.aiTimers.clear();
 
     world.core.clear();
     world.globals.clear();
@@ -507,9 +477,9 @@ export class EcsWorldMapController {
 
       const tagGuess =
         init.components.tag ?? (init.prefabId ? this.project.prefabs[init.prefabId]?.components.tag : '') ?? '';
-      const isCleared = this.clearedEntityIds.has(init.id);
-      const aiProfile = this.findAiProfile(tagGuess);
-      const interactRule = this.findInteractionRule(tagGuess);
+      const isCleared = s.clearedEntityIds.has(init.id);
+      const aiProfile = findWorldAiProfile(this.project, tagGuess);
+      const interactRule = findWorldInteractionRule(this.project, tagGuess);
 
       // Skip already defeated enemies or destroyed one-shot pickups
       if (isCleared && (aiProfile || interactRule?.destroyOnUse)) {
@@ -533,11 +503,11 @@ export class EcsWorldMapController {
         const heroSp = core.getComponent(h, c.Spatial3D);
         heroFoundZ = heroSp ? heroSp.z : 0;
         if (hp) {
-          if (this.heroHpCarry > 0) {
-            hp.hp = Math.min(hp.maxHp, this.heroHpCarry);
+          if (s.heroHpCarry > 0) {
+            hp.hp = Math.min(hp.maxHp, s.heroHpCarry);
           } else {
-            this.heroHpCarry = hp.hp;
-            this.heroMaxHpCarry = hp.maxHp;
+            s.heroHpCarry = hp.hp;
+            s.heroMaxHpCarry = hp.maxHp;
           }
         }
       }
@@ -549,11 +519,11 @@ export class EcsWorldMapController {
 
       // Track active boss entity dynamically using its real project entity name
       if (aiProfile?.isBoss && hp) {
-        this.bossName = init.name || 'BOSS';
-        this.bossHp = hp.hp;
-        this.bossMaxHp = hp.maxHp;
-        this.bossPhase = 1;
-        this.aiTimers.set(init.id, aiProfile.projectileInterval ?? 1.6);
+        s.bossName = init.name || 'BOSS';
+        s.bossHp = hp.hp;
+        s.bossMaxHp = hp.maxHp;
+        s.bossPhase = 1;
+        s.aiTimers.set(init.id, aiProfile.projectileInterval ?? 1.6);
       }
     }
 
@@ -571,8 +541,8 @@ export class EcsWorldMapController {
       this.project.atmosphere.tiltShiftFocusY ?? 0.52,
     );
 
-    this.roomBannerText = room.name;
-    this.roomBannerTimer = 2.6;
+    s.roomBannerText = room.name;
+    s.roomBannerTimer = 2.6;
     this.rebuildTiles(world.globals);
 
     if (this.project.cutscenes) {
@@ -590,486 +560,55 @@ export class EcsWorldMapController {
     }
   }
 
-  private acquireTile(idx: number): TileDesc {
-    let slot = this.tilePool[idx];
-    if (!slot) {
-      slot = { sprite: 'solid', x: 0, y: 0, w: 32, h: 32 };
-      this.tilePool[idx] = slot;
-    }
-    return slot;
-  }
-
-  private acquireVoxelRender(idx: number): VoxelRenderDesc {
-    let slot = this.voxelRenderPool[idx];
-    if (!slot) {
-      slot = {
-        col: 0,
-        row: 0,
-        zLevel: 0,
-        x: 0,
-        y: 0,
-        z: 0,
-        w: 32,
-        d: 32,
-        h: 24,
-        shape: 'cube',
-        sprite: 'solid',
-        cullMask: 0,
-      };
-      this.voxelRenderPool[idx] = slot;
-    }
-    return slot;
-  }
-
   /**
    * Rebuilds the pooled `TileDesc[]` array for the active room (ground + decor + HD-2D extruded walls)
    * and caches static ambient tile lights so 60Hz snapshots never rescan the wall grid.
    */
   public rebuildTiles(globals: ReadonlyMap<string, number>): void {
-    const room = this.activeRoom;
-    const wm = this.project.worldMap;
-    if (!room || !wm) {
-      this.outTiles.length = 0;
-      this.outVoxels3d.length = 0;
-      this.outVoxels3dCount = 0;
-      this.cachedAmbientLightCount = 0;
-      return;
-    }
-
-    let count = 0;
-    this.cachedAmbientLightCount = 0;
-    const ts = wm.tileSize;
-    const cols = room.cols;
-    const rows = room.rows;
-    const defaultExtrude = room.wallExtrudeH ?? 26;
-    const customDefs = wm.tileDefs;
-
-    // 1. Ground Layer
-    for (let r = 0; r < rows; r++) {
-      const wy = r * ts;
-      for (let c = 0; c < cols; c++) {
-        const tid = room.ground[r * cols + c] ?? 0;
-        if (tid <= 0) continue;
-        const def = getCastleTileDef(tid, customDefs);
-        if (!def) continue;
-        const slot = this.acquireTile(count);
-        slot.sprite = def.sprite;
-        slot.sideSprite = undefined;
-        slot.x = c * ts;
-        slot.y = wy;
-        slot.w = ts;
-        slot.h = ts;
-        slot.alpha = 1;
-        slot.tint = def.tint ?? '#ffffff';
-        slot.roughness = def.roughness;
-        slot.metallic = def.metallic;
-        slot.emissive = def.emissive;
-        slot.extrudeH = 0;
-        slot.elevationZ = 0;
-        slot.wallMaterial = undefined;
-        slot.autoMask = 0;
-        slot.sortY = -1000;
-        slot.castShadow = false;
-        this.outTiles[count++] = slot;
-      }
-    }
-
-    // 2. Decor Layer (reads data-driven `def.renderH` for tall 48px props)
-    for (let r = 0; r < rows; r++) {
-      const wy = r * ts;
-      for (let c = 0; c < cols; c++) {
-        const tid = room.decor[r * cols + c] ?? 0;
-        if (tid <= 0) continue;
-        const def = getCastleTileDef(tid, customDefs);
-        if (!def) continue;
-        const rh = def.renderH ?? ts;
-        const isTall = rh > ts;
-        const slot = this.acquireTile(count);
-        slot.sprite = def.sprite;
-        slot.sideSprite = undefined;
-        slot.x = c * ts;
-        slot.y = isTall ? wy - (rh - ts) : wy;
-        slot.w = ts;
-        slot.h = rh;
-        slot.alpha = 1;
-        slot.tint = def.tint ?? '#ffffff';
-        slot.roughness = def.roughness;
-        slot.metallic = def.metallic;
-        slot.emissive = def.emissive;
-        slot.extrudeH = 0;
-        slot.elevationZ = isTall ? 0.5 : 0;
-        slot.wallMaterial = undefined;
-        slot.autoMask = 0;
-        slot.sortY = isTall ? wy + ts + 2 : -900;
-        slot.castShadow = isTall;
-        this.outTiles[count++] = slot;
-      }
-    }
-
-    // Helper: checks whether a room cell holds an extruded solid wall (for 4-bit N/E/S/W culling)
-    const isExtrudedWallCell = (cc: number, rr: number): boolean => {
-      if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) return false;
-      const nTid = room.wall[rr * cols + cc] ?? 0;
-      if (nTid <= 0) return false;
-      const nDef = getCastleTileDef(nTid, customDefs);
-      if (!nDef) return false;
-      if (nDef.unlockGlobal && (globals.get(nDef.unlockGlobal) ?? 0) >= 1) return false;
-      return (nDef.extrudeH ?? defaultExtrude) > 4;
-    };
-
-    // 3. Wall Layer (HD-2D extruded walls & dynamic global-gated doors + cached ambient tile lights)
-    for (let r = 0; r < rows; r++) {
-      const wy = r * ts;
-      for (let c = 0; c < cols; c++) {
-        const tid = room.wall[r * cols + c] ?? 0;
-        if (tid <= 0) continue;
-        const def = getCastleTileDef(tid, customDefs);
-        if (!def) continue;
-        const isUnlocked = def.unlockGlobal ? (globals.get(def.unlockGlobal) ?? 0) >= 1 : false;
-        const sprite = isUnlocked && def.unlockedSprite ? def.unlockedSprite : def.sprite;
-        const sideSprite = isUnlocked && def.unlockedSprite ? def.unlockedSprite : def.sideSprite;
-        let mask = 0;
-        if (!isUnlocked) {
-          if (isExtrudedWallCell(c, r - 1)) mask |= 1; // North
-          if (isExtrudedWallCell(c + 1, r)) mask |= 2; // East
-          if (isExtrudedWallCell(c, r + 1)) mask |= 4; // South
-          if (isExtrudedWallCell(c - 1, r)) mask |= 8; // West
-        }
-        const slot = this.acquireTile(count);
-        slot.sprite = sprite;
-        slot.sideSprite = sideSprite;
-        slot.x = c * ts;
-        slot.y = wy;
-        slot.w = ts;
-        slot.h = ts;
-        slot.alpha = 1;
-        slot.tint = def.tint ?? '#ffffff';
-        slot.roughness = def.roughness;
-        slot.metallic = def.metallic;
-        slot.emissive = def.emissive;
-        slot.extrudeH = isUnlocked ? 4 : (def.extrudeH ?? defaultExtrude);
-        slot.elevationZ = 0;
-        slot.wallMaterial = def.wallMaterial ?? 'stone';
-        slot.autoMask = mask;
-        slot.sortY = wy + ts;
-        slot.castShadow = !isUnlocked;
-        this.outTiles[count++] = slot;
-
-        if (def.ambientLight && this.cachedAmbientLightCount < 22) {
-          let light = this.cachedAmbientLights[this.cachedAmbientLightCount];
-          if (!light) {
-            light = { x: 0, y: 0, radius: 24, color: '#ffffff', intensity: 0.5 };
-            this.cachedAmbientLights[this.cachedAmbientLightCount] = light;
-          }
-          light.x = c * ts + ts * 0.5;
-          light.y = wy + ts * 1.1;
-          light.z = 16;
-          light.radius = def.ambientLight.radius;
-          light.color = def.ambientLight.color;
-          light.intensity = def.ambientLight.intensity;
-          this.cachedAmbientLightCount++;
-        }
-      }
-    }
-    if (this.outTiles.length > count) {
-      this.outTiles.length = count;
-    }
-
-    // 4. Rebuild GPU 2D Wall Shadow Occlusion Grid (64x64 R8, only uploaded on version bump)
-    this.occlusionGrid.fill(0);
-    const maxR = Math.min(OCCLUSION_GRID_MAX, rows);
-    const maxC = Math.min(OCCLUSION_GRID_MAX, cols);
-    for (let r = 0; r < maxR; r++) {
-      const rowOff = r * OCCLUSION_GRID_MAX;
-      for (let c = 0; c < maxC; c++) {
-        if (isRoomCellSolid(room, c, r, globals, customDefs)) {
-          this.occlusionGrid[rowOff + c] = 255;
-        }
-      }
-    }
-    this.occlusionVersion++;
-    this.lastUnlockMask = this.computeUnlockMask(globals);
-
-    // 5. Compile Multi-Story RoomVoxelVolume & Zero-GC VoxelRenderDesc pool
     this.currentGlobalsRef = globals;
-    const storyH = room.storyHeight ?? room.wallExtrudeH ?? 24;
-    this.voxelVolume.compileFromRoom(
-      cols,
-      rows,
-      ts,
-      storyH,
-      room.voxels,
-      room.wall,
+    rebuildWorldTilesAndVoxels(
+      this.activeRoom,
+      this.project.worldMap,
+      globals,
+      this.tilePool,
+      this.outTiles,
+      this.voxelVolume,
+      this.voxelRenderPool,
+      this.outVoxels3d,
+      this.occlusionGrid,
+      this.cachedAmbientLights,
       this.isWallTileSolidForVoxel,
+      this.rebuildResultScratch,
     );
-    if (room.voxels && room.voxels.length > 0) {
-      let vCount = 0;
-      const stories = this.voxelVolume.stories;
-      for (let z = 0; z < stories; z++) {
-        for (let r = 0; r < rows; r++) {
-          for (let c = 0; c < cols; c++) {
-            const tid = this.voxelVolume.getCellTileId(c, r, z);
-            if (tid <= 0) continue;
-            const shape = this.voxelVolume.getCellShape(c, r, z) ?? 'cube';
-            const def = getCastleTileDef(tid, customDefs);
-            const isUnlocked = def?.unlockGlobal ? (globals.get(def.unlockGlobal) ?? 0) >= 1 : false;
-            const sprite = isUnlocked && def?.unlockedSprite ? def.unlockedSprite : (def?.sprite ?? 'castle_wall_top');
-            const sideSprite = isUnlocked && def?.unlockedSprite ? def.unlockedSprite : def?.sideSprite;
-            const slot = this.acquireVoxelRender(vCount);
-            slot.col = c;
-            slot.row = r;
-            slot.zLevel = z;
-            slot.x = c * ts;
-            slot.y = r * ts;
-            slot.z = z * storyH;
-            slot.w = ts;
-            slot.d = ts;
-            slot.h = storyH;
-            slot.shape = shape;
-            slot.sprite = sprite;
-            slot.sideSprite = sideSprite;
-            slot.cullMask = shape === 'cube' ? this.voxelVolume.computeFaceCullMask(c, r, z) : 0;
-            slot.tint = def?.tint;
-            slot.roughness = def?.roughness;
-            slot.metallic = def?.metallic;
-            slot.emissive = def?.emissive;
-            slot.alpha = 1;
-            this.outVoxels3d[vCount++] = slot;
-
-            if (z > 0 && def?.ambientLight && this.cachedAmbientLightCount < 22) {
-              let light = this.cachedAmbientLights[this.cachedAmbientLightCount];
-              if (!light) {
-                light = { x: 0, y: 0, z: 16, radius: 24, color: '#ffffff', intensity: 0.5 };
-                this.cachedAmbientLights[this.cachedAmbientLightCount] = light;
-              }
-              light.x = c * ts + ts * 0.5;
-              light.y = r * ts + ts * 0.5;
-              light.z = z * storyH + 16;
-              light.radius = def.ambientLight.radius;
-              light.color = def.ambientLight.color;
-              light.intensity = def.ambientLight.intensity;
-              this.cachedAmbientLightCount++;
-            }
-          }
-        }
-      }
-      if (this.outVoxels3d.length > vCount) {
-        this.outVoxels3d.length = vCount;
-      }
-      this.outVoxels3dCount = vCount;
-    } else {
-      if (this.outVoxels3d.length > 0) {
-        this.outVoxels3d.length = 0;
-      }
-      this.outVoxels3dCount = 0;
+    this.outVoxels3dCount = this.rebuildResultScratch.outVoxels3dCount;
+    this.cachedAmbientLightCount = this.rebuildResultScratch.cachedAmbientLightCount;
+    this.lastUnlockMask = this.rebuildResultScratch.unlockMask;
+    if (this.activeRoom && this.project.worldMap) {
+      this.occlusionVersion++;
     }
-  }
-
-  private computeUnlockMask(globals: ReadonlyMap<string, number>): number {
-    const wm = this.project.worldMap;
-    if (!wm) return 0;
-    let mask = 0;
-    let bit = 0;
-    if (wm.tileDefs) {
-      for (let i = 0; i < wm.tileDefs.length && bit < 31; i++) {
-        const key = wm.tileDefs[i].unlockGlobal;
-        if (!key) continue;
-        if ((globals.get(key) ?? 0) >= 1) mask |= 1 << bit;
-        bit++;
-      }
-    }
-    for (let i = 0; i < wm.portals.length && bit < 31; i++) {
-      const key = wm.portals[i].requiresGlobal;
-      if (!key) continue;
-      if ((globals.get(key) ?? 0) >= 1) mask |= 1 << bit;
-      bit++;
-    }
-    return mask;
   }
 
   private clampCamera(vpW: number, vpH: number, zoom = 1.0): void {
-    const room = this.activeRoom;
-    const wm = this.project.worldMap;
-    if (!room || !wm) return;
-    const worldW = room.cols * wm.tileSize;
-    const worldH = room.rows * wm.tileSize;
-    const safeZoom = Math.max(0.25, zoom);
-    const effW = vpW / safeZoom;
-    const effH = vpH / safeZoom;
-    if (effW >= worldW) {
-      this.cameraX = (worldW - vpW) * 0.5;
-    } else {
-      const minX = (effW - vpW) * 0.5;
-      const maxX = worldW - (vpW + effW) * 0.5;
-      this.cameraX = Math.max(minX, Math.min(maxX, this.cameraX));
-    }
-    if (effH >= worldH) {
-      this.cameraY = (worldH - vpH) * 0.5;
-    } else {
-      const minY = (effH - vpH) * 0.5;
-      const maxY = worldH - (vpH + effH) * 0.5;
-      this.cameraY = Math.max(minY, Math.min(maxY, this.cameraY));
-    }
+    clampWorldCamera(
+      this.activeRoom,
+      this.project.worldMap,
+      this.cameraX,
+      this.cameraY,
+      vpW,
+      vpH,
+      zoom,
+      this.sim.scratchPos,
+    );
+    this.cameraX = this.sim.scratchPos[0];
+    this.cameraY = this.sim.scratchPos[1];
+    this.sim.cameraX = this.cameraX;
+    this.sim.cameraY = this.cameraY;
   }
 
   private snapCameraTo(targetX: number, targetY: number, vpW: number, vpH: number): void {
     this.cameraX = targetX - vpW * 0.5;
     this.cameraY = targetY - vpH * 0.5;
     this.clampCamera(vpW, vpH, 1.0);
-  }
-
-  private isBoxCollidingAt(
-    tx: number,
-    ty: number,
-    w: number,
-    h: number,
-    padX: number,
-    footTop: number,
-    footBot: number,
-    ts: number,
-    room: EcsMapRoomDef,
-    tileDefs: NonNullable<EcsProjectV2['worldMap']>['tileDefs'],
-    world: EcsWorld,
-    actorHandle = 0,
-  ): boolean {
-    const left = tx + padX;
-    const right = tx + w - padX;
-    const top = ty + footTop;
-    const bottom = ty + footBot;
-    const core = world.core;
-    const activeDimMask = this.project.projection?.activeDimensionMask ?? 3;
-
-    if (room.voxels && room.voxels.length > 0) {
-      if (left < 0 || top < 0 || right > room.cols * ts || bottom > room.rows * ts) {
-        return true;
-      }
-      const sp = actorHandle ? core.getComponent(actorHandle, core.components.Spatial3D) : undefined;
-      const actorZ = sp ? sp.z : 0;
-      const actorH = sp ? sp.height : 16;
-      const actorStep = sp ? sp.stepHeight : 10;
-      if (
-        this.voxelVolume.collidesAabb3D(
-          left,
-          top,
-          actorZ,
-          Math.max(2, right - left),
-          Math.max(2, bottom - top),
-          actorH,
-          actorStep,
-        )
-      ) {
-        return true;
-      }
-    } else {
-      const c0 = Math.floor(left / ts);
-      const c1 = Math.floor(right / ts);
-      const r0 = Math.floor(top / ts);
-      const r1 = Math.floor(bottom / ts);
-      for (let rr = r0; rr <= r1; rr++) {
-        for (let cc = c0; cc <= c1; cc++) {
-          if (isRoomCellSolid(room, cc, rr, world.globals, tileDefs)) return true;
-        }
-      }
-    }
-
-    const colStore = core.getStore(core.components.Collider);
-    const cx = tx + w * 0.5;
-    const cy = ty + h * 0.72;
-    for (let i = 0; i < colStore.size(); i++) {
-      const col = colStore.getDenseDataAt(i);
-      if (!col.isSolid) continue;
-      const eh = colStore.getDenseEntityAt(i);
-      if (actorHandle && (eh === actorHandle || !ecsEntitiesInteractInSpace(core, actorHandle, eh, activeDimMask))) {
-        continue;
-      }
-      const etr = core.getComponent(eh, core.components.Transform2D);
-      if (!etr) continue;
-      const ex = etr.x + etr.w * 0.5;
-      const ey = etr.y + etr.h * 0.78;
-      if (Math.hypot(cx - ex, cy - ey) < col.radius + 8) return true;
-    }
-    return false;
-  }
-
-  /**
-   * Resolves AABB tilemap + multi-story 3D voxel + solid prop collisions cleanly with per-axis wall sliding.
-   */
-  private moveWithTileCollision(
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    dx: number,
-    dy: number,
-    world: EcsWorld,
-    outPos: [number, number],
-    actorHandle = 0,
-  ): void {
-    const room = this.activeRoom;
-    const wm = this.project.worldMap;
-    if (!room || !wm) {
-      outPos[0] = x + dx;
-      outPos[1] = y + dy;
-      return;
-    }
-    const ts = wm.tileSize;
-    const padX = Math.max(4, w * 0.24);
-    const footTop = h * 0.48;
-    const footBot = h - 3;
-
-    let nx = x;
-    let ny = y;
-    if (dx !== 0 && !this.isBoxCollidingAt(nx + dx, ny, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world, actorHandle)) {
-      nx += dx;
-    }
-    if (dy !== 0 && !this.isBoxCollidingAt(nx, ny + dy, w, h, padX, footTop, footBot, ts, room, wm.tileDefs, world, actorHandle)) {
-      ny += dy;
-    }
-    outPos[0] = nx;
-    outPos[1] = ny;
-  }
-
-  private updateActorVoxelElevation(world: EcsWorld, handle: number, dt: number): void {
-    const c = world.core.components;
-    const sp = world.core.getComponent(handle, c.Spatial3D);
-    const tr = world.core.getComponent(handle, c.Transform2D);
-    if (!sp || !tr) return;
-    const padX = Math.max(4, tr.w * 0.24);
-    const left = tr.x + padX;
-    const right = tr.x + tr.w - padX;
-    const top = tr.y + tr.h * 0.48;
-    const bot = tr.y + tr.h - 3;
-    const footCx = tr.x + tr.w * 0.5;
-    const footCy = tr.y + tr.h * 0.72;
-    const sC = this.voxelVolume.sampleSupportZ(footCx, footCy, sp.z, sp.stepHeight);
-    const sLT = this.voxelVolume.sampleSupportZ(left, top, sp.z, sp.stepHeight);
-    const sRT = this.voxelVolume.sampleSupportZ(right, top, sp.z, sp.stepHeight);
-    const sRB = this.voxelVolume.sampleSupportZ(right, bot, sp.z, sp.stepHeight);
-    const sLB = this.voxelVolume.sampleSupportZ(left, bot, sp.z, sp.stepHeight);
-    const nextSupport = Math.max(sC, sLT, sRT, sRB, sLB);
-    const ceilingZ = this.voxelVolume.sampleCeilingZ(footCx, footCy, sp.z, 9999);
-    sp.groundZ = nextSupport;
-    sp.ceilingZ = ceilingZ;
-    sp.prevZ = sp.z;
-    if (sp.gravityZ > 0) {
-      if (sp.z < nextSupport) {
-        sp.z = nextSupport;
-        if (sp.vz < 0) sp.vz = 0;
-      } else if (sp.z > nextSupport) {
-        sp.vz -= sp.gravityZ * dt;
-        sp.z += sp.vz * dt;
-        if (sp.vz > 0 && sp.z + sp.height > ceilingZ) {
-          sp.z = Math.max(nextSupport, ceilingZ - sp.height);
-          sp.vz = 0;
-        }
-        if (sp.z <= nextSupport) {
-          sp.z = nextSupport;
-          if (sp.vz < 0) sp.vz = 0;
-        }
-      }
-    } else {
-      sp.z = Math.max(sp.groundZ, nextSupport);
-    }
   }
 
   /**
@@ -1090,19 +629,22 @@ export class EcsWorldMapController {
     const wm = this.project.worldMap;
     if (!room || !wm) return;
 
+    this.currentGlobalsRef = world.globals;
+    const s = this.sim;
+
     // Auto-rebuild room tiles & 2D GPU occlusion grid whenever any gate/portal global changes
-    const unlockMask = this.computeUnlockMask(world.globals);
+    const unlockMask = computeWorldUnlockMask(wm, world.globals);
     if (unlockMask !== this.lastUnlockMask) {
       this.rebuildTiles(world.globals);
     }
 
-    if (this.roomBannerTimer > 0) this.roomBannerTimer = Math.max(0, this.roomBannerTimer - directorDt);
-    if (this.dashTimer > 0) this.dashTimer = Math.max(0, this.dashTimer - dt);
-    if (this.dashCooldown > 0) this.dashCooldown = Math.max(0, this.dashCooldown - dt);
-    if (this.slashCooldown > 0) this.slashCooldown = Math.max(0, this.slashCooldown - dt);
-    if (this.slashActiveTimer > 0) this.slashActiveTimer = Math.max(0, this.slashActiveTimer - dt);
-    if (this.heroInvulnTimer > 0) this.heroInvulnTimer = Math.max(0, this.heroInvulnTimer - dt);
-    if (this.portalCooldown > 0) this.portalCooldown = Math.max(0, this.portalCooldown - dt);
+    if (s.roomBannerTimer > 0) s.roomBannerTimer = Math.max(0, s.roomBannerTimer - directorDt);
+    if (s.dashTimer > 0) s.dashTimer = Math.max(0, s.dashTimer - dt);
+    if (s.dashCooldown > 0) s.dashCooldown = Math.max(0, s.dashCooldown - dt);
+    if (s.slashCooldown > 0) s.slashCooldown = Math.max(0, s.slashCooldown - dt);
+    if (s.slashActiveTimer > 0) s.slashActiveTimer = Math.max(0, s.slashActiveTimer - dt);
+    if (s.heroInvulnTimer > 0) s.heroInvulnTimer = Math.max(0, s.heroInvulnTimer - dt);
+    if (s.portalCooldown > 0) s.portalCooldown = Math.max(0, s.portalCooldown - dt);
 
     const core = world.core;
     const c = core.components;
@@ -1117,7 +659,7 @@ export class EcsWorldMapController {
       if (!heroHandle && (td.tag === 'hero' || td.tag === 'player')) {
         heroHandle = eh;
       }
-      const aiP = this.findAiProfile(td.tag);
+      const aiP = findWorldAiProfile(this.project, td.tag);
       if (aiP?.isBoss) {
         const bTr = core.getComponent(eh, c.Transform2D);
         if (bTr) {
@@ -1135,6 +677,7 @@ export class EcsWorldMapController {
     const roomWorldH = room.rows * wm.tileSize;
     const baseBlur = this.project.atmosphere.tiltShiftBlur ?? 0;
     const baseFocusY = this.project.atmosphere.tiltShiftFocusY ?? 0.52;
+    const activeDimMask = this.project.projection?.activeDimensionMask ?? 3;
 
     if (heroHandle) {
       const hTr = core.getComponent(heroHandle, c.Transform2D);
@@ -1158,8 +701,8 @@ export class EcsWorldMapController {
             world,
             heroCx,
             heroCy,
-            this.facingX,
-            this.facingY,
+            s.facingX,
+            s.facingY,
             false,
             bossCx,
             bossCy,
@@ -1190,70 +733,96 @@ export class EcsWorldMapController {
             const inv = 1 / Math.hypot(mx, my);
             mx *= inv;
             my *= inv;
-            this.facingX = mx;
-            this.facingY = my;
+            s.facingX = mx;
+            s.facingY = my;
             if (hMat && mx !== 0) hMat.flipX = mx < 0;
-            this.walkAnimAccum += dt * 7.5;
+            s.walkAnimAccum += dt * 7.5;
             if (!hAnim && hMat && hc?.walkSpriteA && hc?.walkSpriteB) {
-              hMat.spriteId = (Math.floor(this.walkAnimAccum) & 1) === 0 ? hc.walkSpriteA : hc.walkSpriteB;
+              hMat.spriteId = (Math.floor(s.walkAnimAccum) & 1) === 0 ? hc.walkSpriteA : hc.walkSpriteB;
             }
-            this.footstepTimer -= dt;
-            if (this.footstepTimer <= 0 && this.dashTimer <= 0) {
-              this.footstepTimer = 0.24;
+            s.footstepTimer -= dt;
+            if (s.footstepTimer <= 0 && s.dashTimer <= 0) {
+              s.footstepTimer = 0.24;
               cb.onFootstep?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.88);
             }
           } else {
-            this.footstepTimer = Math.min(this.footstepTimer, 0.08);
+            s.footstepTimer = Math.min(s.footstepTimer, 0.08);
           }
 
-          const jumpJust = input.jump && !this.prevJump;
-          if (jumpJust && this.dashCooldown <= 0) {
-            this.dashTimer = 0.16;
-            this.dashCooldown = 0.52;
-            this.dashDirX = moving ? mx : this.facingX;
-            this.dashDirY = moving ? my : this.facingY;
-            this.heroInvulnTimer = Math.max(this.heroInvulnTimer, 0.22);
+          const jumpJust = input.jump && !s.prevJump;
+          if (jumpJust && s.dashCooldown <= 0) {
+            s.dashTimer = 0.16;
+            s.dashCooldown = 0.52;
+            s.dashDirX = moving ? mx : s.facingX;
+            s.dashDirY = moving ? my : s.facingY;
+            s.heroInvulnTimer = Math.max(s.heroInvulnTimer, 0.22);
             eventsOut.push('jump');
-            cb.onDash?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.84, this.dashDirX, this.dashDirY, heroHandle);
+            cb.onDash?.(hTr.x + hTr.w * 0.5, hTr.y + hTr.h * 0.84, s.dashDirX, s.dashDirY, heroHandle);
           }
 
           const baseSpeed = hMotor?.moveSpeed ?? 138;
           const dashMult = hc?.dashSpeedMultiplier ?? 2.55;
-          const speed = this.dashTimer > 0 ? baseSpeed * dashMult : baseSpeed;
-          const vx = this.dashTimer > 0 ? this.dashDirX * speed : mx * speed;
-          const vy = this.dashTimer > 0 ? this.dashDirY * speed : my * speed;
+          const speed = s.dashTimer > 0 ? baseSpeed * dashMult : baseSpeed;
+          const vx = s.dashTimer > 0 ? s.dashDirX * speed : mx * speed;
+          const vy = s.dashTimer > 0 ? s.dashDirY * speed : my * speed;
 
-          this.moveWithTileCollision(hTr.x, hTr.y, hTr.w, hTr.h, vx * dt, vy * dt, world, this.scratchPos, heroHandle);
-          hTr.x = this.scratchPos[0];
-          hTr.y = this.scratchPos[1];
+          moveWithTileCollisionPure(
+            hTr.x,
+            hTr.y,
+            hTr.w,
+            hTr.h,
+            vx * dt,
+            vy * dt,
+            room,
+            wm,
+            world,
+            this.voxelVolume,
+            activeDimMask,
+            s.scratchPos,
+            heroHandle,
+          );
+          hTr.x = s.scratchPos[0];
+          hTr.y = s.scratchPos[1];
           const hasVoxels = Boolean(room.voxels && room.voxels.length > 0);
           if (hasVoxels) {
-            this.updateActorVoxelElevation(world, heroHandle, dt);
+            updateActorVoxelElevationPure(world, this.voxelVolume, heroHandle, dt);
           }
 
           const heroCx = hTr.x + hTr.w * 0.5;
           const heroCy = hTr.y + hTr.h * 0.5;
 
           // 2. Melee Slash
-          const actionJust = input.action && !this.prevAction;
-          if (actionJust && this.slashCooldown <= 0) {
-            this.slashCooldown = 0.24;
-            this.slashActiveTimer = 0.15;
-            this.slashX = heroCx + this.facingX * 22;
-            this.slashY = heroCy + this.facingY * 22;
+          const actionJust = input.action && !s.prevAction;
+          if (actionJust && s.slashCooldown <= 0) {
+            s.slashCooldown = 0.24;
+            s.slashActiveTimer = 0.15;
+            s.slashX = heroCx + s.facingX * 22;
+            s.slashY = heroCy + s.facingY * 22;
             eventsOut.push('snap');
-            cb.onMeleeSwing?.(this.slashX, this.slashY, this.facingX, this.facingY, hc?.slashColor ?? '#fef08a', heroHandle);
-            this.performMeleeHitCheck(world, hHp, eventsOut, cb);
-          } else if (this.slashActiveTimer > 0) {
-            this.slashX = heroCx + this.facingX * 22;
-            this.slashY = heroCy + this.facingY * 22;
+            cb.onMeleeSwing?.(s.slashX, s.slashY, s.facingX, s.facingY, hc?.slashColor ?? '#fef08a', heroHandle);
+            performWorldMeleeHitCheck(
+              this.project,
+              room,
+              s,
+              this.director,
+              this.voxelVolume,
+              activeDimMask,
+              world,
+              hHp,
+              eventsOut,
+              cb,
+              this.rebuildTilesCurrentBound,
+            );
+          } else if (s.slashActiveTimer > 0) {
+            s.slashX = heroCx + s.facingX * 22;
+            s.slashY = heroCy + s.facingY * 22;
           }
 
           // Sync Animator state machine params AFTER melee slash so frame-0 attack pose renders immediately (even in hitstop)
           if (hAnim?.runtime) {
             hAnim.runtime.setParam('speed', Math.hypot(vx, vy));
-            hAnim.runtime.setParam('dashing', this.dashTimer > 0 ? 1 : 0);
-            hAnim.runtime.setParam('attacking', this.slashActiveTimer > 0 ? 1 : 0);
+            hAnim.runtime.setParam('dashing', s.dashTimer > 0 ? 1 : 0);
+            hAnim.runtime.setParam('attacking', s.slashActiveTimer > 0 ? 1 : 0);
             hAnim.runtime.setParam('hurt', (hHp?.hitFlash ?? 0) > 0.05 ? 1 : 0);
           }
 
@@ -1262,15 +831,44 @@ export class EcsWorldMapController {
           const heroRow = Math.floor((hTr.y + hTr.h * 0.72) / wm.tileSize);
           const heroSp = core.getComponent(heroHandle, c.Spatial3D);
           const heroZ = heroSp ? heroSp.z : 0;
-          if (heroZ <= 4 && this.heroInvulnTimer <= 0 && isRoomCellHazard(room, heroCol, heroRow, wm.tileDefs)) {
-            this.damageHero(hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
+          if (heroZ <= 4 && s.heroInvulnTimer <= 0 && isRoomCellHazard(room, heroCol, heroRow, wm.tileDefs)) {
+            damageHeroInWorld(s, hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
           }
 
           // 4. Data-Driven Prop Interactions
-          this.stepInteractions(world, heroCx, heroCy, hHp, eventsOut, cb);
+          stepWorldInteractions(
+            this.project,
+            s,
+            this.director,
+            world,
+            heroCx,
+            heroCy,
+            hHp,
+            eventsOut,
+            cb,
+            this.rebuildTilesCurrentBound,
+          );
 
           // 5. Data-Driven Enemy & Boss AI + Hostile Projectiles
-          this.stepAiEntities(dt, world, heroCx, heroCy, heroHandle, hHp, eventsOut, cb);
+          stepWorldAiEntities(
+            this.project,
+            room,
+            s,
+            this.voxelVolume,
+            activeDimMask,
+            this.pathWorkspace,
+            this.isCellOpaquePredicate,
+            this.isCellWalkablePredicate,
+            this.setCurrentGlobalsBound,
+            dt,
+            world,
+            heroCx,
+            heroCy,
+            heroHandle,
+            hHp,
+            eventsOut,
+            cb,
+          );
 
           // 6. Director-Driven Live Framing (Lead-Room Look-Ahead, Toric Boss Framing) & Phase-3 Seamless Handback
           this.director.step(
@@ -1278,8 +876,8 @@ export class EcsWorldMapController {
             world,
             heroCx,
             heroCy,
-            this.facingX,
-            this.facingY,
+            s.facingX,
+            s.facingY,
             moving,
             bossCx,
             bossCy,
@@ -1305,18 +903,18 @@ export class EcsWorldMapController {
           }
 
           // 7. Room Portal Traversal
-          if (this.portalCooldown <= 0) {
-            const portal = this.findTriggeredPortal(heroCx, heroCy, wm.tileSize);
+          if (s.portalCooldown <= 0) {
+            const portal = findTriggeredPortalInRoom(wm, this.activeRoomId, heroCx, heroCy, wm.tileSize);
             if (portal) {
               const unlocked = !portal.requiresGlobal || (world.globals.get(portal.requiresGlobal) ?? 0) >= 1;
               if (unlocked) {
-                this.portalCooldown = 0.55;
-                if (hHp) this.heroHpCarry = hHp.hp;
+                s.portalCooldown = 0.55;
+                if (hHp) s.heroHpCarry = hHp.hp;
                 eventsOut.push('key');
                 this.loadRoomIntoWorld(world, portal.toRoomId, vpW, vpH, portal.targetX, portal.targetY, true);
                 cb.onRoomBanner(this.activeRoom?.name ?? portal.name);
               } else {
-                this.portalCooldown = 0.9;
+                s.portalCooldown = 0.9;
                 cb.onPopup(portal.lockedHint ?? 'LOCKED', heroCx, heroCy - 18, '#fbbf24');
                 eventsOut.push('hurt');
               }
@@ -1327,516 +925,10 @@ export class EcsWorldMapController {
     }
 
     // Organic ambient light flicker for entities tagged 'torch' or 'brazier'
-    const lightStore = core.getStore(c.LightSource);
-    for (let i = 0; i < lightStore.size(); i++) {
-      const h = lightStore.getDenseEntityAt(i);
-      const td = core.getComponent(h, c.Tag);
-      if (td?.tag === 'torch' || td?.tag === 'brazier') {
-        const ls = lightStore.getDenseDataAt(i);
-        const tr = core.getComponent(h, c.Transform2D);
-        const seed = (tr ? tr.x * 0.13 + tr.y * 0.07 : i) + this.walkAnimAccum * 1.4;
-        ls.intensity = 0.86 + Math.sin(seed * 3.1) * 0.08 + Math.cos(seed * 5.7) * 0.05;
-      }
-    }
+    stepWorldTorchFlicker(world, s.walkAnimAccum);
 
-    this.prevAction = input.action;
-    this.prevJump = input.jump;
-  }
-
-  private damageHero(
-    hHp: { hp: number; maxHp: number; hitFlash: number } | undefined,
-    dmg: number,
-    hx: number,
-    hy: number,
-    heroHandle: number,
-    eventsOut: SimEvent[],
-    cb: WorldMapStepCallbacks,
-  ): void {
-    if (!hHp || this.heroInvulnTimer > 0) return;
-    hHp.hp = Math.max(0, hHp.hp - dmg);
-    hHp.hitFlash = 0.25;
-    this.heroHpCarry = hHp.hp;
-    this.heroInvulnTimer = 0.85;
-    eventsOut.push('hurt');
-    cb.onPopup(`-${dmg}`, hx, hy - 14, '#fb7185');
-    cb.onHeroHurt?.(hx, hy, heroHandle);
-    if (hHp.hp <= 0) {
-      cb.onStatusChange('lost');
-    }
-  }
-
-  private triggerCutscenesForGlobal(globalKey: string): void {
-    if (!this.project.cutscenes) return;
-    for (let i = 0; i < this.project.cutscenes.length; i++) {
-      const cs = this.project.cutscenes[i];
-      if (
-        cs.trigger === 'on_global_set' &&
-        cs.triggerGlobal === globalKey &&
-        !this.director.hasCompletedCutscene(cs.id)
-      ) {
-        this.director.startCutscene(cs, this.cameraX, this.cameraY, this.director.cameraZoom);
-        return;
-      }
-    }
-  }
-
-  private queueDestroy(eh: number): void {
-    this.toDestroyScratch[this.toDestroyCount++] = eh;
-  }
-
-  private executeInteractionRule(
-    rule: EcsMapInteractionRule,
-    world: EcsWorld,
-    eh: number,
-    entityId: string,
-    ex: number,
-    ey: number,
-    hHp: { hp: number; maxHp: number; hitFlash: number } | undefined,
-    eventsOut: SimEvent[],
-    cb: WorldMapStepCallbacks,
-  ): void {
-    if (rule.oneShot) {
-      this.clearedEntityIds.add(entityId);
-    }
-    if (rule.swapSprite) {
-      const mat = world.core.getComponent(eh, world.core.components.Material);
-      if (mat) mat.spriteId = rule.swapSprite;
-    }
-    if (rule.destroyOnUse) {
-      this.queueDestroy(eh);
-    }
-    if (rule.healAmount && hHp) {
-      hHp.hp = Math.min(hHp.maxHp, hHp.hp + rule.healAmount);
-      this.heroHpCarry = hHp.hp;
-    }
-    let tilesNeedRebuild = false;
-    if (rule.setGlobal) {
-      world.setGlobal(rule.setGlobal, rule.setGlobalValue ?? 1);
-      tilesNeedRebuild = true;
-      this.triggerCutscenesForGlobal(rule.setGlobal);
-    }
-    let thresholdReached = false;
-    let addedValue = 0;
-    let targetValue = 0;
-    if (rule.addGlobal) {
-      addedValue = (world.getGlobal(rule.addGlobal) ?? 0) + (rule.addGlobalDelta ?? 1);
-      world.setGlobal(rule.addGlobal, addedValue);
-      targetValue = rule.thresholdTargetGlobal
-        ? (world.getGlobal(rule.thresholdTargetGlobal) || rule.thresholdCount || 1)
-        : (rule.thresholdCount ?? 0);
-      if (rule.thresholdUnlockGlobal && targetValue > 0 && addedValue >= targetValue) {
-        world.setGlobal(rule.thresholdUnlockGlobal, 1);
-        tilesNeedRebuild = true;
-        thresholdReached = true;
-        this.triggerCutscenesForGlobal(rule.thresholdUnlockGlobal);
-      }
-    }
-    if (tilesNeedRebuild) {
-      this.rebuildTiles(world.globals);
-    }
-    if (rule.scoreDelta) {
-      cb.onScoreDelta(rule.scoreDelta);
-    }
-    if (rule.soundEvent) {
-      eventsOut.push(rule.soundEvent);
-    }
-    cb.onInteract?.(ex, ey, thresholdReached ? (rule.thresholdPopupColor ?? '#38bdf8') : (rule.popupColor ?? '#fde047'));
-    if (thresholdReached && rule.thresholdPopup) {
-      cb.onPopup(rule.thresholdPopup, ex, ey - 20, rule.thresholdPopupColor ?? '#38bdf8');
-      eventsOut.push('win');
-    } else if (rule.popupText) {
-      const formatted = rule.popupText
-        .replace('{val}', String(addedValue))
-        .replace('{max}', String(targetValue));
-      cb.onPopup(formatted, ex, ey - 18, rule.popupColor ?? '#fde047');
-    }
-  }
-
-  private performMeleeHitCheck(
-    world: EcsWorld,
-    hHp: { hp: number; maxHp: number; hitFlash: number } | undefined,
-    eventsOut: SimEvent[],
-    cb: WorldMapStepCallbacks,
-  ): void {
-    const core = world.core;
-    const c = core.components;
-    const tagStore = core.getStore(c.Tag);
-    this.toDestroyCount = 0;
-    const baseReach = this.project.worldMap?.heroConfig?.slashReach ?? 34;
-
-    for (let i = 0; i < tagStore.size(); i++) {
-      const eh = tagStore.getDenseEntityAt(i);
-      const td = tagStore.getDenseDataAt(i);
-      const etr = core.getComponent(eh, c.Transform2D);
-      if (!etr) continue;
-      const ex = etr.x + etr.w * 0.5;
-      const ey = etr.y + etr.h * 0.5;
-
-      const aiProfile = this.findAiProfile(td.tag);
-      if (aiProfile) {
-        const reach = baseReach + (aiProfile.hitReachBonus ?? 0);
-        if (Math.hypot(ex - this.slashX, ey - this.slashY) > reach) continue;
-        const hp = core.getComponent(eh, c.Health);
-        if (!hp) continue;
-
-        hp.hp -= 1;
-        hp.hitFlash = 0.22;
-        eventsOut.push('stomp');
-        cb.onPopup(aiProfile.hitPopup ?? '-1', ex, ey - 16, '#fde047');
-
-        const kDist = Math.max(1, Math.hypot(ex - this.slashX, ey - this.slashY));
-        const dirX = (ex - this.slashX) / kDist;
-        const dirY = (ey - this.slashY) / kDist;
-        const kb = aiProfile.knockback ?? 14;
-        this.moveWithTileCollision(
-          etr.x,
-          etr.y,
-          etr.w,
-          etr.h,
-          dirX * kb,
-          dirY * kb,
-          world,
-          this.scratchPos,
-          eh,
-        );
-        etr.x = this.scratchPos[0];
-        etr.y = this.scratchPos[1];
-        if (this.activeRoom?.voxels && this.activeRoom.voxels.length > 0) {
-          this.updateActorVoxelElevation(world, eh, 1 / 60);
-        }
-
-        const killed = hp.hp <= 0;
-        this.director.triggerCombatImpact(
-          killed ? (aiProfile.isBoss ? 'finisher' : 'heavy') : 'light',
-          ex,
-          ey,
-        );
-        cb.onHitImpact?.(ex, ey, dirX, dirY, killed, Boolean(aiProfile.isBoss), eh);
-
-        if (aiProfile.isBoss) {
-          this.bossHp = Math.max(0, hp.hp);
-          if (
-            aiProfile.phase2HpRatio !== undefined &&
-            hp.hp <= hp.maxHp * aiProfile.phase2HpRatio &&
-            this.bossPhase === 1
-          ) {
-            this.bossPhase = 2;
-            this.director.triggerCombatImpact('boss_phase', ex, ey);
-            if (aiProfile.phase2Popup) {
-              cb.onPopup(aiProfile.phase2Popup, ex, ey - 28, '#fb7185');
-            }
-            cb.onBossPhase?.(ex, ey);
-            eventsOut.push('explode');
-            if (this.project.cutscenes) {
-              for (let cIdx = 0; cIdx < this.project.cutscenes.length; cIdx++) {
-                const cs = this.project.cutscenes[cIdx];
-                if (cs.trigger === 'on_boss_phase' && !this.director.hasCompletedCutscene(cs.id)) {
-                  this.director.startCutscene(cs, this.cameraX, this.cameraY, this.director.cameraZoom);
-                  break;
-                }
-              }
-            }
-          }
-        }
-
-        if (killed) {
-          this.clearedEntityIds.add(td.entityId);
-          this.queueDestroy(eh);
-          if (aiProfile.scoreOnDefeat) cb.onScoreDelta(aiProfile.scoreOnDefeat);
-          if (aiProfile.defeatPopup) cb.onPopup(aiProfile.defeatPopup, ex, ey - 24, '#fef08a');
-          if (aiProfile.winOnDefeat) {
-            eventsOut.push('win');
-            cb.onStatusChange('won');
-          } else {
-            eventsOut.push('explode');
-          }
-        }
-        continue;
-      }
-
-      const rule = this.findInteractionRule(td.tag);
-      if (
-        rule &&
-        rule.trigger === 'slash_or_touch' &&
-        !this.clearedEntityIds.has(td.entityId) &&
-        Math.hypot(ex - this.slashX, ey - this.slashY) <= baseReach
-      ) {
-        this.executeInteractionRule(rule, world, eh, td.entityId, ex, ey, hHp, eventsOut, cb);
-      }
-    }
-
-    for (let i = 0; i < this.toDestroyCount; i++) {
-      core.destroyEntity(this.toDestroyScratch[i]);
-    }
-    this.toDestroyCount = 0;
-  }
-
-  private stepInteractions(
-    world: EcsWorld,
-    heroCx: number,
-    heroCy: number,
-    hHp: { hp: number; maxHp: number; hitFlash: number } | undefined,
-    eventsOut: SimEvent[],
-    cb: WorldMapStepCallbacks,
-  ): void {
-    const rules = this.project.worldMap?.interactions;
-    if (!rules || rules.length === 0) return;
-
-    const core = world.core;
-    const c = core.components;
-    const tagStore = core.getStore(c.Tag);
-    this.toDestroyCount = 0;
-
-    for (let i = 0; i < tagStore.size(); i++) {
-      const eh = tagStore.getDenseEntityAt(i);
-      const td = tagStore.getDenseDataAt(i);
-      if (this.clearedEntityIds.has(td.entityId)) continue;
-      const rule = this.findInteractionRule(td.tag);
-      if (!rule) continue;
-      const etr = core.getComponent(eh, c.Transform2D);
-      if (!etr) continue;
-      const ex = etr.x + etr.w * 0.5;
-      const ey = etr.y + etr.h * 0.5;
-      if (Math.hypot(heroCx - ex, heroCy - ey) < rule.radius) {
-        this.executeInteractionRule(rule, world, eh, td.entityId, ex, ey, hHp, eventsOut, cb);
-      }
-    }
-
-    for (let i = 0; i < this.toDestroyCount; i++) {
-      core.destroyEntity(this.toDestroyScratch[i]);
-    }
-    this.toDestroyCount = 0;
-  }
-
-  private stepAiEntities(
-    dt: number,
-    world: EcsWorld,
-    heroCx: number,
-    heroCy: number,
-    heroHandle: number,
-    hHp: { hp: number; maxHp: number; hitFlash: number } | undefined,
-    eventsOut: SimEvent[],
-    cb: WorldMapStepCallbacks,
-  ): void {
-    const core = world.core;
-    const c = core.components;
-    const tagStore = core.getStore(c.Tag);
-    this.toDestroyCount = 0;
-    const projTag = this.project.worldMap?.hostileProjectileTag ?? 'enemy_orb';
-
-    for (let i = 0; i < tagStore.size(); i++) {
-      const eh = tagStore.getDenseEntityAt(i);
-      const td = tagStore.getDenseDataAt(i);
-      const etr = core.getComponent(eh, c.Transform2D);
-      if (!etr) continue;
-
-      const ex = etr.x + etr.w * 0.5;
-      const ey = etr.y + etr.h * 0.5;
-      const dx = heroCx - ex;
-      const dy = heroCy - ey;
-      const dist = Math.hypot(dx, dy);
-
-      const profile = this.findAiProfile(td.tag);
-      if (profile) {
-        const isPhase2 = Boolean(profile.isBoss && this.bossPhase >= 2);
-        if (profile.isBoss) {
-          const hp = core.getComponent(eh, c.Health);
-          if (hp) {
-            this.bossHp = hp.hp;
-            this.bossMaxHp = hp.maxHp;
-          }
-        }
-
-        const spd = isPhase2 && profile.phase2Speed !== undefined ? profile.phase2Speed : profile.moveSpeed;
-        const chasing = dist < profile.chaseRange && dist > profile.stopRange;
-        if (chasing) {
-          let moveDirX = dx / dist;
-          let moveDirY = dy / dist;
-          const room = this.activeRoom;
-          const wm = this.project.worldMap;
-          if (room && wm) {
-            const ts = wm.tileSize;
-            const eCol = Math.max(0, Math.min(room.cols - 1, Math.floor(ex / ts)));
-            const eRow = Math.max(0, Math.min(room.rows - 1, Math.floor(ey / ts)));
-            const hCol = Math.max(0, Math.min(room.cols - 1, Math.floor(heroCx / ts)));
-            const hRow = Math.max(0, Math.min(room.rows - 1, Math.floor(heroCy / ts)));
-            this.currentGlobalsRef = world.globals;
-            if (!hasGridLineOfSight(eCol, eRow, hCol, hRow, this.isCellOpaquePredicate)) {
-              const nextCell = findAStarNextCell(
-                room.cols,
-                room.rows,
-                eCol,
-                eRow,
-                hCol,
-                hRow,
-                this.isCellWalkablePredicate,
-                undefined,
-                1,
-                this.pathWorkspace,
-              );
-              if (nextCell >= 0) {
-                const nextCol = nextCell % room.cols;
-                const nextRow = (nextCell - nextCol) / room.cols;
-                const ndx = (nextCol + 0.5) * ts - ex;
-                const ndy = (nextRow + 0.5) * ts - ey;
-                const ndist = Math.hypot(ndx, ndy);
-                if (ndist > 0.001) {
-                  moveDirX = ndx / ndist;
-                  moveDirY = ndy / ndist;
-                }
-              }
-            }
-          }
-          const origX = etr.x;
-          const origY = etr.y;
-          this.moveWithTileCollision(
-            origX,
-            origY,
-            etr.w,
-            etr.h,
-            moveDirX * spd * dt,
-            moveDirY * spd * dt,
-            world,
-            this.scratchPos,
-            eh,
-          );
-          if (
-            room &&
-            wm &&
-            Math.hypot(this.scratchPos[0] - origX, this.scratchPos[1] - origY) < spd * dt * 0.15
-          ) {
-            const ts = wm.tileSize;
-            const eCol = Math.max(0, Math.min(room.cols - 1, Math.floor(ex / ts)));
-            const eRow = Math.max(0, Math.min(room.rows - 1, Math.floor(ey / ts)));
-            const hCol = Math.max(0, Math.min(room.cols - 1, Math.floor(heroCx / ts)));
-            const hRow = Math.max(0, Math.min(room.rows - 1, Math.floor(heroCy / ts)));
-            this.currentGlobalsRef = world.globals;
-            const nextCell = findAStarNextCell(
-              room.cols,
-              room.rows,
-              eCol,
-              eRow,
-              hCol,
-              hRow,
-              this.isCellWalkablePredicate,
-              undefined,
-              1,
-              this.pathWorkspace,
-            );
-            if (nextCell >= 0) {
-              const nextCol = nextCell % room.cols;
-              const nextRow = (nextCell - nextCol) / room.cols;
-              const ndx = (nextCol + 0.5) * ts - ex;
-              const ndy = (nextRow + 0.5) * ts - ey;
-              const ndist = Math.hypot(ndx, ndy);
-              if (ndist > 0.001) {
-                this.moveWithTileCollision(
-                  origX,
-                  origY,
-                  etr.w,
-                  etr.h,
-                  (ndx / ndist) * spd * dt,
-                  (ndy / ndist) * spd * dt,
-                  world,
-                  this.scratchPos,
-                  eh,
-                );
-              }
-            }
-          }
-          etr.x = this.scratchPos[0];
-          etr.y = this.scratchPos[1];
-          if (room && room.voxels && room.voxels.length > 0) {
-            this.updateActorVoxelElevation(world, eh, dt);
-          }
-          const mat = core.getComponent(eh, c.Material);
-          if (mat) mat.flipX = dx < 0;
-        }
-        const eAnim = core.getComponent(eh, c.Animator);
-        if (eAnim?.runtime) {
-          eAnim.runtime.setParam('speed', chasing ? spd : 0);
-        }
-        if (dist < profile.contactRange) {
-          this.damageHero(hHp, profile.contactDamage, heroCx, heroCy, heroHandle, eventsOut, cb);
-        }
-
-        if (profile.projectilePrefab && profile.projectileInterval) {
-          const timer = (this.aiTimers.get(td.entityId) ?? profile.projectileInterval) - dt;
-          if (timer <= 0 && dist < profile.chaseRange) {
-            const nextInt = isPhase2
-              ? (profile.projectilePhase2Interval ?? profile.projectileInterval)
-              : profile.projectileInterval;
-            this.aiTimers.set(td.entityId, nextInt);
-            const baseAng = Math.atan2(dy, dx);
-            const count = Math.max(
-              1,
-              isPhase2 ? (profile.projectilePhase2Count ?? profile.projectileCount ?? 5) : (profile.projectileCount ?? 3),
-            );
-            const spread = isPhase2
-              ? (profile.projectilePhase2SpreadRad ?? profile.projectileSpreadRad ?? 1.2)
-              : (profile.projectileSpreadRad ?? 0.9);
-            const bSpd = isPhase2
-              ? (profile.projectilePhase2Speed ?? profile.projectileSpeed ?? 150)
-              : (profile.projectileSpeed ?? 125);
-            for (let k = 0; k < count; k++) {
-              const frac = count > 1 ? k / (count - 1) - 0.5 : 0;
-              const ang = baseAng + frac * spread;
-              const orb = world.spawnFromPrefab(profile.projectilePrefab, ex - 10, ey - 10);
-              if (orb) {
-                const b = core.getComponent(orb, c.Velocity2D);
-                if (b) {
-                  b.vx = Math.cos(ang) * bSpd;
-                  b.vy = Math.sin(ang) * bSpd;
-                }
-              }
-            }
-            eventsOut.push('snap');
-          } else {
-            this.aiTimers.set(td.entityId, timer);
-          }
-        }
-      } else if (td.tag === projTag) {
-        if (dist < 18) {
-          this.damageHero(hHp, 1, heroCx, heroCy, heroHandle, eventsOut, cb);
-          this.queueDestroy(eh);
-        } else if (this.activeRoom && this.project.worldMap) {
-          const ts = this.project.worldMap.tileSize;
-          if (
-            isRoomCellSolid(
-              this.activeRoom,
-              Math.floor(ex / ts),
-              Math.floor(ey / ts),
-              world.globals,
-              this.project.worldMap.tileDefs,
-            )
-          ) {
-            this.queueDestroy(eh);
-          }
-        }
-      }
-    }
-
-    for (let i = 0; i < this.toDestroyCount; i++) {
-      core.destroyEntity(this.toDestroyScratch[i]);
-    }
-    this.toDestroyCount = 0;
-  }
-
-  private findTriggeredPortal(heroCx: number, heroCy: number, ts: number): EcsMapPortalDef | null {
-    const wm = this.project.worldMap;
-    if (!wm) return null;
-    for (let i = 0; i < wm.portals.length; i++) {
-      const p = wm.portals[i];
-      if (p.fromRoomId !== this.activeRoomId) continue;
-      const x0 = p.col * ts;
-      const y0 = p.row * ts;
-      const x1 = (p.col + p.cols) * ts;
-      const y1 = (p.row + p.rows) * ts;
-      if (heroCx >= x0 && heroCx <= x1 && heroCy >= y0 && heroCy <= y1) {
-        return p;
-      }
-    }
-    return null;
+    s.prevAction = input.action;
+    s.prevJump = input.jump;
   }
 
   /** Live non-transactional tile PBR/sprite preview update for workbench sliders. */
