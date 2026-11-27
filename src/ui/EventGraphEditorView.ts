@@ -180,6 +180,7 @@ export class EventGraphEditorView {
   private panX = 16;
   private panY = 16;
   private zoom = 1;
+  private spacePanHeld = false;
   private isCommitting = false;
   private statusNotice = '';
 
@@ -308,61 +309,71 @@ export class EventGraphEditorView {
 
     this.element.append(bar, this.bannerEl, this.stageEl);
 
-    // Stage background pan & cancel wiring
-    this.stageEl.addEventListener(
-      'pointerdown',
-      (e) => {
-        if (e.target !== this.stageEl && e.target !== this.viewportEl && e.target !== this.svgEl) return;
-        if (this.wiringFromNodeId) {
-          this.wiringFromNodeId = null;
-          this.statusNotice = '已取消連線模式。';
-          this.renderGraph();
-          return;
-        }
-        this.dragState = {
-          kind: 'pan',
-          startClientX: e.clientX,
-          startClientY: e.clientY,
-          origPanX: this.panX,
-          origPanY: this.panY,
-        };
-      },
-      { signal },
-    );
+    // Stage pan (Middle/Right/Space+Left/background Left), wheel zoom, dblclick reset & keyboard
+    const isBgTarget = (t: EventTarget | null): boolean =>
+      t === this.stageEl || t === this.viewportEl || t === this.svgEl;
+    const isEditableTarget = (t: EventTarget | null): boolean =>
+      t instanceof HTMLElement &&
+      (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
 
-    window.addEventListener(
-      'pointermove',
-      (e) => {
-        if (!this.dragState) return;
-        if (this.dragState.kind === 'pan') {
-          this.panX = Math.round(this.dragState.origPanX + (e.clientX - this.dragState.startClientX));
-          this.panY = Math.round(this.dragState.origPanY + (e.clientY - this.dragState.startClientY));
-          this.applyViewportTransform();
-          return;
-        }
-        if (this.dragState.kind === 'node' && this.graph) {
-          const dx = (e.clientX - this.dragState.startClientX) / this.zoom;
-          const dy = (e.clientY - this.dragState.startClientY) / this.zoom;
-          if (Math.abs(dx) > 2 || Math.abs(dy) > 2) this.dragState.moved = true;
-          this.graph = moveEventGraphNode(this.graph, this.dragState.nodeId, this.dragState.origX + dx, this.dragState.origY + dy);
-          this.updateDraggedNodeDom(this.dragState.nodeId);
-        }
-      },
-      { signal },
-    );
+    this.stageEl.addEventListener('contextmenu', (e) => e.preventDefault(), { signal });
+    this.stageEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.setZoom(this.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1));
+    }, { passive: false, signal });
+    this.stageEl.addEventListener('dblclick', (e) => {
+      if (isBgTarget(e.target)) this.resetViewport();
+    }, { signal });
+    this.stageEl.addEventListener('pointerdown', (e) => {
+      const explicitPan = e.button === 1 || e.button === 2 || (e.button === 0 && this.spacePanHeld);
+      if (!explicitPan && !isBgTarget(e.target)) return;
+      if (explicitPan) e.preventDefault();
+      if (!explicitPan && this.wiringFromNodeId) {
+        this.wiringFromNodeId = null;
+        this.statusNotice = '已取消連線模式。';
+        this.renderGraph();
+        return;
+      }
+      if (!explicitPan && e.button !== 0) return;
+      this.dragState = { kind: 'pan', startClientX: e.clientX, startClientY: e.clientY, origPanX: this.panX, origPanY: this.panY };
+    }, { signal });
 
-    window.addEventListener(
-      'pointerup',
-      () => {
-        if (!this.dragState) return;
-        const finished = this.dragState;
-        this.dragState = null;
-        if (finished.kind === 'node' && finished.moved && this.graph) {
-          this.commitGraph('移動事件圖節點');
-        }
-      },
-      { signal },
-    );
+    window.addEventListener('keydown', (e) => {
+      if (!this.element.isConnected || this.element.closest('[hidden]') || isEditableTarget(e.target)) return;
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        this.spacePanHeld = true;
+      } else if ((e.code === 'Home' || e.code === 'Digit0' || e.code === 'Numpad0') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        this.resetViewport();
+      }
+    }, { signal });
+    window.addEventListener('keyup', (e) => { if (e.code === 'Space' || e.key === ' ') this.spacePanHeld = false; }, { signal });
+    window.addEventListener('blur', () => { this.spacePanHeld = false; this.dragState = null; }, { signal });
+
+    window.addEventListener('pointermove', (e) => {
+      if (!this.dragState) return;
+      if (this.dragState.kind === 'pan') {
+        this.panX = Math.round(this.dragState.origPanX + (e.clientX - this.dragState.startClientX));
+        this.panY = Math.round(this.dragState.origPanY + (e.clientY - this.dragState.startClientY));
+        this.applyViewportTransform();
+        return;
+      }
+      if (this.dragState.kind === 'node' && this.graph) {
+        const dx = (e.clientX - this.dragState.startClientX) / this.zoom;
+        const dy = (e.clientY - this.dragState.startClientY) / this.zoom;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) this.dragState.moved = true;
+        this.graph = moveEventGraphNode(this.graph, this.dragState.nodeId, this.dragState.origX + dx, this.dragState.origY + dy);
+        this.updateDraggedNodeDom(this.dragState.nodeId);
+      }
+    }, { signal });
+
+    window.addEventListener('pointerup', () => {
+      if (!this.dragState) return;
+      const finished = this.dragState;
+      this.dragState = null;
+      if (finished.kind === 'node' && finished.moved && this.graph) this.commitGraph('移動事件圖節點');
+    }, { signal });
 
     this.applyViewportTransform();
     this.syncProject(session.getProject());
@@ -418,9 +429,15 @@ export class EventGraphEditorView {
   }
 
   private setZoom(next: number): void {
-    this.zoom = Math.max(0.65, Math.min(1.35, Math.round(next * 100) / 100));
+    this.zoom = Math.max(0.5, Math.min(1.8, Math.round(next * 100) / 100));
     this.zoomLabelEl.textContent = `${Math.round(this.zoom * 100)}%`;
     this.applyViewportTransform();
+  }
+
+  private resetViewport(): void {
+    this.panX = 0;
+    this.panY = 0;
+    this.setZoom(1);
   }
 
   private applyViewportTransform(): void {
@@ -748,7 +765,7 @@ export class EventGraphEditorView {
       'pointerdown',
       (ev) => {
         const target = ev.target as HTMLElement;
-        if (target.closest('button')) return;
+        if (ev.button !== 0 || this.spacePanHeld || target.closest('button')) return;
         ev.stopPropagation();
         this.selectedNodeId = node.id;
         this.dragState = {
